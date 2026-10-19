@@ -9,6 +9,37 @@
         android:orientation="vertical"
         android:padding="24dp">
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/keyboard_height_label"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/keyboard_height_value"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:textSize="15sp" />
+
+        <SeekBar
+            android:id="@+id/keyboard_height"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:min="36"
+            android:max="64"
+            android:progress="46"
+            android:contentDescription="@string/keyboard_height_label" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:paddingBottom="24dp"
+            android:text="@string/keyboard_height_summary"
+            android:textSize="15sp" />
+
         <Switch
             android:id="@+id/rerank_switch"
             android:layout_width="match_parent"

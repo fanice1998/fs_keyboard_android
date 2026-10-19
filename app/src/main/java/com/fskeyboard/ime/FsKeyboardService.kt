@@ -20,6 +20,7 @@ import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardView
 import com.fskeyboard.ime.ui.KeyboardInsets
 import com.fskeyboard.ime.rerank.CandidatePipeline
+import com.fskeyboard.ime.settings.KeyboardPreferences
 import com.fskeyboard.ime.rerank.ContextCandidateEncoder
 import com.fskeyboard.ime.rerank.OnnxCandidateRanker
 import com.fskeyboard.ime.rerank.RerankLogger
@@ -94,6 +95,7 @@ class FsKeyboardService : InputMethodService() {
             onToggleScript = { controller.onToggleScript() }
         }
         keyboard = KeyboardView(this).apply {
+            rowHeightDp = KeyboardPreferences(this@FsKeyboardService).rowHeightDp()
             onKey = { action ->
                 if (action == KeyAction.NextInputMethod) {
                     switchToAnotherKeyboard()
@@ -289,6 +291,7 @@ class FsKeyboardService : InputMethodService() {
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         setCandidatesViewShown(false)
+        keyboard?.rowHeightDp = KeyboardPreferences(this).rowHeightDp()
         controller.onStartInput(restarting)
         window?.window?.decorView?.requestApplyInsets()
         latestInsets?.let(::applyNavigationInset)

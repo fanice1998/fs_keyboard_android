@@ -14,6 +14,13 @@ import com.fskeyboard.ime.ui.isNightMode
 
 internal class KeyboardView(context: Context) : View(context) {
     var onKey: (KeyAction) -> Unit = {}
+    var rowHeightDp: Int = KeyboardHeight.DEFAULT_ROW_DP
+        set(value) {
+            val next = KeyboardHeight.clamp(value)
+            if (field == next) return
+            field = next
+            requestLayout()
+        }
 
     private var mode = KeyboardMode.ZHUYIN
     private var shifted = false
@@ -56,7 +63,7 @@ internal class KeyboardView(context: Context) : View(context) {
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        val height = rows.size * dp(56) + dp(6)
+        val height = rows.size * dp(rowHeightDp) + dp(6)
         setMeasuredDimension(width, height)
     }
 
