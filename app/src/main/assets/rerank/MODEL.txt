@@ -1,0 +1,42 @@
+神經重排模型 model.onnx 不在這個目錄裡。這份 assets 檔是出貨位置。
+鍵盤啟動時在背景載入一次：有需要才複製到 App 的檔案目錄，讓 ONNX Runtime 讀路徑。
+沒有檔案、檔案是空的、或圖無法解析，輸入法仍會起來，候選維持原本順序。
+
+檔案目錄裡已有內容時，優先用那一份，方便不重裝就換模型：
+
+    files/rerank/model.onnx
+
+除錯版可以用：
+
+    adb push model.onnx /data/local/tmp/model.onnx
+    adb shell run-as com.fskeyboard.ime mkdir -p files/rerank
+    adb shell run-as com.fskeyboard.ime cp /data/local/tmp/model.onnx files/rerank/model.onnx
+
+換好模型後，到系統設定把鍵盤關掉再打開。載入不會在每個按鍵重做。
+
+輸入是游標前最近 20 字，加上最多 9 個候選字串。輸出是這 9 個的新順序，後面的候選不動。
+分數愈高愈前面。同分保持原本順序。單次推論超過 50ms、分數不合、或執行失敗，就整列退回原順序。
+
+預設是字元特徵，由 ContextCandidateEncoder 產生。N 是 1 到 9：
+
+    features  float32  [1, N, 64]
+    mask      float32  [1, N]
+    scores    float32  [1, N] 或 [N]
+
+features 的 64 維：
+0 原本名次，1 候選長度，2 上文長度，3 組字長度，4 是否與上文末四字重疊，
+5..63 是「上文、組字、候選」的字元雙字雜湊。
+
+模型若直接吃字串，在 FsKeyboardService 把 encoder 換成 DirectStringEncoder：
+
+    context     string  [1]     最近 20 字，不足就整段
+    candidates  string  [N]     候選文字，順序與輸入相同
+    scores      float32 [1, N] 或 [N]
+
+輸入名稱不同時，做一個新的 RerankEncoder 傳進 OnnxRerankModel。
+輸出名稱預設是 scores。要換成別的 runtime，實作 RerankModel 即可。
+系統鍵盤設定裡的「神經重排」關掉之後，這份模型不會被呼叫。
+
+延遲看 logcat 標籤 FsKeyboard 的 latency。rime 是 librime，infer 是這份模型的 score()。
+infer 經常超過 50ms 時，把權重量化成 INT8，張量名稱不要改。9 列的模型保持 CPU、一條執行緒。
+結果若超過 50ms 就不會改候選列，按鍵執行緒也不等它。

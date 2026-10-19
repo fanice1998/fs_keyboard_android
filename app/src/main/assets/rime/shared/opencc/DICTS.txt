@@ -1,0 +1,19 @@
+Place the OpenCC 1.1+ binary dictionaries next to t2tw.json before building.
+They are Apache-2.0 and are not vendored in this repository.
+
+The default schema uses t2tw.json. That profile needs:
+
+CJK_Compatibility_Ideographs.ocd2
+TWVariantsPhrases.ocd2
+TWVariants.ocd2
+
+s2tw.json stays in this directory for a simplified lexicon. Switch the schema
+opencc_config to s2tw.json in that case. It also needs:
+
+STPhrases.ocd2
+STPhrases_GeneratedFromRegionalPhrases.ocd2
+STCharacters.ocd2
+
+tools/install-shared-data.sh copies all six from an OpenCC data directory.
+Bump assets/rime/shared/VERSION after adding the files so an already
+installed app recopies shared data. The user directory is left alone.

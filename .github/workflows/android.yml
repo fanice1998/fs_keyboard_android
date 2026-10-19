@@ -1,0 +1,62 @@
+# Debug APK and unit tests.
+# The runner builds librime and the OpenCC dictionaries. Those binaries are not in git.
+# gradle.properties keeps rime.enabled=false; this job passes -Prime.enabled=true.
+# model.onnx is still absent. The APK is unsigned debug.
+name: android
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools platforms;android-36 ndk;27.2.12479018
+
+      - name: Native build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            third_party/librime/include/rime_api.h
+            third_party/librime/jniLibs
+            app/src/main/assets/rime/shared/opencc/CJK_Compatibility_Ideographs.ocd2
+            app/src/main/assets/rime/shared/opencc/STPhrases.ocd2
+            app/src/main/assets/rime/shared/opencc/STPhrases_GeneratedFromRegionalPhrases.ocd2
+            app/src/main/assets/rime/shared/opencc/STCharacters.ocd2
+            app/src/main/assets/rime/shared/opencc/TWVariantsPhrases.ocd2
+            app/src/main/assets/rime/shared/opencc/TWVariants.ocd2
+          key: librime-opencc-${{ hashFiles('tools/ci-engine.sh') }}
+
+      - name: Build librime and OpenCC dictionaries
+        run: bash tools/ci-engine.sh
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - run: ./gradlew :app:testDebugUnitTest :app:assembleDebug -Prime.enabled=true
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

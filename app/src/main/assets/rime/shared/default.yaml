@@ -1,0 +1,10 @@
+# encoding: utf-8
+# FsKeyboard shared defaults. Not rime-prelude.
+
+config_version: "0.1"
+
+schema_list:
+  - schema: fs_zhuyin
+
+menu:
+  page_size: 8

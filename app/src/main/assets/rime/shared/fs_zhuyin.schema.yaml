@@ -1,0 +1,187 @@
+# encoding: utf-8
+# Original zhuyin schema. Dictionary codes are bopomofo, tone mark last.
+# Algebra maps each glyph to the standard Taiwan keyboard's ASCII key.
+# The lexicon is already Taiwan Traditional. The simplifier runs OpenCC t2tw
+# (generic Traditional to Taiwan standard). User phrases use librime userdb.
+
+schema:
+  schema_id: fs_zhuyin
+  name: 注音
+  version: "0.2"
+  description: |
+    標準注音鍵位。詞庫編碼是聲母、介音、韻母、聲調。
+    聲調可省略。候選經 OpenCC t2tw 對齊臺灣標準字形。
+
+switches:
+  - name: ascii_mode
+    reset: 0
+    states: [中文, 英文]
+  - name: zh_tw
+    reset: 1
+    states: [通, 臺]
+  - name: ascii_punct
+    reset: 0
+    states: [中文標點, 西文標點]
+
+engine:
+  processors:
+    - ascii_composer
+    - recognizer
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentors:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - punct_translator
+    - script_translator
+  filters:
+    - simplifier
+    - uniquifier
+
+speller:
+  alphabet: "1234567890-qwertyuiopasdfghjkl;zxcvbnm,./"
+  delimiter: " '"
+  algebra:
+    - "xform/ㄅ/1/"
+    - "xform/ㄉ/2/"
+    - "xform/ˇ/3/"
+    - "xform/ˋ/4/"
+    - "xform/ㄓ/5/"
+    - "xform/ˊ/6/"
+    - "xform/˙/7/"
+    - "xform/ㄚ/8/"
+    - "xform/ㄞ/9/"
+    - "xform/ㄢ/0/"
+    - "xform/ㄦ/-/"
+    - "xform/ㄆ/q/"
+    - "xform/ㄊ/w/"
+    - "xform/ㄍ/e/"
+    - "xform/ㄐ/r/"
+    - "xform/ㄔ/t/"
+    - "xform/ㄗ/y/"
+    - "xform/ㄧ/u/"
+    - "xform/ㄛ/i/"
+    - "xform/ㄟ/o/"
+    - "xform/ㄣ/p/"
+    - "xform/ㄇ/a/"
+    - "xform/ㄋ/s/"
+    - "xform/ㄎ/d/"
+    - "xform/ㄑ/f/"
+    - "xform/ㄕ/g/"
+    - "xform/ㄘ/h/"
+    - "xform/ㄨ/j/"
+    - "xform/ㄜ/k/"
+    - "xform/ㄠ/l/"
+    - "xform/ㄤ/;/"
+    - "xform/ㄈ/z/"
+    - "xform/ㄌ/x/"
+    - "xform/ㄏ/c/"
+    - "xform/ㄒ/v/"
+    - "xform/ㄖ/b/"
+    - "xform/ㄙ/n/"
+    - "xform/ㄩ/m/"
+    - "xform/ㄝ/,/"
+    - "xform/ㄡ/./"
+    - "xform/ㄥ/\\//"
+    - "derive/[3467]//"
+
+translator:
+  dictionary: fs_zhuyin
+  prism: fs_zhuyin
+  enable_user_dict: true
+  enable_sentence: true
+  enable_completion: true
+  preedit_format:
+    - "xform/1/ㄅ/"
+    - "xform/2/ㄉ/"
+    - "xform/3/ˇ/"
+    - "xform/4/ˋ/"
+    - "xform/5/ㄓ/"
+    - "xform/6/ˊ/"
+    - "xform/7/˙/"
+    - "xform/8/ㄚ/"
+    - "xform/9/ㄞ/"
+    - "xform/0/ㄢ/"
+    - "xform/-/ㄦ/"
+    - "xform/q/ㄆ/"
+    - "xform/w/ㄊ/"
+    - "xform/e/ㄍ/"
+    - "xform/r/ㄐ/"
+    - "xform/t/ㄔ/"
+    - "xform/y/ㄗ/"
+    - "xform/u/ㄧ/"
+    - "xform/i/ㄛ/"
+    - "xform/o/ㄟ/"
+    - "xform/p/ㄣ/"
+    - "xform/a/ㄇ/"
+    - "xform/s/ㄋ/"
+    - "xform/d/ㄎ/"
+    - "xform/f/ㄑ/"
+    - "xform/g/ㄕ/"
+    - "xform/h/ㄘ/"
+    - "xform/j/ㄨ/"
+    - "xform/k/ㄜ/"
+    - "xform/l/ㄠ/"
+    - "xform/;/ㄤ/"
+    - "xform/z/ㄈ/"
+    - "xform/x/ㄌ/"
+    - "xform/c/ㄏ/"
+    - "xform/v/ㄒ/"
+    - "xform/b/ㄖ/"
+    - "xform/n/ㄙ/"
+    - "xform/m/ㄩ/"
+    - "xform/,/ㄝ/"
+    - "xform/\\./ㄡ/"
+    - "xform/\\//ㄥ/"
+
+simplifier:
+  option_name: zh_tw
+  opencc_config: t2tw.json
+
+menu:
+  page_size: 8
+
+punctuator:
+  full_shape:
+    "?": "？"
+    "!": "！"
+    ":": "："
+    "(": "（"
+    ")": "）"
+    "[": "【"
+    "]": "】"
+    "<": "《"
+    ">": "》"
+    "\\": "、"
+    "'": { pair: ["‘", "’"] }
+    "\"": { pair: ["“", "”"] }
+    "_": "——"
+    "~": "～"
+    "`": "·"
+    "^": "……"
+    "$": "￥"
+  half_shape:
+    "?": "?"
+    "!": "!"
+    ":": ":"
+    "(": "("
+    ")": ")"
+    "[": "["
+    "]": "]"
+    "<": "<"
+    ">": ">"
+    "\\": "\\"
+    "'": "'"
+    "\"": "\""
+
+recognizer:
+  patterns:
+    email: "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
+    url: "^(www[.]|https?:|ftp[.:]).*$"

@@ -1,0 +1,3 @@
+-keep class com.fskeyboard.ime.bridge.RimeResponse { <init>(...); }
+-keepclassmembers class com.fskeyboard.ime.bridge.RimeNative { native <methods>; }
+-keep class ai.onnxruntime.** { *; }

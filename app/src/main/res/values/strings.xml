@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FsKeyboard</string>
+    <string name="ime_name">FsKeyboard 注音</string>
+    <string name="subtype_zhuyin">中文（臺灣注音）</string>
+    <string name="status_loading">正在部署輸入方案…</string>
+    <string name="status_missing_rime">尚未載入 librime，按鍵會直接上屏</string>
+    <string name="status_failed">Rime 啟動失敗：%1$s</string>
+    <string name="ime_settings_title">FsKeyboard 設定</string>
+    <string name="rerank_switch">神經重排</string>
+    <string name="rerank_summary">用游標前最近 20 字，對最多 9 個候選重新排序。超過 50ms 或模型出錯就改回原本順序。</string>
+    <string name="rerank_model_ready">已找到 model.onnx。鍵盤啟動時會載入一次。</string>
+    <string name="rerank_model_missing">尚未放置 model.onnx。放進 assets/rerank/ 後重新安裝，或推到 files/rerank/。鍵盤啟動時載入一次。</string>
+</resources>
