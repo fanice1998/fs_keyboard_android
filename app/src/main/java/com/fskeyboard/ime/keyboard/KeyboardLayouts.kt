@@ -17,25 +17,34 @@ internal object KeyboardLayouts {
     }
 
     private fun zhuyin(): List<KeyRow> {
-        val letterRows = ZhuyinLayout.rows.map { row ->
-            KeyRow(row.map { key ->
-                KeySpec(
-                    label = key.label,
-                    action = KeyAction.Bopomofo(key.label, key.key),
-                    role = if (key.tone) KeyRole.TONE else KeyRole.NORMAL,
-                )
-            })
+        val phonetic = ZhuyinLayout.rows.mapIndexed { index, row ->
+            // Ten-key rows use the same pitch as the eleven-key top row.
+            val inset = if (index == 1 || index == 2) 0.5f else 0f
+            KeyRow(
+                keys = row.map { key ->
+                    KeySpec(
+                        label = key.label,
+                        action = KeyAction.Bopomofo(key.label, key.key),
+                        role = if (key.tone) KeyRole.TONE else KeyRole.NORMAL,
+                    )
+                },
+                inset = inset,
+            )
         }
-        val withBackspace = letterRows.dropLast(1) +
-            KeyRow(letterRows.last().keys + backspace())
-        return withBackspace + KeyRow(
+        val last = phonetic.last()
+        val withDelete = phonetic.dropLast(1) +
+            KeyRow(last.keys + deleteKey(), inset = last.inset)
+        return withDelete + KeyRow(
             listOf(
-                modeKey("符", KeyboardMode.SYMBOLS, 1.3f),
-                modeKey("英", KeyboardMode.LATIN, 1.3f),
-                KeySpec("，", KeyAction.Punctuation("，")),
-                space(),
-                KeySpec("。", KeyAction.Punctuation("。")),
-                enter(),
+                iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.45f),
+                iconKey(
+                    icon = KeyIcon.GLOBE,
+                    action = KeyAction.SetMode(KeyboardMode.LATIN),
+                    weight = 1.15f,
+                    secondary = KeyAction.NextInputMethod,
+                ),
+                KeySpec("注音", KeyAction.Space, weight = 4.6f, role = KeyRole.SPACE),
+                iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.85f),
             ),
         )
     }
@@ -43,15 +52,20 @@ internal object KeyboardLayouts {
     private fun latin(shifted: Boolean): List<KeyRow> = listOf(
         KeyRow(letters("qwertyuiop", shifted)),
         KeyRow(letters("asdfghjkl", shifted), inset = 0.5f),
-        KeyRow(listOf(shift(shifted)) + letters("zxcvbnm", shifted) + backspace()),
+        KeyRow(listOf(shift(shifted)) + letters("zxcvbnm", shifted) + deleteKey()),
         KeyRow(
             listOf(
-                modeKey("符", KeyboardMode.SYMBOLS, 1.3f),
-                modeKey("注", KeyboardMode.ZHUYIN, 1.3f),
+                iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.35f),
+                iconKey(
+                    icon = KeyIcon.GLOBE,
+                    action = KeyAction.SetMode(KeyboardMode.ZHUYIN),
+                    weight = 1.15f,
+                    secondary = KeyAction.NextInputMethod,
+                ),
                 KeySpec(",", KeyAction.Character(',')),
                 space(),
                 KeySpec(".", KeyAction.Character('.')),
-                enter(),
+                iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.7f),
             ),
         ),
     )
@@ -59,14 +73,14 @@ internal object KeyboardLayouts {
     private fun symbols(): List<KeyRow> = listOf(
         KeyRow(chars("1234567890")),
         KeyRow(chars("@#\$%&*-+()")),
-        KeyRow(chars("~`|\\/[]{}") + backspace()),
+        KeyRow(chars("~`|\\/[]{}") + deleteKey()),
         KeyRow(
             listOf(
-                modeKey("返回", KeyboardMode.ZHUYIN, 1.6f),
+                modeKey("注", KeyboardMode.ZHUYIN, 1.5f),
                 KeySpec("，", KeyAction.Character('，')),
                 space(),
                 KeySpec("。", KeyAction.Character('。')),
-                enter(),
+                iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.7f),
             ),
         ),
     )
@@ -97,11 +111,27 @@ internal object KeyboardLayouts {
         highlighted = active,
     )
 
-    private fun backspace() = listOf(
-        KeySpec("刪", KeyAction.Backspace, weight = 1.5f, role = KeyRole.ACTION),
+    private fun deleteKey() = KeySpec(
+        label = "",
+        action = KeyAction.Backspace,
+        weight = 1.5f,
+        role = KeyRole.ACTION,
+        icon = KeyIcon.DELETE,
     )
 
-    private fun enter() = KeySpec("換行", KeyAction.Enter, weight = 1.5f, role = KeyRole.ACTION)
+    private fun iconKey(
+        icon: KeyIcon,
+        action: KeyAction,
+        weight: Float,
+        secondary: KeyAction? = null,
+    ) = KeySpec(
+        label = "",
+        action = action,
+        weight = weight,
+        role = KeyRole.ACTION,
+        icon = icon,
+        secondary = secondary,
+    )
 
     private fun space() = KeySpec("空格", KeyAction.Space, weight = 4f, role = KeyRole.SPACE)
 }

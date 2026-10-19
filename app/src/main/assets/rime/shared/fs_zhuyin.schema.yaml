@@ -7,7 +7,7 @@
 schema:
   schema_id: fs_zhuyin
   name: 注音
-  version: "0.2"
+  version: "0.3"
   description: |
     標準注音鍵位。詞庫編碼是聲母、介音、韻母、聲調。
     聲調可省略。候選經 OpenCC t2tw 對齊臺灣標準字形。
@@ -32,12 +32,14 @@ engine:
     - selector
     - navigator
     - express_editor
+  # No fallback segmentor: an unfinished reading must stay in the
+  # composition. Falling back would commit the ASCII key position, so ㄚ
+  # would be written as 8 and the next zhuyin could not continue.
   segmentors:
     - ascii_segmentor
     - matcher
     - abc_segmentor
     - punct_segmentor
-    - fallback_segmentor
   translators:
     - punct_translator
     - script_translator

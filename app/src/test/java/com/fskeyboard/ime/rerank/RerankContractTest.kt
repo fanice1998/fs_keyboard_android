@@ -60,7 +60,7 @@ class RerankContractTest {
             KeyPolicy.space(KeyboardMode.ZHUYIN, presented, composing = true),
         )
         assertEquals(
-            KeyPolicy.Space.SendToRime,
+            KeyPolicy.Space.CommitComposition,
             KeyPolicy.space(KeyboardMode.ZHUYIN, emptyList(), composing = true),
         )
         assertEquals(

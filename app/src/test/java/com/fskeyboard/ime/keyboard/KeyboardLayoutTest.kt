@@ -19,7 +19,7 @@ class KeyboardLayoutTest {
             .flatMap { it.keys }
         assertTrue(specs.map { it.label }.contains("Q"))
         assertTrue(specs.map { it.label }.contains("⇧"))
-        assertTrue(specs.any { it.label == "注" && it.action == KeyAction.SetMode(KeyboardMode.ZHUYIN) })
+        assertTrue(specs.any { it.icon == KeyIcon.GLOBE && it.action == KeyAction.SetMode(KeyboardMode.ZHUYIN) })
     }
 
     @Test
@@ -46,8 +46,8 @@ class KeyboardLayoutTest {
         assertTrue(actions.contains(KeyAction.Bopomofo("ㄝ", ',')))
         assertTrue(actions.contains(KeyAction.Bopomofo("ㄡ", '.')))
         assertTrue(actions.contains(KeyAction.Bopomofo("ㄥ", '/')))
-        assertTrue(actions.contains(KeyAction.Punctuation("，")))
-        assertTrue(actions.contains(KeyAction.Punctuation("。")))
+        assertFalse(actions.contains(KeyAction.Punctuation("，")))
+        assertFalse(actions.contains(KeyAction.Punctuation("。")))
         assertFalse(actions.contains(KeyAction.Character(',')))
         assertFalse(actions.contains(KeyAction.Character('.')))
         assertTrue(actions.contains(KeyAction.SetMode(KeyboardMode.LATIN)))
@@ -55,6 +55,17 @@ class KeyboardLayoutTest {
         assertTrue(actions.contains(KeyAction.Space))
         assertTrue(actions.contains(KeyAction.Backspace))
         assertTrue(actions.contains(KeyAction.Enter))
+        val specs = rows.flatMap { it.keys }
+        assertEquals("注音", specs.first { it.action == KeyAction.Space }.label)
+        assertEquals(KeyIcon.DELETE, specs.first { it.action == KeyAction.Backspace }.icon)
+        assertEquals(KeyIcon.RETURN, specs.first { it.action == KeyAction.Enter }.icon)
+        assertEquals(KeyIcon.SYMBOLS, specs.first { it.action == KeyAction.SetMode(KeyboardMode.SYMBOLS) }.icon)
+        val globe = specs.first { it.icon == KeyIcon.GLOBE }
+        assertEquals(KeyAction.SetMode(KeyboardMode.LATIN), globe.action)
+        assertEquals(KeyAction.NextInputMethod, globe.secondary)
+        assertEquals(0.5f, rows[1].inset)
+        assertEquals(0.5f, rows[2].inset)
+        assertTrue(rows[3].keys.last().action == KeyAction.Backspace)
     }
 
     @Test
@@ -63,5 +74,9 @@ class KeyboardLayoutTest {
             .flatMap { it.keys }
             .map { it.action }
         assertTrue(actions.contains(KeyAction.SetMode(KeyboardMode.ZHUYIN)))
+        assertTrue(actions.contains(KeyAction.Character('，')))
+        assertTrue(actions.contains(KeyAction.Character('。')))
+        assertEquals(KeyIcon.RETURN, KeyboardLayouts.rows(KeyboardMode.SYMBOLS).flatMap { it.keys }
+            .first { it.action == KeyAction.Enter }.icon)
     }
 }

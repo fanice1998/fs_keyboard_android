@@ -11,8 +11,8 @@ internal sealed interface KeyAction {
     data class Character(val value: Char) : KeyAction
 
     /**
-     * A zhuyin key. [label] is the bopomofo glyph shown and committed when Rime
-     * is unavailable. [key] is the ASCII keysym librime's speller accepts.
+     * A zhuyin key. [label] is the bopomofo glyph kept in the composition.
+     * [key] is the ASCII position librime's speller accepts, and is never committed.
      */
     data class Bopomofo(val label: String, val key: Char) : KeyAction
 
@@ -24,6 +24,9 @@ internal sealed interface KeyAction {
     data object Space : KeyAction
     data object Shift : KeyAction
     data class SetMode(val mode: KeyboardMode) : KeyAction
+
+    /** Long-press on the language key: move to the next system keyboard. */
+    data object NextInputMethod : KeyAction
 }
 
 internal enum class KeyRole {
@@ -40,6 +43,8 @@ internal data class KeySpec(
     val weight: Float = 1f,
     val role: KeyRole = KeyRole.NORMAL,
     val highlighted: Boolean = false,
+    val icon: KeyIcon? = null,
+    val secondary: KeyAction? = null,
 )
 
 internal data class KeyRow(

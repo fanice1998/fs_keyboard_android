@@ -26,6 +26,8 @@ internal class KeyboardView(context: Context) : View(context) {
     private val label = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.CENTER
     }
+    private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var longPressFired = false
 
     private val repeat = object : Runnable {
         override fun run() {
@@ -34,6 +36,15 @@ internal class KeyboardView(context: Context) : View(context) {
             dispatch(spec.action)
             postDelayed(this, 45L)
         }
+    }
+
+    private val longPress = Runnable {
+        val action = down?.spec?.secondary ?: return@Runnable
+        longPressFired = true
+        down = null
+        stopRepeat()
+        dispatch(action)
+        invalidate()
     }
 
     fun setMode(mode: KeyboardMode) {
@@ -56,32 +67,39 @@ internal class KeyboardView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         val palette = KeyboardPalette.of(isNightMode())
         canvas.drawColor(palette.background)
-        val radius = dp(8).toFloat()
+        val radius = dp(11).toFloat()
         for (box in boxes) {
             val pressed = box == down || box.spec.highlighted
             fill.color = when {
                 pressed -> palette.keyPressed
-                box.spec.role == KeyRole.ACTION ||
-                    box.spec.role == KeyRole.MODIFIER ||
-                    box.spec.role == KeyRole.TONE -> palette.keyAction
+                box.spec.role == KeyRole.ACTION || box.spec.role == KeyRole.MODIFIER -> palette.keyAction
                 else -> palette.key
             }
             val draw = inset(box.rect)
             canvas.drawRoundRect(draw, radius, radius, fill)
-            label.color = palette.text
-            label.textSize = if (box.spec.label.length > 1) sp(14f) else sp(20f)
-            val baseline = draw.centerY() - (label.ascent() + label.descent()) / 2f
-            canvas.drawText(box.spec.label, draw.centerX(), baseline, label)
+            val icon = box.spec.icon
+            if (icon != null) {
+                KeyIcons.draw(canvas, icon, draw, palette.text, iconPaint)
+            } else if (box.spec.label.isNotEmpty()) {
+                label.color = if (box.spec.role == KeyRole.SPACE) palette.hint else palette.text
+                label.textSize = if (box.spec.label.length > 1) sp(15f) else sp(20f)
+                val baseline = draw.centerY() - (label.ascent() + label.descent()) / 2f
+                canvas.drawText(box.spec.label, draw.centerX(), baseline, label)
+            }
         }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                longPressFired = false
                 down = hit(event.x, event.y)
-                if (down?.spec?.action == KeyAction.Backspace) {
-                    down?.spec?.action?.let(::dispatch)
+                val spec = down?.spec
+                if (spec?.action == KeyAction.Backspace) {
+                    dispatch(spec.action)
                     postDelayed(repeat, 320L)
+                } else if (spec?.secondary != null) {
+                    postDelayed(longPress, 400L)
                 }
                 invalidate()
             }
@@ -97,14 +115,16 @@ internal class KeyboardView(context: Context) : View(context) {
                 stopRepeat()
                 val box = down
                 val released = hit(event.x, event.y)
-                if (box != null && box == released && box.spec.action != KeyAction.Backspace) {
+                if (!longPressFired && box != null && box == released && box.spec.action != KeyAction.Backspace) {
                     dispatch(box.spec.action)
                 }
+                longPressFired = false
                 down = null
                 invalidate()
             }
             MotionEvent.ACTION_CANCEL -> {
                 stopRepeat()
+                longPressFired = false
                 down = null
                 invalidate()
             }
@@ -172,6 +192,7 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private fun stopRepeat() {
         removeCallbacks(repeat)
+        removeCallbacks(longPress)
     }
 
     private fun sp(value: Float): Float {

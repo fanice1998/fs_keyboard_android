@@ -29,6 +29,9 @@ internal class RimeDataInstaller(private val context: Context) {
             shared.deleteRecursively()
             copyTree(ASSET_ROOT, shared)
             stamp.writeText(desired)
+            // The compiled prism lives here. Drop it so the new schema is built;
+            // files/rime/user/*.userdb is left in place.
+            File(user, "build").deleteRecursively()
         }
         return RimePaths(sharedDir = shared, userDir = user)
     }
