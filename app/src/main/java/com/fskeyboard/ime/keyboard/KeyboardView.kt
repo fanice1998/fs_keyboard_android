@@ -164,9 +164,9 @@ internal class KeyboardView(context: Context) : View(context) {
         val rowHeight = height.toFloat() / rows.size
         var top = 0f
         for (row in rows) {
-            val units = row.keys.sumOf { it.weight.toDouble() }.toFloat() + row.inset * 2f
+            val units = row.keys.sumOf { it.weight.toDouble() }.toFloat() + row.leading + row.trailing
             val unit = available / units
-            var left = pad + row.inset * unit
+            var left = pad + row.leading * unit
             for (key in row.keys) {
                 val cellWidth = key.weight * unit
                 boxes += KeyBox(key, RectF(left, top, left + cellWidth, top + rowHeight))

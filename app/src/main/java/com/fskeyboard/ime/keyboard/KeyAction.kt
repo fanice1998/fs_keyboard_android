@@ -49,5 +49,8 @@ internal data class KeySpec(
 
 internal data class KeyRow(
     val keys: List<KeySpec>,
-    val inset: Float = 0f,
+    /** Empty key-widths before the first key. */
+    val leading: Float = 0f,
+    /** Empty key-widths after the last key. */
+    val trailing: Float = 0f,
 )

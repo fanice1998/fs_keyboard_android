@@ -18,8 +18,13 @@ internal object KeyboardLayouts {
 
     private fun zhuyin(): List<KeyRow> {
         val phonetic = ZhuyinLayout.rows.mapIndexed { index, row ->
-            // Ten-key rows use the same pitch as the eleven-key top row.
-            val inset = if (index == 1 || index == 2) 0.5f else 0f
+            // Ten keys share the eleven-key pitch. iOS splits the spare key
+            // one-to-two, then mirrors that split on the next row.
+            val (leading, trailing) = when (index) {
+                1 -> (1f / 3f) to (2f / 3f)
+                2 -> (2f / 3f) to (1f / 3f)
+                else -> 0f to 0f
+            }
             KeyRow(
                 keys = row.map { key ->
                     KeySpec(
@@ -28,12 +33,13 @@ internal object KeyboardLayouts {
                         role = if (key.tone) KeyRole.TONE else KeyRole.NORMAL,
                     )
                 },
-                inset = inset,
+                leading = leading,
+                trailing = trailing,
             )
         }
         val last = phonetic.last()
         val withDelete = phonetic.dropLast(1) +
-            KeyRow(last.keys + deleteKey(), inset = last.inset)
+            KeyRow(last.keys + deleteKey(), leading = last.leading, trailing = last.trailing)
         return withDelete + KeyRow(
             listOf(
                 iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.45f),
@@ -51,7 +57,7 @@ internal object KeyboardLayouts {
 
     private fun latin(shifted: Boolean): List<KeyRow> = listOf(
         KeyRow(letters("qwertyuiop", shifted)),
-        KeyRow(letters("asdfghjkl", shifted), inset = 0.5f),
+        KeyRow(letters("asdfghjkl", shifted), leading = 0.5f, trailing = 0.5f),
         KeyRow(listOf(shift(shifted)) + letters("zxcvbnm", shifted) + deleteKey()),
         KeyRow(
             listOf(

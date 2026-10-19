@@ -63,8 +63,13 @@ class KeyboardLayoutTest {
         val globe = specs.first { it.icon == KeyIcon.GLOBE }
         assertEquals(KeyAction.SetMode(KeyboardMode.LATIN), globe.action)
         assertEquals(KeyAction.NextInputMethod, globe.secondary)
-        assertEquals(0.5f, rows[1].inset)
-        assertEquals(0.5f, rows[2].inset)
+        assertEquals(1f / 3f, rows[1].leading, 0.0001f)
+        assertEquals(2f / 3f, rows[1].trailing, 0.0001f)
+        assertEquals(2f / 3f, rows[2].leading, 0.0001f)
+        assertEquals(1f / 3f, rows[2].trailing, 0.0001f)
+        assertEquals(0f, rows[0].leading, 0f)
+        assertEquals(0f, rows[3].leading, 0f)
+        assertEquals(0f, rows[3].trailing, 0f)
         assertTrue(rows[3].keys.last().action == KeyAction.Backspace)
     }
 
