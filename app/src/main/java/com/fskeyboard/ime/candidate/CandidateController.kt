@@ -105,7 +105,8 @@ internal class CandidateController(
         traditional = !traditional
         engine.setOption(RimeSchema.OPTION_TRADITIONAL, traditional)
         if (mode == KeyboardMode.ZHUYIN) {
-            apply(engine.snapshot())
+            val snapshot = engine.snapshot().preservingComposition(composer.text, composer.syllables)
+            if (composer.text.isEmpty()) publish(snapshot) else apply(snapshot)
         } else {
             publish()
         }
