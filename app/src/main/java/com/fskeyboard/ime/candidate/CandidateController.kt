@@ -194,7 +194,7 @@ internal class CandidateController(
         }
     }
 
-    /** Commits, learns the phrases the user put together, and offers particles that fit. */
+    /** Commits, learns the phrases the user put together, and offers punctuation after a particle. */
     private fun finishComposition(done: Commit) {
         composition.clear()
         presented = emptyList()
@@ -203,13 +203,13 @@ internal class CandidateController(
         ic?.finishComposingText()
         remember(done.text)
         lexicon.learn(done.learned)
-        val particles = Particles.suggest(recent.toString()).mapIndexed { index, text ->
+        val punctuation = Particles.punctuationAfter(recent.toString()).mapIndexed { index, text ->
             Candidate(text = text, engineIndex = -(index + 1), source = CandidateSource.SUGGESTION, span = 0)
         }
-        publish(EngineSnapshot(candidates = particles))
+        publish(EngineSnapshot(candidates = punctuation))
     }
 
-    /** Drops particles offered after a commit once the user does something else. */
+    /** Drops punctuation offered after a commit once the user does something else. */
     private fun dismissSuggestions() {
         if (hasComposition || presented.isEmpty()) return
         presented = emptyList()

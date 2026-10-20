@@ -14,7 +14,7 @@ internal object CandidateChips {
         return TextView(host.context).apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
             gravity = Gravity.CENTER
-            setPadding(host.dp(12), host.dp(6), host.dp(12), host.dp(6))
+            setPadding(host.dp(12), host.dp(4), host.dp(12), host.dp(4))
             background = rounded(host, 0)
         }
     }

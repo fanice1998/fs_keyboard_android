@@ -4,7 +4,7 @@ internal enum class CandidateSource {
     RIME,
     SYNTHETIC,
 
-    /** Offered with nothing typed, such as a particle after a commit. It uses no syllables. */
+    /** Offered with nothing typed, such as punctuation after a particle. It uses no syllables. */
     SUGGESTION,
 }
 

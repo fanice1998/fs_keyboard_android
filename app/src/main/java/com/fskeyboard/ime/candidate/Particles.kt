@@ -1,7 +1,8 @@
 package com.fskeyboard.ime.candidate
 
 /**
- * Sentence-final particles that fit the text just typed, best first.
+ * Sentence-final particles that fit the text just typed, best first, and the punctuation
+ * that fits once a particle ends it.
  * A question word asks for 啊 呀 呢 咧, never 吧 or 囉. A reply such as 好 or 對
  * takes 啊 喔 啦; thanks or an apology takes 啦 喔 耶. Anything else gets the
  * statement particles. Nothing is offered after punctuation, Latin text, or a particle.
@@ -32,6 +33,26 @@ internal object Particles {
             thanksWords.any { tail.endsWith(it) } -> thanks
             replyWords.any { tail.endsWith(it) } -> reply
             else -> statement
+        }
+    }
+
+    private val asking = setOf("嗎", "呢", "咧")
+    private val exclaiming = setOf("啊", "呀", "耶", "哈", "喔", "啦", "欸", "囉", "嘛", "唷")
+
+    /**
+     * Punctuation to offer when [before] ends with a particle, best first; empty otherwise.
+     * 嗎 呢 咧, or any particle after a question word, put ？ first; 吧 puts 。 first;
+     * an exclamation such as 啊 or 啦 puts ！ first.
+     */
+    fun punctuationAfter(before: String): List<String> {
+        val tail = before.takeLast(WINDOW)
+        val last = tail.lastOrNull()?.toString() ?: return emptyList()
+        if (last !in all && last !in exclaiming) return emptyList()
+        return when {
+            last in asking || questionWords.any { it in tail.dropLast(1) } ->
+                listOf("？", "，", "。", "！", "……", "～", "、")
+            last == "吧" -> listOf("。", "？", "！", "，", "……", "～", "、")
+            else -> listOf("！", "～", "。", "，", "……", "？", "、")
         }
     }
 
