@@ -19,6 +19,10 @@ class KeyboardLayoutTest {
             .flatMap { it.keys }
         assertTrue(specs.map { it.label }.contains("Q"))
         assertTrue(specs.map { it.label }.contains("⇧"))
+        val locked = KeyboardLayouts.rows(KeyboardMode.LATIN, capsLock = true).flatMap { it.keys }
+        assertTrue(locked.map { it.label }.contains("Q"))
+        assertTrue(locked.map { it.label }.contains("⇪"))
+        assertTrue(locked.first { it.action == KeyAction.Shift }.highlighted)
         assertTrue(specs.any { it.icon == KeyIcon.GLOBE && it.action == KeyAction.SetMode(KeyboardMode.ZHUYIN) })
     }
 

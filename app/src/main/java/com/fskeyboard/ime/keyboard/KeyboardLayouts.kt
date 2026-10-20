@@ -10,9 +10,10 @@ internal object KeyboardLayouts {
         shifted: Boolean = false,
         base: KeyboardMode = KeyboardMode.ZHUYIN,
         fullWidth: Boolean = true,
+        capsLock: Boolean = false,
     ): List<KeyRow> = when (mode) {
         KeyboardMode.ZHUYIN -> zhuyin()
-        KeyboardMode.LATIN -> latin(shifted)
+        KeyboardMode.LATIN -> latin(shifted, capsLock)
         KeyboardMode.SYMBOLS -> symbols(base, more = false, fullWidth)
         KeyboardMode.SYMBOLS_MORE -> symbols(base, more = true, fullWidth)
     }
@@ -66,26 +67,29 @@ internal object KeyboardLayouts {
         )
     }
 
-    private fun latin(shifted: Boolean): List<KeyRow> = listOf(
-        KeyRow(letters("qwertyuiop", shifted)),
-        KeyRow(letters("asdfghjkl", shifted), leading = 0.5f, trailing = 0.5f),
-        KeyRow(listOf(shift(shifted)) + letters("zxcvbnm", shifted) + deleteKey()),
-        KeyRow(
-            listOf(
-                iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.35f),
-                iconKey(
-                    icon = KeyIcon.GLOBE,
-                    action = KeyAction.SetMode(KeyboardMode.ZHUYIN),
-                    weight = 1.15f,
-                    secondary = KeyAction.NextInputMethod,
+    private fun latin(shifted: Boolean, capsLock: Boolean): List<KeyRow> {
+        val upper = shifted || capsLock
+        return listOf(
+            KeyRow(letters("qwertyuiop", upper)),
+            KeyRow(letters("asdfghjkl", upper), leading = 0.5f, trailing = 0.5f),
+            KeyRow(listOf(shift(upper, capsLock)) + letters("zxcvbnm", upper) + deleteKey()),
+            KeyRow(
+                listOf(
+                    iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.35f),
+                    iconKey(
+                        icon = KeyIcon.GLOBE,
+                        action = KeyAction.SetMode(KeyboardMode.ZHUYIN),
+                        weight = 1.15f,
+                        secondary = KeyAction.NextInputMethod,
+                    ),
+                    KeySpec(",", KeyAction.Character(',')),
+                    space(),
+                    KeySpec(".", KeyAction.Character('.')),
+                    iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.7f),
                 ),
-                KeySpec(",", KeyAction.Character(',')),
-                space(),
-                KeySpec(".", KeyAction.Character('.')),
-                iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.7f),
             ),
-        ),
-    )
+        )
+    }
 
     /**
      * iOS 123 and #+= pages. From zhuyin with [fullWidth] they are the iOS zhuyin
@@ -156,8 +160,8 @@ internal object KeyboardLayouts {
         role = KeyRole.MODIFIER,
     )
 
-    private fun shift(active: Boolean) = KeySpec(
-        label = "⇧",
+    private fun shift(active: Boolean, locked: Boolean) = KeySpec(
+        label = if (locked) "⇪" else "⇧",
         action = KeyAction.Shift,
         weight = 1.4f,
         role = KeyRole.MODIFIER,

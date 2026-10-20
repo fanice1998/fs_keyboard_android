@@ -51,8 +51,8 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private var mode = KeyboardMode.ZHUYIN
     private var base = KeyboardMode.ZHUYIN
-    private var shifted = false
-    private var rows = KeyboardLayouts.rows(mode, shifted, base, fullWidthSymbols)
+    private val shiftLock = ShiftLock()
+    private var rows = KeyboardLayouts.rows(mode, base = base, fullWidth = fullWidthSymbols)
     private val boxes = ArrayList<KeyBox>()
     private var down: KeyBox? = null
     private var downPointer = NO_POINTER
@@ -98,7 +98,7 @@ internal class KeyboardView(context: Context) : View(context) {
         if (this.mode == mode && this.base == base) return
         this.mode = mode
         this.base = base
-        shifted = false
+        if (mode == KeyboardMode.ZHUYIN) shiftLock.releaseOnce()
         rebuild()
     }
 
@@ -302,20 +302,23 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private fun dispatch(action: KeyAction, haptic: Boolean = true) {
         if (action == KeyAction.Shift) {
-            shifted = !shifted
+            shiftLock.onShift()
             rebuild()
             return
         }
         if (haptic) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         traced("ime.dispatch") { onKey(action) }
-        if (action is KeyAction.Character && shifted && mode == KeyboardMode.LATIN) {
-            shifted = false
-            rebuild()
-        }
+        if (action is KeyAction.Character && shiftLock.onCharacter()) rebuild()
     }
 
     private fun rebuild() {
-        rows = KeyboardLayouts.rows(mode, shifted, base, fullWidthSymbols)
+        rows = KeyboardLayouts.rows(
+            mode,
+            shifted = shiftLock.uppercase,
+            base = base,
+            fullWidth = fullWidthSymbols,
+            capsLock = shiftLock.mode == ShiftMode.LOCKED,
+        )
         requestLayout()
         if (width > 0 && height > 0) {
             layoutKeys(width, height)
