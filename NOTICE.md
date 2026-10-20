@@ -83,6 +83,15 @@ Languages. In: Proceedings of the 8th International Language Resources and
 Evaluation (LREC'12), 2012. The text was split into words with mcbopomofo.tsv and
 only pairs seen five times or more were kept; no sentence of the corpus is included.
 
+app/src/main/assets/lexicon/english.tsv holds English word counts from the word
+table of the Leipzig Corpora Collection corpus eng_news_2024_300K, also CC BY
+(same citation). Words seen fewer than five times were dropped. Two-letter
+words need at least 100 so a fragment such as "th" is not its own word. The
+list keeps the 40,000 most frequent of what remains. No sentence of the corpus
+is included.
+data/lexicon/english_extra.txt adds technical words; a word missing from the news
+counts, or rarer than the 5000th news word, is stored at that word's count.
+
 The keyboard looks phrases up in mcbopomofo.tsv first. fs_zhuyin.dict.yaml adds
 the readings that table lacks, ranked below every table row. Both are compiled
 into app/src/main/assets/lexicon/lexicon.bin at build time.

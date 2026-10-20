@@ -217,6 +217,7 @@ tools/install-shared-data.sh /path/to/opencc/share/opencc
 - `fs_zhuyin.dict.yaml`：單字是全字庫注音（CNS 第 1、2 字面），詞組是專案自寫的。文字是臺灣繁體，編碼是注音，聲調在音節最後，輕聲也是後綴
 - `data/lexicon/mcbopomofo.tsv`（不在 assets 裡）：Rust 詞庫的主要詞組表，約 17 萬筆，由 `tools/import-mcbopomofo.py` 從小麥注音（MIT）轉出。`fs_zhuyin.dict.yaml` 只補它沒有的讀音，排在最後。`tools/build-lexicon.sh` 把兩者和 `data/lexicon/bigram.tsv` 編成 `assets/lexicon/lexicon.bin`，App 啟動時直接讀進記憶體，不用解析
 - `data/lexicon/bigram.tsv`：詞與詞相鄰的機率，從 Leipzig 繁體新聞語料（CC BY）統計，只留出現 5 次以上的組合。整句選字和候選排序會看前一個詞，包括游標前剛送出的字
+- `assets/lexicon/english.tsv`：英文詞頻，從 Leipzig `eng_news_2024_300K`（CC BY）的詞表統計。少於 5 次的詞不收，兩個字母的詞要至少 100 次，最多 4 萬詞。`data/lexicon/english_extra.txt` 補上資訊用語，沒有或不夠常見的詞抬到第 5000 名的次數。英文鍵盤打字時用前綴對這份表，空白鍵送出第一個候選。`tools/build-english.sh` 可重算
 - `opencc/t2tw.json`：預設。通用繁體對到臺灣標準
 - `opencc/s2tw.json`：詞庫若改成簡體，把方案的 `opencc_config` 換成這個檔
 

@@ -43,6 +43,11 @@ internal class CandidateController(
 
     /** The last characters this keyboard committed, for choosing particles. */
     private val recent = StringBuilder()
+
+    /** Letters of the English word under the caret. Empty unless the Latin keyboard is composing. */
+    private val english = StringBuilder()
+    private val englishLexicon = EnglishLexicon()
+    private var englishLoaded = false
     private var generation = 0L
     private var closed = false
     private var lastLookupMillis = 0L
@@ -52,6 +57,7 @@ internal class CandidateController(
         get() = !composition.isEmpty
 
     fun start() {
+        loadEnglish()
         publish()
         lexicon.start(context) {
             if (!closed) {
@@ -70,6 +76,7 @@ internal class CandidateController(
     fun onStartInput(restarting: Boolean) {
         if (!restarting) {
             recent.setLength(0)
+            english.setLength(0)
             cancelComposition()
             publish()
         }
@@ -77,11 +84,12 @@ internal class CandidateController(
 
     fun onFinishInput() {
         endCursor()
+        commitEnglishLiteral()
         cancelComposition()
     }
 
-    /** Space can glide the caret only when it is not marking 平聲. */
-    fun canMoveCursor(): Boolean = !closed && !hasComposition
+    /** Space can glide the caret only when it is not marking 平聲 or finishing an English word. */
+    fun canMoveCursor(): Boolean = !closed && !hasComposition && english.isEmpty()
 
     /**
      * Takes the editor text once. Later steps reuse it, so a drag does not re-read the field.
@@ -118,7 +126,9 @@ internal class CandidateController(
     }
 
     fun onKey(action: KeyAction) {
-        if (action !is KeyAction.Bopomofo) dismissSuggestions()
+        val typingEnglish = mode == KeyboardMode.LATIN &&
+            (english.isNotEmpty() || (action is KeyAction.Character && action.value.isLetter()))
+        if (action !is KeyAction.Bopomofo && !typingEnglish) dismissSuggestions()
         when (action) {
             is KeyAction.SetMode -> setMode(action.mode)
             KeyAction.Shift -> Unit
@@ -126,7 +136,7 @@ internal class CandidateController(
             KeyAction.Backspace -> onBackspace()
             KeyAction.Enter -> onEnter()
             KeyAction.Space -> onSpace()
-            is KeyAction.Character -> commit(action.value.toString())
+            is KeyAction.Character -> onCharacter(action.value)
             is KeyAction.Bopomofo -> onBopomofo(action)
             is KeyAction.Punctuation -> onPunctuation(action.text)
         }
@@ -137,6 +147,11 @@ internal class CandidateController(
      * A suggestion, offered with nothing typed, is committed as it is.
      */
     fun onCandidate(candidate: Candidate) {
+        if (mode == KeyboardMode.LATIN && english.isNotEmpty()) {
+            english.setLength(0)
+            acceptCommitted(candidate.text + " ")
+            return
+        }
         if (mode != KeyboardMode.ZHUYIN || !hasComposition) {
             commit(candidate.text)
             dismissSuggestions()
@@ -153,6 +168,7 @@ internal class CandidateController(
     /** Leaving zhuyin commits what was typed, the way Enter does. */
     private fun setMode(next: KeyboardMode) {
         if (next == mode) return
+        if (english.isNotEmpty()) acceptEnglish(trailing = "")
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
             finishComposition(convertAll())
         }
@@ -204,6 +220,10 @@ internal class CandidateController(
     }
 
     private fun onPunctuation(text: String) {
+        if (english.isNotEmpty()) {
+            acceptEnglish(trailing = text)
+            return
+        }
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
             finishComposition(convertAll())
         }
@@ -212,6 +232,10 @@ internal class CandidateController(
     }
 
     private fun onSpace() {
+        if (english.isNotEmpty()) {
+            acceptEnglish(trailing = " ")
+            return
+        }
         when (KeyPolicy.space(mode, composing = hasComposition)) {
             KeyPolicy.Space.MarkLevelTone -> when {
                 composition.pending.isEmpty -> finishComposition(convertAll())
@@ -222,6 +246,19 @@ internal class CandidateController(
     }
 
     private fun onBackspace() {
+        if (english.isNotEmpty()) {
+            english.deleteCharAt(english.lastIndex)
+            if (english.isEmpty()) {
+                presented = emptyList()
+                val ic = connection()
+                ic?.setComposingText("", 1)
+                ic?.finishComposingText()
+                publish(EngineSnapshot())
+            } else {
+                showEnglish()
+            }
+            return
+        }
         if (mode != KeyboardMode.ZHUYIN || !hasComposition) {
             connection()?.deleteSurroundingText(1, 0)
             if (recent.isNotEmpty()) recent.setLength(recent.length - 1)
@@ -232,6 +269,7 @@ internal class CandidateController(
     }
 
     private fun onEnter() {
+        if (english.isNotEmpty()) acceptEnglish(trailing = "")
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
             finishComposition(convertAll())
         } else {
@@ -306,6 +344,86 @@ internal class CandidateController(
         remember(text)
     }
 
+    private fun onCharacter(value: Char) {
+        if (mode == KeyboardMode.LATIN && continuesEnglish(value)) {
+            english.append(value)
+            showEnglish()
+            return
+        }
+        if (english.isNotEmpty()) acceptEnglish(trailing = value.toString()) else commit(value.toString())
+    }
+
+    /** A letter always extends the word. An apostrophe, hyphen, or digit does only after one has started. */
+    private fun continuesEnglish(value: Char): Boolean {
+        if (value.isLetter()) return true
+        if (english.isEmpty()) return false
+        return value == '\'' || value == '-' || value.isDigit()
+    }
+
+    private fun loadEnglish() {
+        if (englishLoaded) return
+        englishLoaded = true
+        try {
+            context.assets.open(ENGLISH_ASSET).bufferedReader().use { reader ->
+                englishLexicon.load(reader.readLines())
+            }
+        } catch (_: Exception) {
+            // The letters still go into the field. The bar just has no completions.
+        }
+    }
+
+    private fun showEnglish() {
+        loadEnglish()
+        val typed = english.toString()
+        val start = System.nanoTime()
+        val hits = englishLexicon.complete(typed.lowercase(), ENGLISH_CANDIDATES)
+        lastLookupMillis = (System.nanoTime() - start) / 1_000_000L
+        val texts = EnglishSuggest.candidates(typed, hits, ENGLISH_CANDIDATES)
+        val candidates = texts.mapIndexed { index, text ->
+            Candidate(
+                text = text,
+                engineIndex = -(index + 1),
+                source = CandidateSource.SUGGESTION,
+                span = 0,
+            )
+        }
+        apply(
+            EngineSnapshot(
+                preedit = typed,
+                composingPreview = typed,
+                candidates = candidates,
+                decodeMillis = lastLookupMillis,
+            ),
+        )
+    }
+
+    /** Replaces the underlined stem with the first candidate, then [trailing]. */
+    private fun acceptEnglish(trailing: String) {
+        val word = presented.firstOrNull()?.text ?: english.toString()
+        english.setLength(0)
+        acceptCommitted(word + trailing)
+    }
+
+    /** Writes the underlined letters as they stand. Used when the field is closing. */
+    private fun commitEnglishLiteral() {
+        if (english.isEmpty()) return
+        val word = english.toString()
+        english.setLength(0)
+        acceptCommitted(word)
+    }
+
+    private fun acceptCommitted(text: String) {
+        presented = emptyList()
+        if (text.isNotEmpty()) commit(text)
+        clearComposing()
+        publish(EngineSnapshot())
+    }
+
+    private fun clearComposing() {
+        val ic = connection()
+        ic?.finishComposingText()
+    }
+
     private fun cancelComposition() {
         composition.clear()
         val ic = connection()
@@ -319,6 +437,7 @@ internal class CandidateController(
         val ticket = ++generation
         val shown = when {
             snapshot != null && mode == KeyboardMode.ZHUYIN -> pipeline.preview(snapshot)
+            snapshot != null && mode == KeyboardMode.LATIN -> snapshot.candidates
             mode == KeyboardMode.ZHUYIN && snapshot == null -> presented
             else -> emptyList()
         }
@@ -410,6 +529,8 @@ internal class CandidateController(
         const val RECENT_CHARS = 32
         const val SLOW_LOOKUP_MS = 5L
         const val MAX_EXTRACT = 20_000
+        const val ENGLISH_CANDIDATES = 8
+        const val ENGLISH_ASSET = "lexicon/english.tsv"
     }
 
     private class CursorSession(val text: String, val startOffset: Int, var cursor: Int)
