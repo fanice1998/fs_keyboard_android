@@ -15,6 +15,17 @@ class CursorMotionTest {
     }
 
     @Test
+    fun horizontalStepsStopAtTheEndsOfTheLine() {
+        val text = "ab\ncd"
+        assertEquals(3, CursorMotion.move(text, 3, -1, 0))
+        assertEquals(3, CursorMotion.move(text, 3, -4, 0))
+        assertEquals(2, CursorMotion.move(text, 2, 1, 0))
+        assertEquals(2, CursorMotion.move(text, 1, 3, 0))
+        assertEquals(text.length, CursorMotion.move(text, 4, 5, 0))
+        assertEquals(0, CursorMotion.move(text, 1, -5, 0))
+    }
+
+    @Test
     fun anEmojiIsOneStep() {
         val thumbs = "👍"
         assertEquals(thumbs.length, CursorMotion.move(thumbs, 0, 1, 0))

@@ -5,6 +5,7 @@ import kotlin.math.abs
 
 /**
  * Moves a cursor by graphemes horizontally and by newline-delimited lines vertically.
+ * A horizontal step stops at the ends of its line, so it does not wrap to the next one.
  * A vertical step keeps the column, and never lands in the middle of a grapheme.
  */
 internal object CursorMotion {
@@ -16,12 +17,14 @@ internal object CursorMotion {
     }
 
     private fun shiftGraphemes(text: String, cursor: Int, delta: Int): Int {
+        val start = lineStart(text, cursor)
+        val end = lineEnd(text, cursor)
         val breaks = BreakIterator.getCharacterInstance()
         breaks.setText(text)
-        var index = cursor.coerceIn(0, text.length)
+        var index = cursor.coerceIn(start, end)
         repeat(abs(delta)) {
             val next = if (delta > 0) breaks.following(index) else breaks.preceding(index)
-            if (next == BreakIterator.DONE) return index
+            if (next == BreakIterator.DONE || next < start || next > end) return index
             index = next
         }
         return index
