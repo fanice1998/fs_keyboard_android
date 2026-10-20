@@ -10,8 +10,7 @@
             android:name=".FsKeyboardService"
             android:exported="true"
             android:label="@string/ime_name"
-            android:permission="android.permission.BIND_INPUT_METHOD"
-            android:settingsActivity="com.fskeyboard.ime.settings.ImeSettingsActivity">
+            android:permission="android.permission.BIND_INPUT_METHOD">
             <intent-filter>
                 <action android:name="android.view.InputMethod" />
             </intent-filter>
@@ -23,6 +22,10 @@
         <activity
             android:name=".settings.ImeSettingsActivity"
             android:exported="true"
-            android:label="@string/ime_settings_title" />
+            android:label="@string/ime_settings_title">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>
