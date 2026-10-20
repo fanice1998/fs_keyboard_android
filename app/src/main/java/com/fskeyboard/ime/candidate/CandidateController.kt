@@ -38,6 +38,9 @@ internal class CandidateController(
     private var base = KeyboardMode.ZHUYIN
     private var presented: List<Candidate> = emptyList()
     private val composition = ZhuyinComposition()
+
+    /** The last characters this keyboard committed, for choosing particles. */
+    private val recent = StringBuilder()
     private var generation = 0L
     private var closed = false
 
@@ -61,6 +64,7 @@ internal class CandidateController(
 
     fun onStartInput(restarting: Boolean) {
         if (!restarting) {
+            recent.setLength(0)
             cancelComposition()
             publish()
         }
@@ -71,6 +75,7 @@ internal class CandidateController(
     }
 
     fun onKey(action: KeyAction) {
+        if (action !is KeyAction.Bopomofo) dismissSuggestions()
         when (action) {
             is KeyAction.SetMode -> setMode(action.mode)
             KeyAction.Shift -> Unit
@@ -84,10 +89,14 @@ internal class CandidateController(
         }
     }
 
-    /** Chooses [candidate] for the front syllables it spans. The rest stays to be chosen. */
+    /**
+     * Chooses [candidate] for the front syllables it spans. The rest stays to be chosen.
+     * A suggestion, offered with nothing typed, is committed as it is.
+     */
     fun onCandidate(candidate: Candidate) {
-        if (mode != KeyboardMode.ZHUYIN) {
+        if (mode != KeyboardMode.ZHUYIN || !hasComposition) {
             commit(candidate.text)
+            dismissSuggestions()
             return
         }
         val finished = composition.choose(candidate)
@@ -119,12 +128,18 @@ internal class CandidateController(
         apply(refresh())
     }
 
+    /** A lone syllable lists the particles that fit what was typed before it first. */
     private fun refresh(): EngineSnapshot {
         val text = composition.text
+        val pending = composition.pending
+        var candidates = candidatesFor(pending, lookup(pending))
+        if (pending.size == 1 && text == pending.text) {
+            candidates = Particles.promote(candidates, recent.toString())
+        }
         return EngineSnapshot(
             preedit = text,
             composingPreview = text,
-            candidates = candidatesFor(composition.pending, lookup(composition.pending)),
+            candidates = candidates,
             decodeMillis = 0,
         )
     }
@@ -140,6 +155,7 @@ internal class CandidateController(
             finishComposition(convertAll())
         }
         commit(text)
+        dismissSuggestions()
     }
 
     private fun onSpace() {
@@ -155,6 +171,7 @@ internal class CandidateController(
     private fun onBackspace() {
         if (mode != KeyboardMode.ZHUYIN || !hasComposition) {
             connection()?.deleteSurroundingText(1, 0)
+            if (recent.isNotEmpty()) recent.setLength(recent.length - 1)
             return
         }
         composition.backspace()
@@ -170,19 +187,37 @@ internal class CandidateController(
     }
 
     /** The first step uses the candidate on screen, so Enter matches what the bar shows. */
-    private fun convertAll(): String {
+    private fun convertAll(): Commit {
         return composition.convertAll(presented.firstOrNull()) { pending ->
             candidatesFor(pending, lookup(pending))
         }
     }
 
-    private fun finishComposition(text: String) {
+    /** Commits, learns the phrases the user put together, and offers particles that fit. */
+    private fun finishComposition(done: Commit) {
         composition.clear()
         presented = emptyList()
         val ic = connection()
-        ic?.commitText(text, 1)
+        ic?.commitText(done.text, 1)
         ic?.finishComposingText()
+        remember(done.text)
+        lexicon.learn(done.learned)
+        val particles = Particles.suggest(recent.toString()).mapIndexed { index, text ->
+            Candidate(text = text, engineIndex = -(index + 1), source = CandidateSource.SUGGESTION, span = 0)
+        }
+        publish(EngineSnapshot(candidates = particles))
+    }
+
+    /** Drops particles offered after a commit once the user does something else. */
+    private fun dismissSuggestions() {
+        if (hasComposition || presented.isEmpty()) return
+        presented = emptyList()
         publish(EngineSnapshot())
+    }
+
+    private fun remember(text: String) {
+        recent.append(text)
+        if (recent.length > RECENT_CHARS) recent.delete(0, recent.length - RECENT_CHARS)
     }
 
     private fun performEnter() {
@@ -191,8 +226,11 @@ internal class CandidateController(
         val noAction = actionId == EditorInfo.IME_ACTION_NONE ||
             actionId == EditorInfo.IME_ACTION_UNSPECIFIED
         val ic = connection() ?: return
-        if (!noAction && ic.performEditorAction(actionId)) return
-        ic.commitText("\n", 1)
+        if (!noAction && ic.performEditorAction(actionId)) {
+            recent.setLength(0)
+            return
+        }
+        commit("\n")
     }
 
     private fun apply(snapshot: EngineSnapshot) {
@@ -212,6 +250,7 @@ internal class CandidateController(
 
     private fun commit(text: String) {
         connection()?.commitText(text, 1)
+        remember(text)
     }
 
     private fun cancelComposition() {
@@ -292,6 +331,7 @@ internal class CandidateController(
 
     private companion object {
         const val TAG = "FsKeyboard"
+        const val RECENT_CHARS = 32
     }
 
     private fun statusMessage(): String = when (lexicon.status) {

@@ -6,6 +6,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.fskeyboard.ime.candidate.Candidate
+import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -30,6 +31,7 @@ internal class RustZhuyinLexicon : ZhuyinLexicon {
     }
     private val main = Handler(Looper.getMainLooper())
     private val started = AtomicBoolean(false)
+    private var userFile: File? = null
     private val closed = AtomicBoolean(false)
 
     override fun start(context: Context, onReady: () -> Unit) {
@@ -62,15 +64,33 @@ internal class RustZhuyinLexicon : ZhuyinLexicon {
         if (raw.isNullOrEmpty()) return emptyList()
         return raw.lineSequence()
             .mapNotNull { line ->
-                val tab = line.indexOf('\t')
-                if (tab <= 0) return@mapNotNull null
-                val span = line.substring(0, tab).toIntOrNull() ?: return@mapNotNull null
-                span to line.substring(tab + 1)
+                val parts = line.split('\t')
+                val span = parts.getOrNull(0)?.toIntOrNull() ?: return@mapNotNull null
+                val text = parts.getOrNull(1)?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+                Triple(span, text, parts.getOrNull(2).orEmpty())
             }
-            .mapIndexed { index, (span, text) ->
-                Candidate(text = text, engineIndex = -(index + 1), span = span)
+            .mapIndexed { index, (span, text, reading) ->
+                Candidate(text = text, engineIndex = -(index + 1), span = span, reading = reading)
             }
             .toList()
+    }
+
+    /** Learns on the lexicon thread and appends what was new to the user file there. */
+    override fun learn(phrases: List<Pair<String, String>>) {
+        if (!isReady || phrases.isEmpty() || closed.get()) return
+        worker.execute {
+            try {
+                val fresh = phrases.filter { (reading, text) -> RustLexiconNative.nativeLearn(reading, text) }
+                if (fresh.isEmpty()) return@execute
+                val file = userFile ?: return@execute
+                file.parentFile?.mkdirs()
+                file.appendText(fresh.joinToString("") { (reading, text) -> "$reading\t$text\n" })
+            } catch (error: Exception) {
+                Log.e(TAG, "lexicon learn failed", error)
+            } catch (error: UnsatisfiedLinkError) {
+                Log.e(TAG, "lexicon learn failed", error)
+            }
+        }
     }
 
     private fun load(context: Context) {
@@ -79,7 +99,9 @@ internal class RustZhuyinLexicon : ZhuyinLexicon {
             RustLexiconNative.load()
             val table = context.assets.open(TABLE).use { it.readBytes() }
             val dict = context.assets.open(DICT).use { it.readBytes() }
-            val rc = RustLexiconNative.nativeLoad(table, dict)
+            val user = File(context.filesDir, USER_FILE).also { userFile = it }
+            val learned = if (user.isFile) user.readBytes() else ByteArray(0)
+            val rc = RustLexiconNative.nativeLoad(table, dict, learned)
             if (rc == 0) {
                 Log.i(TAG, "lexicon loaded in ${SystemClock.elapsedRealtime() - start}ms")
                 statusValue = EngineStatus.READY
@@ -102,5 +124,6 @@ internal class RustZhuyinLexicon : ZhuyinLexicon {
         const val TAG = "FsKeyboard"
         const val TABLE = "lexicon/mcbopomofo.tsv"
         const val DICT = "rime/shared/fs_zhuyin.dict.yaml"
+        const val USER_FILE = "lexicon/user.tsv"
     }
 }

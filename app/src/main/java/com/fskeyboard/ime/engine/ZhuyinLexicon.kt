@@ -19,4 +19,10 @@ internal interface ZhuyinLexicon {
      * The longest phrase comes first. Each hit carries its span and a negative index.
      */
     fun lookup(queries: List<String>): List<Candidate>
+
+    /**
+     * Remembers phrases the user put together, as (reading, text), so they rank first
+     * next time. Kept on the device across restarts.
+     */
+    fun learn(phrases: List<Pair<String, String>>)
 }

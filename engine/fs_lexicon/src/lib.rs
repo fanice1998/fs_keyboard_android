@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-/// Longest phrase, in syllables, that a candidate list looks for.
+/// Longest phrase, in typed syllables, that a candidate list looks for.
 const MAX_SPAN: usize = 8;
 /// Tones are packed three bits per syllable, so longer readings are skipped.
 const MAX_SYLLABLES: usize = 10;
@@ -13,35 +13,58 @@ const PHRASE_LIMIT: usize = 20;
 const SUPPLEMENT_SCORE: f32 = -9.0;
 /// Score for a syllable that no word covers. It keeps its zhuyin in a conversion.
 const UNKNOWN_SCORE: f32 = -20.0;
+/// Subtracted, in log10, from a word found only by the first glyphs of an untoned syllable,
+/// so a fully typed reading still ranks first.
+const ABBREVIATION_PENALTY: f32 = 2.0;
+/// Score of a phrase the user put together from chosen words. Above nearly every table row.
+const USER_SCORE: f32 = -1.0;
+/// A span with more initial+medial syllables than this is read only as typed.
+const MAX_SPLITS: usize = 3;
 
 static LEXICON: Mutex<Option<Lexicon>> = Mutex::new(None);
 
 #[derive(Clone, Debug)]
 struct Entry {
     text: Box<str>,
-    /// Tone of syllable i in bits 3i..3i+3: 1 level, 2 ˊ, 3 ˇ, 4 ˋ, 5 ˙.
+    /// Toneless reading, syllables joined by a space. Shared with the [Lexicon::exact] key.
+    reading: Arc<str>,
+    /// Tone of syllable i in bits 3i..3i+3: 1 level, 2 ˊ, 3 ˇ, 4 ˋ, 5 ˙, 0 any.
     tones: u32,
     score: f32,
 }
 
-/// Rows keyed by the toneless reading, syllables joined by a space, best score first.
 #[derive(Clone, Debug, Default)]
 pub struct Lexicon {
-    rows: HashMap<Box<str>, Vec<Entry>>,
+    entries: Vec<Entry>,
+    /// Entry ids by toneless reading, best score first.
+    exact: HashMap<Arc<str>, Vec<u32>>,
+    /// Entry ids by the first glyph of each syllable, best score first.
+    initials: HashMap<Box<str>, Vec<u32>>,
+    /// Syllable bodies that a longer syllable starts with, such as ㄐ and ㄐㄧ.
+    open: HashSet<Box<str>>,
 }
 
-/// One candidate. [span] is how many syllables, from the front, it uses.
+/// One candidate. [span] is how many typed syllables, from the front, it uses.
+/// [reading] is the reading it was found under, tones marked and `*` for any tone.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hit<'a> {
     pub span: usize,
     pub text: Cow<'a, str>,
+    pub reading: String,
 }
 
-/// One syllable of a query: toneless body, wanted tone (None for any), and as typed.
+/// One typed syllable: toneless body, wanted tone (None while it has none), and as typed.
 struct Syllable {
     body: String,
     tone: Option<u8>,
     display: String,
+}
+
+/// One dictionary syllable a typed one is read as.
+#[derive(Clone, Copy)]
+struct Token<'q> {
+    body: &'q str,
+    tone: Option<u8>,
 }
 
 impl Lexicon {
@@ -49,31 +72,34 @@ impl Lexicon {
     /// takes more than one word, then the front of the input, longest phrase first.
     ///
     /// [code] is syllables joined by a space. A syllable ends with its tone mark,
-    /// no mark is the level tone, and `*` means the tone is not chosen yet.
+    /// no mark is the level tone, and `*` means the tone is not chosen yet. A syllable
+    /// without a tone also matches longer ones that start with it, so ㄐ* finds ㄐㄧㄣ.
     pub fn candidates(&self, code: &str) -> Vec<Hit<'_>> {
         let query = parse_code(code);
         let mut out = Vec::new();
         let sentence = if query.len() > 1 { self.best_path(&query) } else { Vec::new() };
         if sentence.len() > 1 {
-            let text: String = sentence.iter().map(|hit| hit.text.as_ref()).collect();
-            out.push(Hit { span: query.len(), text: Cow::Owned(text) });
+            out.push(Hit {
+                span: query.len(),
+                text: Cow::Owned(sentence.iter().map(|hit| hit.text.as_ref()).collect()),
+                reading: sentence.iter().map(|hit| hit.reading.as_str()).collect::<Vec<_>>().join(" "),
+            });
         }
+        let sentence_text = out.first().map(|hit| hit.text.to_string());
         let mut seen: HashSet<&str> = HashSet::new();
         for span in (1..=query.len().min(MAX_SPAN)).rev() {
             let limit = if span > 1 { PHRASE_LIMIT } else { CANDIDATE_LIMIT };
             let mut taken = 0;
-            for entry in self.matching(&query[..span]) {
+            for (id, _) in self.ranked_span(&query[..span], limit) {
                 if out.len() >= CANDIDATE_LIMIT || taken >= limit {
                     break;
                 }
+                let entry = &self.entries[id as usize];
                 let text: &str = &entry.text;
-                if out.first().is_some_and(|first| first.span == query.len() && first.text == text) {
+                if sentence_text.as_deref() == Some(text) || !seen.insert(text) {
                     continue;
                 }
-                if !seen.insert(text) {
-                    continue;
-                }
-                out.push(Hit { span, text: Cow::Borrowed(text) });
+                out.push(Hit { span, text: Cow::Borrowed(text), reading: reading_of(entry) });
                 taken += 1;
             }
         }
@@ -85,34 +111,76 @@ impl Lexicon {
         self.best_path(&parse_code(code))
     }
 
+    /// Remembers [text] under [reading], given the way [Lexicon::candidates] reports
+    /// readings, at [USER_SCORE]. Returns false when it was already remembered.
+    pub fn learn(&mut self, reading: &str, text: &str) -> bool {
+        let Some((key, tones)) = split_reading(reading) else {
+            return false;
+        };
+        if text.is_empty() {
+            return false;
+        }
+        let existing = self.exact.get(key.as_str()).and_then(|ids| {
+            ids.iter().copied().find(|&id| {
+                let entry = &self.entries[id as usize];
+                &*entry.text == text && (entry.tones == tones || tones_cover(tones, entry.tones))
+            })
+        });
+        match existing {
+            Some(id) if self.entries[id as usize].score >= USER_SCORE => false,
+            Some(id) => {
+                self.entries[id as usize].score = USER_SCORE;
+                self.resort(&key);
+                true
+            }
+            None => {
+                let id = self.push(&key, tones, text, USER_SCORE);
+                let initials = initials_of(&key);
+                self.initials.entry(initials.into_boxed_str()).or_default().push(id);
+                self.add_open(&key);
+                self.resort(&key);
+                true
+            }
+        }
+    }
+
     /// Highest summed log probability over every way to split [query] into words.
     /// A syllable with no word of its own stays as typed, at [UNKNOWN_SCORE].
     fn best_path<'a>(&'a self, query: &[Syllable]) -> Vec<Hit<'a>> {
         let n = query.len();
-        // best[end]: score of the best split of query[..end], and its last word.
+        // best[end]: total score of the best split of query[..end], and its last word.
         let mut best: Vec<Option<(f32, Hit<'a>)>> = vec![None; n + 1];
-        let mut reached = vec![false; n + 1];
-        reached[0] = true;
-        let mut scores = vec![0f32; n + 1];
+        let mut scores = vec![f32::NEG_INFINITY; n + 1];
+        scores[0] = 0.0;
         for end in 1..=n {
             for span in 1..=end.min(MAX_SPAN) {
                 let start = end - span;
-                if !reached[start] {
+                if scores[start] == f32::NEG_INFINITY {
                     continue;
                 }
-                let word = match self.matching(&query[start..end]).next() {
-                    Some(entry) => Some((entry.score, Cow::Borrowed(&*entry.text))),
-                    None if span == 1 => Some((UNKNOWN_SCORE, Cow::Owned(query[start].display.clone()))),
+                let word = match self.ranked_span(&query[start..end], 1).first() {
+                    Some(&(id, score)) => {
+                        let entry = &self.entries[id as usize];
+                        Some((score, Cow::Borrowed(&*entry.text), reading_of(entry)))
+                    }
+                    None if span == 1 => {
+                        let typed = &query[start];
+                        let reading = if typed.tone.is_none() {
+                            format!("{}*", typed.body)
+                        } else {
+                            typed.display.clone()
+                        };
+                        Some((UNKNOWN_SCORE, Cow::Owned(typed.display.clone()), reading))
+                    }
                     None => None,
                 };
-                let Some((score, text)) = word else {
+                let Some((score, text, reading)) = word else {
                     continue;
                 };
                 let total = scores[start] + score;
-                if best[end].as_ref().map_or(true, |(current, _)| total > *current) {
-                    best[end] = Some((total, Hit { span, text }));
+                if total > scores[end] {
                     scores[end] = total;
-                    reached[end] = true;
+                    best[end] = Some((total, Hit { span, text, reading }));
                 }
             }
         }
@@ -129,20 +197,139 @@ impl Lexicon {
         out
     }
 
-    /// Rows for exactly [query], best score first, that agree with its chosen tones.
-    fn matching<'a, 'q>(&'a self, query: &'q [Syllable]) -> impl Iterator<Item = &'a Entry> + 'q
-    where
-        'a: 'q,
-    {
-        let key = query.iter().map(|syllable| syllable.body.as_str()).collect::<Vec<_>>().join(" ");
-        self.rows
-            .get(key.as_str())
-            .into_iter()
-            .flatten()
-            .filter(move |entry| tones_match(entry.tones, query))
+    /// Entries for exactly the typed syllables [query], best adjusted score first,
+    /// over every way to read them: as typed, and with an initial+medial syllable
+    /// such as ㄉㄧ also read as the two abbreviated syllables ㄉ and ㄧ.
+    fn ranked_span(&self, query: &[Syllable], limit: usize) -> Vec<(u32, f32)> {
+        let mut found: Vec<(u32, f32)> = Vec::new();
+        for tokens in readings(query) {
+            found.extend(self.ranked(&tokens, limit));
+        }
+        found.sort_by(|left, right| right.1.total_cmp(&left.1));
+        let mut seen = HashSet::new();
+        found.retain(|(id, _)| seen.insert(*id));
+        found.truncate(limit);
+        found
     }
 
-    /// `span<TAB>text` lines, one per candidate.
+    /// Up to [limit] entries for [tokens], best adjusted score first. Exact readings
+    /// score as stored; readings found only by an abbreviated syllable lose
+    /// [ABBREVIATION_PENALTY].
+    fn ranked(&self, tokens: &[Token<'_>], limit: usize) -> Vec<(u32, f32)> {
+        let key = tokens.iter().map(|token| token.body).collect::<Vec<_>>().join(" ");
+        let mut out = Vec::new();
+        for &id in self.exact.get(key.as_str()).into_iter().flatten() {
+            if out.len() >= limit {
+                break;
+            }
+            let entry = &self.entries[id as usize];
+            if tones_match(entry.tones, tokens) {
+                out.push((id, entry.score));
+            }
+        }
+        let abbreviated = tokens
+            .iter()
+            .any(|token| token.tone.is_none() && self.open.contains(token.body));
+        if abbreviated {
+            let mut taken = 0;
+            for &id in self.initials.get(initials_of(&key).as_str()).into_iter().flatten() {
+                if taken >= limit {
+                    break;
+                }
+                let entry = &self.entries[id as usize];
+                if *entry.reading == *key || !starts_match(&entry.reading, tokens) {
+                    continue;
+                }
+                if tones_match(entry.tones, tokens) {
+                    out.push((id, entry.score - ABBREVIATION_PENALTY));
+                    taken += 1;
+                }
+            }
+            out.sort_by(|left, right| right.1.total_cmp(&left.1));
+            out.truncate(limit);
+        }
+        out
+    }
+
+    fn push(&mut self, key: &str, tones: u32, text: &str, score: f32) -> u32 {
+        let id = self.entries.len() as u32;
+        let reading: Arc<str> = match self.exact.get_key_value(key) {
+            Some((shared, _)) => shared.clone(),
+            None => Arc::from(key),
+        };
+        self.exact.entry(reading.clone()).or_default().push(id);
+        self.entries.push(Entry { text: text.into(), reading, tones, score });
+        id
+    }
+
+    /// [unique] skips the duplicate check for a source that is already deduplicated.
+    fn insert(&mut self, reading: &str, text: &str, score: f32, unique: bool) {
+        let Some((key, tones)) = split_reading(reading) else {
+            return;
+        };
+        if !unique {
+            let duplicate = self.exact.get(key.as_str()).is_some_and(|ids| {
+                ids.iter().any(|&id| {
+                    let entry = &self.entries[id as usize];
+                    entry.tones == tones && &*entry.text == text
+                })
+            });
+            if duplicate {
+                return;
+            }
+        }
+        self.push(&key, tones, text, score);
+    }
+
+    fn finish(&mut self) {
+        let entries = &self.entries;
+        let by_score = |left: &u32, right: &u32| {
+            entries[*right as usize].score.total_cmp(&entries[*left as usize].score)
+        };
+        for ids in self.exact.values_mut() {
+            ids.sort_by(by_score);
+            ids.shrink_to_fit();
+        }
+        let mut initials: HashMap<Box<str>, Vec<u32>> = HashMap::new();
+        let mut open = HashSet::new();
+        for (key, ids) in &self.exact {
+            initials.entry(initials_of(key).into_boxed_str()).or_default().extend(ids);
+            for syllable in key.split(' ') {
+                for (index, _) in syllable.char_indices().skip(1) {
+                    open.insert(syllable[..index].into());
+                }
+            }
+        }
+        for ids in initials.values_mut() {
+            ids.sort_by(by_score);
+            ids.shrink_to_fit();
+        }
+        self.initials = initials;
+        self.open = open;
+    }
+
+    fn resort(&mut self, key: &str) {
+        let entries = &self.entries;
+        let by_score = |left: &u32, right: &u32| {
+            entries[*right as usize].score.total_cmp(&entries[*left as usize].score)
+        };
+        if let Some(ids) = self.exact.get_mut(key) {
+            ids.sort_by(by_score);
+        }
+        if let Some(ids) = self.initials.get_mut(initials_of(key).as_str()) {
+            ids.sort_by(by_score);
+        }
+    }
+
+    fn add_open(&mut self, key: &str) {
+        for syllable in key.split(' ') {
+            for (index, _) in syllable.char_indices().skip(1) {
+                self.open.insert(syllable[..index].into());
+            }
+        }
+    }
+
+    /// `span<TAB>text<TAB>reading` lines, one per candidate.
     fn candidate_lines(&self, code: &str) -> String {
         let mut out = String::new();
         for (index, hit) in self.candidates(code).iter().enumerate() {
@@ -152,39 +339,24 @@ impl Lexicon {
             out.push_str(&hit.span.to_string());
             out.push('\t');
             out.push_str(&hit.text);
+            out.push('\t');
+            out.push_str(&hit.reading);
         }
         out
     }
 
-    /// [unique] skips the duplicate check for a source that is already deduplicated.
-    fn insert(&mut self, reading: &str, text: &str, score: f32, unique: bool) {
-        let Some((key, tones)) = split_reading(reading) else {
-            return;
-        };
-        let rows = self.rows.entry(key.into_boxed_str()).or_default();
-        if !unique && rows.iter().any(|row| row.tones == tones && &*row.text == text) {
-            return;
-        }
-        rows.push(Entry { text: text.into(), tones, score });
-    }
-
-    fn finish(&mut self) {
-        for rows in self.rows.values_mut() {
-            rows.sort_by(|left, right| right.score.total_cmp(&left.score));
-            rows.shrink_to_fit();
-        }
-    }
-
     pub fn len(&self) -> usize {
-        self.rows.values().map(Vec::len).sum()
+        self.entries.len()
     }
 }
 
-/// Builds the lexicon from the phrase table and, below it, the Rime dictionary.
+/// Builds the lexicon from the phrase table, the Rime dictionary below it, and the
+/// phrases the user taught it.
 /// The table rows are `reading<TAB>text<TAB>log10 probability`, one per reading and text,
 /// as tools/import-mcbopomofo.py writes them; `#` lines are comments.
 /// Dictionary rows that the table already has keep the table score.
-pub fn build(table: &str, dict_yaml: &str) -> Lexicon {
+/// User rows are `reading<TAB>text`, as [Lexicon::learn] takes them.
+pub fn build(table: &str, dict_yaml: &str, user: &str) -> Lexicon {
     let mut lexicon = Lexicon::default();
     for line in table.lines() {
         if line.is_empty() || line.starts_with('#') {
@@ -205,6 +377,11 @@ pub fn build(table: &str, dict_yaml: &str) -> Lexicon {
         lexicon.insert(reading, text, SUPPLEMENT_SCORE, false);
     }
     lexicon.finish();
+    for line in user.lines() {
+        if let Some((reading, text)) = line.split_once('\t') {
+            lexicon.learn(reading, text);
+        }
+    }
     lexicon
 }
 
@@ -235,6 +412,25 @@ fn tone_of(ch: char) -> Option<u8> {
     }
 }
 
+fn mark_of(tone: u32) -> &'static str {
+    match tone {
+        2 => "ˊ",
+        3 => "ˇ",
+        4 => "ˋ",
+        5 => "˙",
+        0 => "*",
+        _ => "",
+    }
+}
+
+fn is_initial(ch: char) -> bool {
+    ('\u{3105}'..='\u{3119}').contains(&ch)
+}
+
+fn is_medial(ch: char) -> bool {
+    ('\u{3127}'..='\u{3129}').contains(&ch)
+}
+
 fn parse_code(code: &str) -> Vec<Syllable> {
     code.split(' ').filter(|part| !part.is_empty()).map(parse_query).collect()
 }
@@ -249,6 +445,9 @@ fn parse_query(syllable: &str) -> Syllable {
 }
 
 fn split_tone(syllable: &str) -> (String, Option<u8>) {
+    if let Some(body) = syllable.strip_suffix('*') {
+        return (body.to_string(), Some(0));
+    }
     match syllable.chars().last().and_then(tone_of) {
         Some(tone) => {
             let body: String = syllable.chars().take(syllable.chars().count() - 1).collect();
@@ -256,6 +455,41 @@ fn split_tone(syllable: &str) -> (String, Option<u8>) {
         }
         None => (syllable.to_string(), Some(1)),
     }
+}
+
+/// Every way to read [query] as dictionary syllables. An untoned initial+medial syllable
+/// such as ㄉㄧ is read both as one syllable and as ㄉ and ㄧ, for initials-only typing.
+fn readings(query: &[Syllable]) -> Vec<Vec<Token<'_>>> {
+    let splits = query.iter().filter(|syllable| splittable(syllable)).count();
+    let mut out: Vec<Vec<Token<'_>>> = vec![Vec::new()];
+    for syllable in query {
+        let whole = Token { body: syllable.body.as_str(), tone: syllable.tone };
+        if splits > MAX_SPLITS || !splittable(syllable) {
+            out.iter_mut().for_each(|tokens| tokens.push(whole));
+            continue;
+        }
+        let cut = syllable.body.char_indices().nth(1).map_or(0, |(index, _)| index);
+        let (head, tail) = syllable.body.split_at(cut);
+        let mut doubled = Vec::with_capacity(out.len() * 2);
+        for tokens in out {
+            let mut split = tokens.clone();
+            split.push(Token { body: head, tone: None });
+            split.push(Token { body: tail, tone: None });
+            let mut kept = tokens;
+            kept.push(whole);
+            doubled.push(kept);
+            doubled.push(split);
+        }
+        out = doubled;
+    }
+    out.retain(|tokens| tokens.len() <= MAX_SYLLABLES);
+    out
+}
+
+fn splittable(syllable: &Syllable) -> bool {
+    let mut chars = syllable.body.chars();
+    syllable.tone.is_none()
+        && matches!((chars.next(), chars.next(), chars.next()), (Some(a), Some(b), None) if is_initial(a) && is_medial(b))
 }
 
 /// Toneless key and packed tones of a reading, or None when it is too long.
@@ -278,17 +512,58 @@ fn split_reading(reading: &str) -> Option<(String, u32)> {
     (count > 0).then_some((key, tones))
 }
 
-fn tones_match(tones: u32, query: &[Syllable]) -> bool {
-    query.iter().enumerate().all(|(index, syllable)| match syllable.tone {
-        Some(tone) => (tones >> (3 * index)) & 0b111 == u32::from(tone),
-        None => true,
+fn reading_of(entry: &Entry) -> String {
+    entry
+        .reading
+        .split(' ')
+        .enumerate()
+        .map(|(index, body)| format!("{body}{}", mark_of((entry.tones >> (3 * index)) & 0b111)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The first glyph of each syllable, joined by a space.
+fn initials_of(key: &str) -> String {
+    key.split(' ')
+        .filter_map(|syllable| syllable.chars().next())
+        .map(String::from)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Each stored syllable equals a toned token and starts with an untoned one.
+fn starts_match(reading: &str, tokens: &[Token<'_>]) -> bool {
+    let mut stored = reading.split(' ');
+    tokens.iter().all(|token| match stored.next() {
+        Some(body) if token.tone.is_some() => body == token.body,
+        Some(body) => body.starts_with(token.body),
+        None => false,
+    }) && stored.next().is_none()
+}
+
+/// A stored tone of 0 matches any typed tone; a token without a tone matches any stored one.
+fn tones_match(tones: u32, tokens: &[Token<'_>]) -> bool {
+    tokens.iter().enumerate().all(|(index, token)| {
+        let stored = (tones >> (3 * index)) & 0b111;
+        match token.tone {
+            Some(tone) => stored == 0 || stored == u32::from(tone),
+            None => true,
+        }
+    })
+}
+
+/// Whether packed tones [wide], where 0 is any tone, include every tone in [narrow].
+fn tones_cover(wide: u32, narrow: u32) -> bool {
+    (0..MAX_SYLLABLES).all(|index| {
+        let want = (wide >> (3 * index)) & 0b111;
+        want == 0 || want == (narrow >> (3 * index)) & 0b111
     })
 }
 
 mod android {
     use super::{build, LEXICON};
     use jni::objects::{JByteArray, JClass, JString};
-    use jni::sys::{jint, jstring};
+    use jni::sys::{jboolean, jint, jstring, JNI_FALSE, JNI_TRUE};
     use jni::JNIEnv;
 
     fn utf8(env: &JNIEnv, bytes: &JByteArray) -> Option<String> {
@@ -302,11 +577,14 @@ mod android {
         _class: JClass<'local>,
         table: JByteArray<'local>,
         dict: JByteArray<'local>,
+        user: JByteArray<'local>,
     ) -> jint {
-        let (Some(table), Some(dict)) = (utf8(&env, &table), utf8(&env, &dict)) else {
+        let (Some(table), Some(dict), Some(user)) =
+            (utf8(&env, &table), utf8(&env, &dict), utf8(&env, &user))
+        else {
             return -1;
         };
-        let lexicon = build(&table, &dict);
+        let lexicon = build(&table, &dict, &user);
         match LEXICON.lock() {
             Ok(mut guard) => *guard = Some(lexicon),
             Err(poisoned) => *poisoned.into_inner() = Some(lexicon),
@@ -336,27 +614,55 @@ mod android {
             .map(|value| value.into_raw())
             .unwrap_or(std::ptr::null_mut())
     }
+
+    #[no_mangle]
+    pub extern "system" fn Java_com_fskeyboard_ime_engine_RustLexiconNative_nativeLearn<'local>(
+        mut env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        reading: JString<'local>,
+        text: JString<'local>,
+    ) -> jboolean {
+        let (Ok(reading), Ok(text)) = (env.get_string(&reading), env.get_string(&text)) else {
+            return JNI_FALSE;
+        };
+        let (reading, text): (String, String) = (reading.into(), text.into());
+        let learned = match LEXICON.lock() {
+            Ok(mut guard) => guard.as_mut().is_some_and(|lexicon| lexicon.learn(&reading, &text)),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .as_mut()
+                .is_some_and(|lexicon| lexicon.learn(&reading, &text)),
+        };
+        if learned {
+            JNI_TRUE
+        } else {
+            JNI_FALSE
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{build, Hit, Lexicon, CANDIDATE_LIMIT};
-    use std::borrow::Cow;
     use std::path::Path;
-
-    fn hit(span: usize, text: &str) -> Hit<'_> {
-        Hit { span, text: Cow::Borrowed(text) }
-    }
 
     fn project() -> Lexicon {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/src/main/assets");
         let table = std::fs::read_to_string(root.join("lexicon/mcbopomofo.tsv")).expect("mcbopomofo.tsv");
         let dict = std::fs::read_to_string(root.join("rime/shared/fs_zhuyin.dict.yaml")).expect("dict");
-        build(&table, &dict)
+        build(&table, &dict, "")
     }
 
     fn texts(hits: &[Hit<'_>]) -> Vec<String> {
         hits.iter().map(|hit| hit.text.to_string()).collect()
+    }
+
+    fn pair(hit: &Hit<'_>) -> (usize, String) {
+        (hit.span, hit.text.to_string())
+    }
+
+    fn sentence(lexicon: &Lexicon, code: &str) -> String {
+        lexicon.convert(code).iter().map(|hit| hit.text.to_string()).collect()
     }
 
     const SAMPLE: &str = "\
@@ -382,25 +688,26 @@ name: sample
 
     #[test]
     fn the_longest_phrase_comes_first_and_shorter_ones_follow() {
-        let lexicon = build(SAMPLE, "");
+        let lexicon = build(SAMPLE, "", "");
         let hits = lexicon.candidates("ㄍㄨㄥ* ㄎㄜ*");
-        assert_eq!(hits[0], hit(2, "功課"));
+        assert_eq!(pair(&hits[0]), (2, "功課".to_string()));
         assert_eq!(texts(&hits[1..]), vec!["公", "工", "貢"]);
         assert!(hits[1..].iter().all(|hit| hit.span == 1));
     }
 
     #[test]
-    fn candidates_only_cover_the_front_of_the_composition() {
-        let lexicon = build(SAMPLE, "");
+    fn candidates_after_the_sentence_cover_the_front() {
+        let lexicon = build(SAMPLE, "", "");
         let hits = lexicon.candidates("ㄍㄨㄥ ㄊㄧㄢ");
         assert_eq!(texts(&hits), vec!["公天", "公", "工"]);
         assert_eq!(hits[0].span, 2);
+        assert_eq!(hits[0].reading, "ㄍㄨㄥ ㄊㄧㄢ");
         assert!(hits[1..].iter().all(|hit| hit.span == 1 && hit.text != "天"));
     }
 
     #[test]
     fn a_chosen_tone_narrows_and_an_open_one_predicts_every_tone() {
-        let lexicon = build(SAMPLE, "");
+        let lexicon = build(SAMPLE, "", "");
         assert_eq!(texts(&lexicon.candidates("ㄍㄨㄥ")), vec!["公", "工"]);
         assert_eq!(texts(&lexicon.candidates("ㄍㄨㄥˋ")), vec!["貢"]);
         assert_eq!(texts(&lexicon.candidates("ㄍㄨㄥ*")), vec!["公", "工", "貢"]);
@@ -411,45 +718,89 @@ name: sample
 
     #[test]
     fn the_dictionary_adds_missing_rows_below_the_table() {
-        let lexicon = build(SAMPLE, DICT);
+        let lexicon = build(SAMPLE, DICT, "");
         assert_eq!(texts(&lexicon.candidates("ㄍㄨㄥ")), vec!["公", "工", "攻"]);
         assert_eq!(lexicon.len(), 9);
     }
 
     #[test]
     fn the_best_split_prefers_phrases_and_keeps_unknown_zhuyin() {
-        let lexicon = build(SAMPLE, "");
-        assert_eq!(
-            lexicon.convert("ㄐㄧㄣ ㄊㄧㄢ ㄍㄨㄥ* ㄎㄜˋ"),
-            vec![hit(2, "今天"), hit(2, "功課")]
-        );
-        assert_eq!(lexicon.convert("ㄍㄨㄥ ㄅ*"), vec![hit(1, "公"), hit(1, "ㄅ")]);
-        assert_eq!(lexicon.convert("ㄍㄨㄥˇ"), vec![hit(1, "ㄍㄨㄥˇ")]);
+        let lexicon = build(SAMPLE, "", "");
+        assert_eq!(sentence(&lexicon, "ㄐㄧㄣ ㄊㄧㄢ ㄍㄨㄥ* ㄎㄜˋ"), "今天功課");
+        assert_eq!(lexicon.convert("ㄐㄧㄣ ㄊㄧㄢ ㄍㄨㄥ* ㄎㄜˋ").len(), 2);
+        assert_eq!(sentence(&lexicon, "ㄍㄨㄥ ㄅㄚ*"), "公ㄅㄚ");
+        assert_eq!(sentence(&lexicon, "ㄍㄨㄥˇ"), "ㄍㄨㄥˇ");
         assert!(lexicon.convert("").is_empty());
     }
 
     #[test]
     fn a_single_word_conversion_is_not_repeated_at_the_top() {
-        let lexicon = build(SAMPLE, "");
+        let lexicon = build(SAMPLE, "", "");
         let hits = lexicon.candidates("ㄐㄧㄣ ㄊㄧㄢ");
-        assert_eq!(hits[0], hit(2, "今天"));
+        assert_eq!(pair(&hits[0]), (2, "今天".to_string()));
         assert_eq!(hits.iter().filter(|hit| hit.text == "今天").count(), 1);
     }
 
     #[test]
-    fn the_project_lexicon_converts_whole_sentences() {
-        let lexicon = project();
-        let sentence = |code: &str| {
-            lexicon.convert(code).iter().map(|hit| hit.text.to_string()).collect::<String>()
-        };
-        assert_eq!(sentence("ㄨㄛˇ ㄇㄣ˙ ㄐㄧㄣ ㄊㄧㄢ ㄑㄩˋ ㄎㄢˋ ㄉㄧㄢˋ ㄧㄥˇ"), "我們今天去看電影");
-        assert_eq!(sentence("ㄋㄧˇ ㄎㄢ* ㄎㄢ*"), "你看看");
+    fn an_untoned_syllable_also_matches_longer_ones_below_full_readings() {
+        let lexicon = build(SAMPLE, "", "");
+        assert_eq!(texts(&lexicon.candidates("ㄐ* ㄊ*"))[0], "今天");
+        assert_eq!(texts(&lexicon.candidates("ㄐㄧ* ㄊㄧ*"))[0], "今天");
+        // A toned syllable is complete, so ㄍㄨ does not grow into ㄍㄨㄥ.
+        assert!(lexicon.candidates("ㄍㄨˋ").is_empty());
+        assert_eq!(texts(&lexicon.candidates("ㄍㄨ*")), vec!["公", "工", "貢"]);
     }
 
     #[test]
-    fn candidate_lines_carry_the_span() {
-        let lexicon = build(SAMPLE, "");
-        assert_eq!(lexicon.candidate_lines("ㄐㄧㄣ ㄊㄧㄢ"), "2\t今天\n1\t今");
+    fn an_initial_and_medial_also_read_as_two_abbreviated_syllables() {
+        let yaml = "\
+ㄉㄧㄢˋ ㄧㄥˇ\t電影\t-4.0
+ㄉㄧˋ\t地\t-3.0
+ㄉㄧㄢˋ\t電\t-3.2
+";
+        let lexicon = build(yaml, "", "");
+        let hits = lexicon.candidates("ㄉㄧ*");
+        // The syllable as typed wins; the two-syllable reading is still offered.
+        assert_eq!(pair(&hits[0]), (1, "地".to_string()));
+        assert!(hits.iter().any(|hit| hit.span == 1 && hit.text == "電影"));
+    }
+
+    #[test]
+    fn learned_phrases_rank_first_and_persist_through_build() {
+        let lexicon_text = "\
+ㄓㄣ ㄉㄜ˙\t真的\t-3.0
+ㄐㄧㄚ ㄉㄜ˙\t家的\t-4.0
+ㄐㄧㄚˇ ㄉㄜ˙\t假的\t-4.5
+ㄐㄧㄚ\t家\t-3.0
+ㄐㄧㄚˇ\t假\t-3.5
+ㄉㄜ˙\t的\t-1.5
+";
+        let mut lexicon = build(lexicon_text, "", "");
+        assert_eq!(sentence(&lexicon, "ㄓㄣ* ㄉㄜ* ㄐㄧㄚ* ㄉㄜ*"), "真的家的");
+        assert!(lexicon.learn("ㄓㄣ ㄉㄜ˙ ㄐㄧㄚˇ ㄉㄜ˙", "真的假的"));
+        assert!(!lexicon.learn("ㄓㄣ ㄉㄜ˙ ㄐㄧㄚˇ ㄉㄜ˙", "真的假的"));
+        assert_eq!(texts(&lexicon.candidates("ㄓㄣ* ㄉㄜ* ㄐㄧㄚ* ㄉㄜ*"))[0], "真的假的");
+        assert_eq!(texts(&lexicon.candidates("ㄓ* ㄉ* ㄐ* ㄉ*"))[0], "真的假的");
+
+        let rebuilt = build(lexicon_text, "", "ㄓㄣ ㄉㄜ˙ ㄐㄧㄚˇ ㄉㄜ˙\t真的假的\n");
+        assert_eq!(texts(&rebuilt.candidates("ㄓㄣ* ㄉㄜ* ㄐㄧㄚ* ㄉㄜ*"))[0], "真的假的");
+    }
+
+    #[test]
+    fn learning_an_existing_row_raises_it() {
+        let mut lexicon = build(SAMPLE, "", "");
+        assert!(lexicon.learn("ㄍㄨㄥ", "工"));
+        assert_eq!(texts(&lexicon.candidates("ㄍㄨㄥ")), vec!["工", "公"]);
+        assert_eq!(lexicon.len(), 8);
+    }
+
+    #[test]
+    fn candidate_lines_carry_the_span_and_reading() {
+        let lexicon = build(SAMPLE, "", "");
+        assert_eq!(
+            lexicon.candidate_lines("ㄐㄧㄣ ㄊㄧㄢ"),
+            "2\t今天\tㄐㄧㄣ ㄊㄧㄢ\n1\t今\tㄐㄧㄣ"
+        );
         assert_eq!(lexicon.candidate_lines("ㄅㄚ"), "");
     }
 
@@ -457,12 +808,28 @@ name: sample
     fn the_project_lexicon_finds_common_phrases() {
         let lexicon = project();
         assert_eq!(lexicon.candidates("ㄍㄨㄥ")[0].text, "公");
-        assert_eq!(lexicon.candidates("ㄋㄧˇ ㄏㄠˇ")[0], hit(2, "你好"));
+        assert_eq!(pair(&lexicon.candidates("ㄋㄧˇ ㄏㄠˇ")[0]), (2, "你好".to_string()));
         let today = lexicon.candidates("ㄐㄧㄣ* ㄊㄧㄢ* ㄊㄧㄢ* ㄑㄧ*");
-        assert_eq!(today[0], hit(4, "今天天氣"));
+        assert_eq!(pair(&today[0]), (4, "今天天氣".to_string()));
         assert_eq!(today[1].span, 2);
         assert!(today.iter().any(|hit| hit.text == "今天"));
         assert!(today.len() <= CANDIDATE_LIMIT);
         assert!(today.iter().any(|hit| hit.span == 1 && hit.text == "今"));
+    }
+
+    #[test]
+    fn the_project_lexicon_converts_whole_sentences() {
+        let lexicon = project();
+        assert_eq!(sentence(&lexicon, "ㄨㄛˇ ㄇㄣ˙ ㄐㄧㄣ ㄊㄧㄢ ㄑㄩˋ ㄎㄢˋ ㄉㄧㄢˋ ㄧㄥˇ"), "我們今天去看電影");
+        assert_eq!(sentence(&lexicon, "ㄋㄧˇ ㄎㄢ* ㄎㄢ*"), "你看看");
+    }
+
+    #[test]
+    fn the_project_lexicon_reads_initials_only_typing() {
+        let lexicon = project();
+        assert_eq!(sentence(&lexicon, "ㄨ* ㄇ* ㄐ* ㄊ*"), "我們今天");
+        assert_eq!(sentence(&lexicon, "ㄅ* ㄓ* ㄉ*"), "不知道");
+        let movie = lexicon.candidates("ㄎ* ㄉㄧ*");
+        assert!(movie.iter().any(|hit| hit.span == 2 && hit.text == "看電影"));
     }
 }
