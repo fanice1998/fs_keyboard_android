@@ -480,7 +480,7 @@ internal class CandidateController(
     }
 
     private fun ui(candidates: List<Candidate>): ImeUiState {
-        val visible = if (mode == KeyboardMode.ZHUYIN) candidates else emptyList()
+        val visible = shownCandidates(mode, candidates)
         return ImeUiState(
             mode = mode,
             base = base,

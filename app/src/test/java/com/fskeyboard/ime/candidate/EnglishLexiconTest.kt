@@ -1,5 +1,6 @@
 package com.fskeyboard.ime.candidate
 
+import com.fskeyboard.ime.keyboard.KeyboardMode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -54,5 +55,13 @@ class EnglishLexiconTest {
         assertEquals("the", the.first())
         assertTrue(EnglishSuggest.candidates("kube", lexicon.complete("kube", 8), 8).any { it == "kubectl" })
         assertEquals("deploy", EnglishSuggest.candidates("deploy", lexicon.complete("deploy", 8), 8).first())
+    }
+
+    @Test
+    fun englishPredictionsStayOnTheCandidateBar() {
+        val word = Candidate("deploy", engineIndex = -1)
+        assertEquals(listOf(word), shownCandidates(KeyboardMode.LATIN, listOf(word)))
+        assertEquals(listOf(word), shownCandidates(KeyboardMode.ZHUYIN, listOf(word)))
+        assertTrue(shownCandidates(KeyboardMode.SYMBOLS, listOf(word)).isEmpty())
     }
 }
