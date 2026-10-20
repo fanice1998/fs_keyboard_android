@@ -59,7 +59,8 @@ internal object KeyboardLayouts {
                     weight = 1.15f,
                     secondary = KeyAction.NextInputMethod,
                 ),
-                KeySpec("平聲", KeyAction.Space, weight = 4.6f, role = KeyRole.SPACE),
+                // Labelled as a space bar; while composing it marks 平聲.
+                KeySpec("空格", KeyAction.Space, weight = 4.6f, role = KeyRole.SPACE),
                 iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.85f),
             ),
         )
