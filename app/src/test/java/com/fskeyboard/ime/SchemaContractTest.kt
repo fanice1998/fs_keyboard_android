@@ -21,7 +21,7 @@ class SchemaContractTest {
         assertFalse(schema.contains("luna_pinyin"))
         assertFalse(schema.contains("import_preset"))
         assertFalse(schema.contains("fs_pinyin"))
-        assertEquals("3", readProjectFile("src/main/assets/rime/shared/VERSION").trim())
+        assertEquals("4", readProjectFile("src/main/assets/rime/shared/VERSION").trim())
         assertFalse(schema.contains("fallback_segmentor"))
     }
 
@@ -57,6 +57,10 @@ class SchemaContractTest {
         assertTrue(dict.contains("爸\tㄅㄚˋ\t"))
         assertTrue(dict.contains("臺灣\tㄊㄞˊ ㄨㄢ\t"))
         assertTrue(dict.contains("們\tㄇㄣ˙\t"))
+        assertTrue(dict.contains("學\tㄒㄩㄝˊ\t"))
+        assertTrue(dict.contains("謝\tㄒㄧㄝˋ\t"))
+        val entries = dict.lineSequence().count { line -> line.count { it == '\t' } == 2 }
+        assertTrue(entries > 16000)
         val tones = setOf('˙', 'ˊ', 'ˇ', 'ˋ')
         dict.lineSequence().filter { it.count { ch -> ch == '\t' } == 2 }.forEach { line ->
             val code = line.split('\t')[1]
