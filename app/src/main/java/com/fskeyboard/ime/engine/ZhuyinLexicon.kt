@@ -15,9 +15,8 @@ internal interface ZhuyinLexicon {
     fun close()
 
     /**
-     * [code] is syllable readings joined by a space.
-     * [exact] keeps one tone. Otherwise every tone of those syllables is eligible.
-     * Each hit uses a negative index.
+     * Candidates for the front of [queries], from [com.fskeyboard.ime.keyboard.ZhuyinComposer.queries].
+     * The longest phrase comes first. Each hit carries its span and a negative index.
      */
-    fun lookup(code: String, exact: Boolean): List<Candidate>
+    fun lookup(queries: List<String>): List<Candidate>
 }

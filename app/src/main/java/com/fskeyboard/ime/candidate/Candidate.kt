@@ -10,6 +10,7 @@ internal enum class CandidateSource {
  * A Rime candidate keeps that index so [com.fskeyboard.ime.engine.InputEngine.select]
  * can update the built-in user dictionary.
  * A candidate invented by a reranker uses a negative index and [CandidateSource.SYNTHETIC].
+ * [span] is how many syllables, from the front of the composition, the candidate uses.
  */
 internal data class Candidate(
     val text: String,
@@ -17,4 +18,5 @@ internal data class Candidate(
     val engineIndex: Int,
     val source: CandidateSource =
         if (engineIndex >= 0) CandidateSource.RIME else CandidateSource.SYNTHETIC,
+    val span: Int = 1,
 )

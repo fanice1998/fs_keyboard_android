@@ -93,23 +93,29 @@ internal class ZhuyinComposer {
     val isEmpty: Boolean
         get() = parts.isEmpty()
 
-    /**
-     * True when every syllable has a tone, including 平聲.
-     * An unfinished syllable stays false so lookup can offer every tone.
-     */
-    val exact: Boolean
-        get() = parts.isNotEmpty() && parts.all { it.tone.chosen }
+    val size: Int
+        get() = parts.size
 
     /**
-     * Syllable codes for lookup. Each syllable keeps the tone already chosen.
-     * 平聲 and an unfinished syllable contribute the body alone.
+     * Syllable codes for lookup. A chosen tone keeps its mark and 平聲 has none.
+     * A syllable without a tone yet ends with `*`, so every tone of it is eligible.
      * Null when nothing has been typed.
      */
-    fun queries(): List<String>? = partialExactQueries()
-
-    fun partialExactQueries(): List<String>? {
+    fun queries(): List<String>? {
         if (parts.isEmpty()) return null
-        return parts.map { it.body.toString() + it.tone.mark }
+        return parts.map { it.query() }
+    }
+
+    /** Removes and returns the first [count] syllables. */
+    fun take(count: Int): List<ZhuyinSyllable> {
+        val taken = parts.take(count.coerceIn(0, parts.size)).map { it.snapshot() }
+        repeat(taken.size) { parts.removeAt(0) }
+        return taken
+    }
+
+    /** Puts syllables returned by [take] back in front of what is left. */
+    fun restore(syllables: List<ZhuyinSyllable>) {
+        parts.addAll(0, syllables.map { Syllable.of(it) })
     }
 
     fun append(glyph: String): Boolean {
@@ -210,9 +216,26 @@ internal class ZhuyinComposer {
     }
 }
 
+/** A finished or unfinished syllable taken out of a [ZhuyinComposer]. */
+internal data class ZhuyinSyllable(val body: String, val tone: ZhuyinTone) {
+    val display: String
+        get() = body + tone.mark
+}
+
 private class Syllable {
     val body = StringBuilder()
     var tone: ZhuyinTone = ZhuyinTone.NONE
 
     fun display(): String = body.toString() + tone.mark
+
+    fun query(): String = if (tone.chosen) display() else "$body*"
+
+    fun snapshot(): ZhuyinSyllable = ZhuyinSyllable(body.toString(), tone)
+
+    companion object {
+        fun of(syllable: ZhuyinSyllable): Syllable = Syllable().apply {
+            body.append(syllable.body)
+            tone = syllable.tone
+        }
+    }
 }

@@ -10,10 +10,12 @@ internal class RustLexiconNative private constructor() {
             System.loadLibrary("fs_lexicon")
         }
 
+        /** [table] is the phrase table and [dict] the Rime dictionary, both UTF-8. */
         @JvmStatic
-        external fun nativeLoad(yaml: String): Int
+        external fun nativeLoad(table: ByteArray, dict: ByteArray): Int
 
+        /** `span<TAB>text` lines for syllable queries joined by a space. */
         @JvmStatic
-        external fun nativeLookup(code: String, exact: Boolean): String
+        external fun nativeLookup(code: String): String
     }
 }

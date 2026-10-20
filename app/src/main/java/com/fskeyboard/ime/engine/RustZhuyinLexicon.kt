@@ -3,6 +3,7 @@ package com.fskeyboard.ime.engine
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import com.fskeyboard.ime.candidate.Candidate
 import java.util.concurrent.Executors
@@ -50,29 +51,37 @@ internal class RustZhuyinLexicon : ZhuyinLexicon {
         worker.shutdown()
     }
 
-    override fun lookup(code: String, exact: Boolean): List<Candidate> {
-        if (!isReady || code.isEmpty()) return emptyList()
+    override fun lookup(queries: List<String>): List<Candidate> {
+        if (!isReady || queries.isEmpty()) return emptyList()
         val raw = try {
-            RustLexiconNative.nativeLookup(code, exact)
+            RustLexiconNative.nativeLookup(queries.joinToString(" "))
         } catch (error: UnsatisfiedLinkError) {
             Log.e(TAG, "lexicon lookup failed", error)
             return emptyList()
         }
         if (raw.isNullOrEmpty()) return emptyList()
         return raw.lineSequence()
-            .filter { it.isNotEmpty() }
-            .mapIndexed { index, text ->
-                Candidate(text = text, engineIndex = -(index + 1))
+            .mapNotNull { line ->
+                val tab = line.indexOf('\t')
+                if (tab <= 0) return@mapNotNull null
+                val span = line.substring(0, tab).toIntOrNull() ?: return@mapNotNull null
+                span to line.substring(tab + 1)
+            }
+            .mapIndexed { index, (span, text) ->
+                Candidate(text = text, engineIndex = -(index + 1), span = span)
             }
             .toList()
     }
 
     private fun load(context: Context) {
         try {
+            val start = SystemClock.elapsedRealtime()
             RustLexiconNative.load()
-            val yaml = context.assets.open(DICT).bufferedReader(Charsets.UTF_8).use { it.readText() }
-            val rc = RustLexiconNative.nativeLoad(yaml)
+            val table = context.assets.open(TABLE).use { it.readBytes() }
+            val dict = context.assets.open(DICT).use { it.readBytes() }
+            val rc = RustLexiconNative.nativeLoad(table, dict)
             if (rc == 0) {
+                Log.i(TAG, "lexicon loaded in ${SystemClock.elapsedRealtime() - start}ms")
                 statusValue = EngineStatus.READY
             } else {
                 statusValue = EngineStatus.FAILED
@@ -91,6 +100,7 @@ internal class RustZhuyinLexicon : ZhuyinLexicon {
 
     private companion object {
         const val TAG = "FsKeyboard"
+        const val TABLE = "lexicon/mcbopomofo.tsv"
         const val DICT = "rime/shared/fs_zhuyin.dict.yaml"
     }
 }
