@@ -5,6 +5,8 @@ import android.graphics.Color
 import java.lang.ref.WeakReference
 import android.inputmethodservice.InputMethodService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -19,6 +21,8 @@ import com.fskeyboard.ime.candidate.ImeUiState
 import com.fskeyboard.ime.engine.RustZhuyinLexicon
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardView
+import com.fskeyboard.ime.latency.FrameLatencyProbe
+import com.fskeyboard.ime.latency.KeyLatency
 import com.fskeyboard.ime.ui.KeyboardInsets
 import com.fskeyboard.ime.rerank.CandidatePipeline
 import com.fskeyboard.ime.settings.KeyboardPreferences
@@ -47,6 +51,8 @@ class FsKeyboardService : InputMethodService() {
     private val navigationBarFramePx by lazy { navigationBarDimension("navigation_bar_frame_height") }
     private val navigationBarHeightPx by lazy { navigationBarDimension("navigation_bar_height") }
     private var pending = ImeUiState()
+    private val latencyProbe = FrameLatencyProbe(KeyLatency.stats) { Log.i(TAG, it) }
+    private var framesWatched = false
     private val relayoutInsets = ViewTreeObserver.OnGlobalLayoutListener {
         val insets = latestInsets ?: return@OnGlobalLayoutListener
         if (insetStamp(insets) == appliedInsetStamp && navFrameResolved) return@OnGlobalLayoutListener
@@ -80,6 +86,10 @@ class FsKeyboardService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        if (framesWatched) {
+            runCatching { window?.window?.removeOnFrameMetricsAvailableListener(latencyProbe) }
+            framesWatched = false
+        }
         window?.window?.decorView?.viewTreeObserver?.let { observer ->
             if (observer.isAlive) observer.removeOnGlobalLayoutListener(relayoutInsets)
         }
@@ -104,6 +114,7 @@ class FsKeyboardService : InputMethodService() {
         }
         keyboard = KeyboardView(this).apply {
             rowHeightDp = KeyboardPreferences(this@FsKeyboardService).rowHeightDp()
+            onTyped = latencyProbe::keyHandled
             onKey = { action ->
                 if (action == KeyAction.NextInputMethod) {
                     switchToAnotherKeyboard()
@@ -143,8 +154,21 @@ class FsKeyboardService : InputMethodService() {
         inputRoot = root
         navigationSpacer = spacer
         window?.window?.decorView?.requestApplyInsets()
+        watchFrames()
         render(pending)
         return root
+    }
+
+    /** Key latency is a measurement. A window that cannot report frames still types. */
+    private fun watchFrames() {
+        if (framesWatched) return
+        val win = window?.window ?: return
+        try {
+            win.addOnFrameMetricsAvailableListener(latencyProbe, Handler(Looper.getMainLooper()))
+            framesWatched = true
+        } catch (error: RuntimeException) {
+            Log.i(TAG, "frame metrics unavailable ${error.javaClass.simpleName}")
+        }
     }
 
     private fun configureWindow() {

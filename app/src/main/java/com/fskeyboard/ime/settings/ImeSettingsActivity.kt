@@ -7,6 +7,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewTreeObserver
 import android.view.WindowInsets
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Switch
@@ -17,6 +18,7 @@ import com.fskeyboard.ime.candidate.CandidateBarView
 import com.fskeyboard.ime.candidate.CandidateUiState
 import com.fskeyboard.ime.keyboard.KeyboardHeight
 import com.fskeyboard.ime.keyboard.KeyboardView
+import com.fskeyboard.ime.latency.KeyLatency
 import com.fskeyboard.ime.rerank.RerankPreferences
 import com.fskeyboard.ime.rerank.onnx.OnnxModelStore
 
@@ -25,6 +27,7 @@ class ImeSettingsActivity : Activity() {
     private lateinit var heightSeek: SeekBar
     private lateinit var heightValue: TextView
     private lateinit var previewKeyboard: KeyboardView
+    private lateinit var latencyValue: TextView
     private var settingsRoot: View? = null
 
     private val onLayout = ViewTreeObserver.OnGlobalLayoutListener { applySafeArea() }
@@ -52,6 +55,12 @@ class ImeSettingsActivity : Activity() {
             getString(R.string.rerank_model_ready)
         } else {
             getString(R.string.rerank_model_missing)
+        }
+
+        latencyValue = findViewById(R.id.key_latency_value)
+        findViewById<Button>(R.id.key_latency_reset).setOnClickListener {
+            KeyLatency.stats.clear()
+            showLatency()
         }
 
         keyboardPreferences = KeyboardPreferences(this)
@@ -86,11 +95,32 @@ class ImeSettingsActivity : Activity() {
         super.onDestroy()
     }
 
+    override fun onResume() {
+        super.onResume()
+        showLatency()
+    }
+
     override fun onPause() {
         if (::keyboardPreferences.isInitialized && ::heightSeek.isInitialized) {
             keyboardPreferences.setRowHeightDp(heightSeek.progress, flush = true)
         }
         super.onPause()
+    }
+
+    private fun showLatency() {
+        val summary = KeyLatency.stats.summary()
+        latencyValue.text = if (summary == null) {
+            getString(R.string.key_latency_empty)
+        } else {
+            getString(
+                R.string.key_latency_value,
+                summary.count,
+                summary.p50Millis,
+                summary.p95Millis,
+                summary.p99Millis,
+                summary.maxMillis,
+            )
+        }
     }
 
     private fun showHeight(rowDp: Int) {
