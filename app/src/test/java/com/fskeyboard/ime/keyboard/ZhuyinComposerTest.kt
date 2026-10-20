@@ -2,6 +2,7 @@ package com.fskeyboard.ime.keyboard
 
 import com.fskeyboard.ime.candidate.Candidate
 import com.fskeyboard.ime.candidate.CompositionCandidates
+import com.fskeyboard.ime.candidate.candidatesFor
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -73,6 +74,87 @@ class ZhuyinComposerTest {
         fromGlyphs.adopt("ㄓㄨㄥ")
         assertEquals("ㄓㄨㄥ", fromGlyphs.text)
         assertEquals("5j/", fromGlyphs.spelling())
+    }
+
+    @Test
+    fun levelToneKeepsTheGlyphsAndBecomesTheQuery() {
+        val composer = type("ㄍㄨㄥ")
+        assertEquals(null, composer.queries())
+        assertTrue(composer.markLevelTone())
+        assertEquals("ㄍㄨㄥ", composer.text)
+        assertEquals(listOf("ㄍㄨㄥ"), composer.queries())
+    }
+
+    @Test
+    fun levelToneReplacesAToneMark() {
+        val composer = type("ㄍㄨㄥˊ")
+        assertTrue(composer.markLevelTone())
+        assertEquals("ㄍㄨㄥ", composer.text)
+        assertEquals(listOf("ㄍㄨㄥ"), composer.queries())
+    }
+
+    @Test
+    fun toneKeyReplacesLevelTone() {
+        val composer = type("ㄍㄨㄥ")
+        composer.markLevelTone()
+        assertTrue(composer.append("ˊ"))
+        assertEquals("ㄍㄨㄥˊ", composer.text)
+        assertEquals(listOf("ㄍㄨㄥˊ"), composer.queries())
+    }
+
+    @Test
+    fun backspaceClearsLevelToneBeforeAGlyph() {
+        val composer = type("ㄍㄨㄥ")
+        composer.markLevelTone()
+        composer.backspace()
+        assertEquals("ㄍㄨㄥ", composer.text)
+        assertEquals(null, composer.queries())
+        composer.backspace()
+        assertEquals("ㄍㄨ", composer.text)
+    }
+
+    @Test
+    fun backspaceClearsAToneMarkBeforeTheGlyph() {
+        val composer = type("ㄅㄚˋ")
+        composer.backspace()
+        assertEquals("ㄅㄚ", composer.text)
+        assertEquals(null, composer.queries())
+        composer.backspace()
+        assertEquals("ㄅ", composer.text)
+    }
+
+    @Test
+    fun secondSyllableStaysUnqueriedUntilItHasATone() {
+        val composer = type("ㄅㄚ")
+        composer.markLevelTone()
+        assertTrue(composer.append("ㄅ"))
+        assertTrue(composer.append("ㄚ"))
+        assertEquals(null, composer.queries())
+        assertTrue(composer.append("ˋ"))
+        assertEquals(listOf("ㄅㄚ", "ㄅㄚˋ"), composer.queries())
+    }
+
+    @Test
+    fun emptyComposerIgnoresLevelTone() {
+        assertFalse(ZhuyinComposer().markLevelTone())
+    }
+
+    @Test
+    fun untonedCompositionOffersOnlyTheRawZhuyin() {
+        val composer = type("ㄚ")
+        val shown = candidatesFor(composer, listOf(Candidate("家", engineIndex = -1)))
+        assertEquals(listOf("ㄚ"), shown.map { it.text })
+    }
+
+    @Test
+    fun levelToneUsesTheExactHitsAndNotAnotherReading() {
+        val composer = type("ㄍㄨㄥ")
+        composer.markLevelTone()
+        val hits = listOf(
+            Candidate("公", engineIndex = -1),
+            Candidate("工", engineIndex = -2),
+        )
+        assertEquals(listOf("公", "工", "ㄍㄨㄥ"), candidatesFor(composer, hits).map { it.text })
     }
 
     @Test

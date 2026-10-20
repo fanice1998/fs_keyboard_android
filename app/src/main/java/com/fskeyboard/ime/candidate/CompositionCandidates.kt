@@ -1,6 +1,7 @@
 package com.fskeyboard.ime.candidate
 
 import com.fskeyboard.ime.engine.EngineSnapshot
+import com.fskeyboard.ime.keyboard.ZhuyinComposer
 import com.fskeyboard.ime.keyboard.ZhuyinReadings
 import com.fskeyboard.ime.keyboard.ZhuyinSpelling
 
@@ -29,6 +30,17 @@ internal object CompositionCandidates {
         add(composition)
         return existing + extra
     }
+}
+
+/**
+ * Hanzi appear only after every syllable has a tone.
+ * Until then the bar keeps the raw bopomofo and does not guess another reading.
+ */
+internal fun candidatesFor(composer: ZhuyinComposer, hits: List<Candidate>): List<Candidate> {
+    val text = composer.text
+    if (text.isEmpty()) return emptyList()
+    val queries = composer.queries() ?: return listOf(Candidate(text = text, engineIndex = -1))
+    return CompositionCandidates.supplement(text, queries, hits)
 }
 
 /**

@@ -9,7 +9,7 @@ internal data class EngineSnapshot(
     val composingPreview: String = "",
     val candidates: List<Candidate> = emptyList(),
     val highlighted: Int = 0,
-    /** Milliseconds spent inside librime for this call, excluding queue wait. */
+    /** Milliseconds spent looking up candidates for this call. */
     val decodeMillis: Long = 0,
 ) {
     val isComposing: Boolean

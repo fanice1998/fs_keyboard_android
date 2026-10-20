@@ -1,6 +1,6 @@
 # Debug APK and unit tests.
-# The runner builds librime and the OpenCC dictionaries. Those binaries are not in git.
-# gradle.properties keeps rime.enabled=false; this job passes -Prime.enabled=true.
+# The runner builds the Rust zhuyin lexicon. libfs_lexicon.so is not in git.
+# gradle.properties keeps rime.enabled=false, and this job does not pass it.
 # model.onnx is still absent. The APK is unsigned debug.
 name: android
 
@@ -28,32 +28,22 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
       - uses: android-actions/setup-android@v4
         with:
           packages: platform-tools platforms;android-36 ndk;27.2.12479018
 
-      - name: Native build tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            third_party/librime/include/rime_api.h
-            third_party/librime/jniLibs
-            app/src/main/assets/rime/shared/opencc/CJK_Compatibility_Ideographs.ocd2
-            app/src/main/assets/rime/shared/opencc/STPhrases.ocd2
-            app/src/main/assets/rime/shared/opencc/STPhrases_GeneratedFromRegionalPhrases.ocd2
-            app/src/main/assets/rime/shared/opencc/STCharacters.ocd2
-            app/src/main/assets/rime/shared/opencc/TWVariantsPhrases.ocd2
-            app/src/main/assets/rime/shared/opencc/TWVariants.ocd2
-          key: librime-opencc-${{ hashFiles('tools/ci-engine.sh') }}
-
-      - name: Build librime and OpenCC dictionaries
-        run: bash tools/ci-engine.sh
+      - name: Test and build the zhuyin lexicon
+        run: |
+          cargo test --manifest-path engine/fs_lexicon/Cargo.toml
+          bash tools/build-lexicon.sh
 
       - uses: gradle/actions/setup-gradle@v6
 
-      - run: ./gradlew :app:testDebugUnitTest :app:assembleDebug -Prime.enabled=true
+      - run: ./gradlew :app:testDebugUnitTest :app:assembleDebug
 
       - uses: actions/upload-artifact@v7
         with:

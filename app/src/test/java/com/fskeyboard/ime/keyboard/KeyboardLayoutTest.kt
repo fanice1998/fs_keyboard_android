@@ -56,7 +56,7 @@ class KeyboardLayoutTest {
         assertTrue(actions.contains(KeyAction.Backspace))
         assertTrue(actions.contains(KeyAction.Enter))
         val specs = rows.flatMap { it.keys }
-        assertEquals("注音", specs.first { it.action == KeyAction.Space }.label)
+        assertEquals("平聲", specs.first { it.action == KeyAction.Space }.label)
         assertEquals(KeyIcon.DELETE, specs.first { it.action == KeyAction.Backspace }.icon)
         assertEquals(KeyIcon.RETURN, specs.first { it.action == KeyAction.Enter }.icon)
         assertEquals(KeyIcon.SYMBOLS, specs.first { it.action == KeyAction.SetMode(KeyboardMode.SYMBOLS) }.icon)

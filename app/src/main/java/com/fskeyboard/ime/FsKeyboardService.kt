@@ -15,7 +15,7 @@ import android.widget.LinearLayout
 import com.fskeyboard.ime.candidate.CandidateBarView
 import com.fskeyboard.ime.candidate.CandidateController
 import com.fskeyboard.ime.candidate.ImeUiState
-import com.fskeyboard.ime.engine.RimeEngine
+import com.fskeyboard.ime.engine.RustZhuyinLexicon
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardView
 import com.fskeyboard.ime.ui.KeyboardInsets
@@ -31,7 +31,7 @@ import com.fskeyboard.ime.ui.KeyboardPalette
 import com.fskeyboard.ime.ui.isNightMode
 
 class FsKeyboardService : InputMethodService() {
-    private val engine = RimeEngine()
+    private val lexicon = RustZhuyinLexicon()
     private lateinit var pipeline: CandidatePipeline
     private lateinit var controller: CandidateController
     private var keyboard: KeyboardView? = null
@@ -62,7 +62,7 @@ class FsKeyboardService : InputMethodService() {
         pipeline = CandidatePipeline(reranker = ranker)
         controller = CandidateController(
             context = this,
-            engine = engine,
+            lexicon = lexicon,
             pipeline = pipeline,
             connection = { currentInputConnection },
             editorInfo = { currentInputEditorInfo },

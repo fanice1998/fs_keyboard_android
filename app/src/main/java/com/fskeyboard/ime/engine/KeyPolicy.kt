@@ -1,18 +1,16 @@
 package com.fskeyboard.ime.engine
 
-import com.fskeyboard.ime.candidate.Candidate
 import com.fskeyboard.ime.keyboard.KeyboardMode
 
 internal object KeyPolicy {
     enum class Space {
-        AcceptFirst,
-        CommitComposition,
+        /** Zhuyin composition: space is 平聲 and never selects a candidate. */
+        MarkLevelTone,
         CommitSpace,
     }
 
-    fun space(mode: KeyboardMode, presented: List<Candidate>, composing: Boolean): Space {
-        if (mode == KeyboardMode.ZHUYIN && presented.isNotEmpty()) return Space.AcceptFirst
-        if (mode == KeyboardMode.ZHUYIN && composing) return Space.CommitComposition
+    fun space(mode: KeyboardMode, composing: Boolean): Space {
+        if (mode == KeyboardMode.ZHUYIN && composing) return Space.MarkLevelTone
         return Space.CommitSpace
     }
 }

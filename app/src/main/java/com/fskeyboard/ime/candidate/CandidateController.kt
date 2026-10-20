@@ -9,13 +9,11 @@ import android.view.inputmethod.InputConnection
 import com.fskeyboard.ime.R
 import com.fskeyboard.ime.engine.EngineSnapshot
 import com.fskeyboard.ime.engine.EngineStatus
-import com.fskeyboard.ime.engine.InputEngine
 import com.fskeyboard.ime.engine.KeyPolicy
-import com.fskeyboard.ime.engine.RimeSchema
+import com.fskeyboard.ime.engine.ZhuyinLexicon
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.keyboard.ZhuyinComposer
-import com.fskeyboard.ime.keyboard.ZhuyinSpelling
 import com.fskeyboard.ime.rerank.CandidatePipeline
 import com.fskeyboard.ime.rerank.RerankFallback
 import com.fskeyboard.ime.rerank.RerankLimits
@@ -24,7 +22,7 @@ import com.fskeyboard.ime.rerank.acceptRerankUpdate
 
 internal class CandidateController(
     private val context: Context,
-    private val engine: InputEngine,
+    private val lexicon: ZhuyinLexicon,
     private val pipeline: CandidatePipeline,
     private val connection: () -> InputConnection?,
     private val editorInfo: () -> EditorInfo?,
@@ -43,18 +41,17 @@ internal class CandidateController(
 
     fun start() {
         publish()
-        engine.start(context) {
-            if (engine.isReady) {
-                traditional = engine.getOption(RimeSchema.OPTION_TRADITIONAL)
+        lexicon.start(context) {
+            if (!closed) {
+                if (composer.isEmpty) publish(EngineSnapshot()) else apply(refresh())
             }
-            publish(engine.snapshot())
         }
     }
 
     fun close() {
         closed = true
         generation += 1
-        engine.close()
+        lexicon.close()
     }
 
     fun onStartInput(restarting: Boolean) {
@@ -83,30 +80,23 @@ internal class CandidateController(
     }
 
     fun onCandidate(candidate: Candidate) {
-        if (!engine.isReady || mode != KeyboardMode.ZHUYIN) {
+        if (mode != KeyboardMode.ZHUYIN) {
             commit(candidate.text)
             return
         }
-        when (val decision = SelectionPolicy.decide(candidate)) {
-            is SelectionPolicy.Decision.SelectEngine -> apply(adopt(engine.select(decision.engineIndex)))
-            is SelectionPolicy.Decision.CommitSynthetic -> {
-                engine.clear()
-                composer.clear()
-                composing = false
-                presented = emptyList()
-                connection()?.commitText(decision.text, 1)
-                publish(EngineSnapshot())
-            }
-        }
+        composer.clear()
+        composing = false
+        presented = emptyList()
+        val ic = connection()
+        ic?.commitText(candidate.text, 1)
+        ic?.finishComposingText()
+        publish(EngineSnapshot())
     }
 
     fun onToggleScript() {
-        if (!engine.isReady) return
         traditional = !traditional
-        engine.setOption(RimeSchema.OPTION_TRADITIONAL, traditional)
-        if (mode == KeyboardMode.ZHUYIN) {
-            val snapshot = engine.snapshot().preservingComposition(composer.text, composer.syllables)
-            if (composer.text.isEmpty()) publish(snapshot) else apply(snapshot)
+        if (mode == KeyboardMode.ZHUYIN && !composer.isEmpty) {
+            apply(refresh())
         } else {
             publish()
         }
@@ -118,65 +108,33 @@ internal class CandidateController(
             cancelComposition()
         }
         mode = next
-        if (engine.isReady) {
-            engine.setOption(RimeSchema.OPTION_ASCII, mode == KeyboardMode.LATIN)
-        }
         presented = emptyList()
         composing = false
         publish()
     }
 
     private fun onBopomofo(action: KeyAction.Bopomofo) {
-        if (mode != KeyboardMode.ZHUYIN || !engine.isReady) {
+        if (mode != KeyboardMode.ZHUYIN) {
             commit(action.label)
             return
         }
         if (!composer.append(action.label)) return
-        val snapshot = engine.processKey(action.key.code, 0)
-        apply(if (needsReplay(snapshot)) replay() else display(snapshot))
+        apply(refresh())
     }
 
-    private fun needsReplay(snapshot: EngineSnapshot): Boolean {
-        val commit = snapshot.commit
-        if (!commit.isNullOrEmpty()) return ZhuyinSpelling.isKeySpelling(commit)
-        if (ZhuyinSpelling.toGlyphs(snapshot.preedit) == composer.text) return false
-        return !(snapshot.consumed && snapshot.preedit.isEmpty())
-    }
-
-    private fun replay(): EngineSnapshot {
-        engine.clear()
-        var last = EngineSnapshot()
-        for (key in composer.spelling()) {
-            last = engine.processKey(key.code, 0)
-        }
-        return display(last)
-    }
-
-    private fun display(snapshot: EngineSnapshot): EngineSnapshot {
-        val commit = snapshot.commit?.takeUnless { ZhuyinSpelling.isKeySpelling(it) }
-        if (commit != null) {
-            if (snapshot.preedit.isEmpty()) composer.clear() else composer.adopt(snapshot.preedit)
+    private fun refresh(): EngineSnapshot {
+        val queries = composer.queries()
+        val hits = if (queries != null && lexicon.isReady) {
+            lexicon.lookup(queries.joinToString(" "))
+        } else {
+            emptyList()
         }
         val text = composer.text
-        return snapshot.copy(
-            commit = commit,
+        return EngineSnapshot(
             preedit = text,
             composingPreview = text,
-            candidates = CompositionCandidates.supplement(text, composer.syllables, snapshot.candidates),
-        )
-    }
-
-    private fun adopt(snapshot: EngineSnapshot): EngineSnapshot {
-        val commit = snapshot.commit?.let { raw ->
-            if (ZhuyinSpelling.isKeySpelling(raw)) ZhuyinSpelling.toGlyphs(raw) else raw
-        }
-        if (snapshot.preedit.isEmpty()) composer.clear() else composer.adopt(snapshot.preedit)
-        val text = composer.text
-        return snapshot.copy(
-            commit = commit,
-            preedit = text,
-            composingPreview = text,
-            candidates = CompositionCandidates.supplement(text, composer.syllables, snapshot.candidates),
+            candidates = candidatesFor(composer, hits),
+            decodeMillis = 0,
         )
     }
 
@@ -196,18 +154,19 @@ internal class CandidateController(
     }
 
     private fun onSpace() {
-        when (KeyPolicy.space(mode, presented, composing)) {
-            KeyPolicy.Space.AcceptFirst -> presented.firstOrNull()?.let(::onCandidate)
-            KeyPolicy.Space.CommitComposition -> commitComposition(composer.text)
+        when (KeyPolicy.space(mode, composing = !composer.isEmpty)) {
+            KeyPolicy.Space.MarkLevelTone -> {
+                if (!composer.markLevelTone()) return
+                apply(refresh())
+            }
             KeyPolicy.Space.CommitSpace -> commit(" ")
         }
     }
 
     private fun onBackspace() {
-        if (mode == KeyboardMode.ZHUYIN && engine.isReady && composer.text.isNotEmpty()) {
+        if (mode == KeyboardMode.ZHUYIN && !composer.isEmpty) {
             composer.backspace()
-            if (composer.text.isEmpty()) {
-                engine.clear()
+            if (composer.isEmpty) {
                 composing = false
                 presented = emptyList()
                 val ic = connection()
@@ -215,7 +174,7 @@ internal class CandidateController(
                 ic?.finishComposingText()
                 publish(EngineSnapshot())
             } else {
-                apply(replay())
+                apply(refresh())
             }
         } else {
             connection()?.deleteSurroundingText(1, 0)
@@ -240,10 +199,10 @@ internal class CandidateController(
             return
         }
         composer.clear()
-        if (engine.isReady) engine.clear()
         composing = false
         presented = emptyList()
         connection()?.commitText(text, 1)
+        connection()?.finishComposingText()
         publish(EngineSnapshot())
     }
 
@@ -259,14 +218,8 @@ internal class CandidateController(
 
     private fun apply(snapshot: EngineSnapshot) {
         val ic = connection()
-        val commitText = snapshot.commit
         val inline = snapshot.composingPreview.ifEmpty { snapshot.preedit }
-        if (!commitText.isNullOrEmpty()) {
-            ic?.commitText(commitText, 1)
-            if (inline.isNotEmpty() && inline != commitText) {
-                ic?.setComposingText(inline, 1)
-            }
-        } else if (inline.isNotEmpty()) {
+        if (inline.isNotEmpty()) {
             ic?.setComposingText(inline, 1)
         } else {
             ic?.setComposingText("", 1)
@@ -281,7 +234,6 @@ internal class CandidateController(
 
     private fun cancelComposition() {
         composer.clear()
-        if (engine.isReady) engine.clear()
         val ic = connection()
         ic?.setComposingText("", 1)
         ic?.finishComposingText()
@@ -300,7 +252,7 @@ internal class CandidateController(
         if (snapshot != null) {
             presented = shown
             composing = if (mode == KeyboardMode.ZHUYIN) composer.text.isNotEmpty() else snapshot.isComposing
-            Log.i(TAG, "latency rime=${snapshot.decodeMillis}ms candidates=${snapshot.candidates.size}")
+            Log.i(TAG, "latency lookup=${snapshot.decodeMillis}ms candidates=${snapshot.candidates.size}")
         }
         onUi(ui(snapshot, presented))
         if (snapshot != null && mode == KeyboardMode.ZHUYIN && snapshot.candidates.size >= 2) {
@@ -319,7 +271,7 @@ internal class CandidateController(
             val fallback = if (superseded) "stale" else trace.fallback?.name ?: "none"
             Log.i(
                 TAG,
-                "latency rime=${snapshot.decodeMillis}ms infer=${trace.inferMillis}ms " +
+                "latency lookup=${snapshot.decodeMillis}ms infer=${trace.inferMillis}ms " +
                     "elapsed=${trace.elapsedMillis}ms fallback=$fallback",
             )
         }
@@ -365,13 +317,13 @@ internal class CandidateController(
         const val TAG = "FsKeyboard"
     }
 
-    private fun statusMessage(): String = when (engine.status) {
+    private fun statusMessage(): String = when (lexicon.status) {
         EngineStatus.READY -> ""
         EngineStatus.LOADING -> context.getString(R.string.status_loading)
         EngineStatus.MISSING_LIBRARY -> context.getString(R.string.status_missing_rime)
         EngineStatus.FAILED -> context.getString(
             R.string.status_failed,
-            engine.statusDetail.ifBlank { "unknown" },
+            lexicon.statusDetail.ifBlank { "unknown" },
         )
     }
 }

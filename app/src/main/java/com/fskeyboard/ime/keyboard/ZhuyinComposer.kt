@@ -35,22 +35,58 @@ internal object ZhuyinPhonology {
 }
 
 /**
+ * 平聲 has no glyph. [ZhuyinTone.NONE] means the syllable is still unfinished,
+ * so an unmarked reading is not the same as first tone.
+ */
+internal enum class ZhuyinTone {
+    NONE,
+    LEVEL,
+    SECOND,
+    THIRD,
+    FOURTH,
+    NEUTRAL,
+    ;
+
+    val mark: String
+        get() = when (this) {
+            NONE, LEVEL -> ""
+            SECOND -> "ˊ"
+            THIRD -> "ˇ"
+            FOURTH -> "ˋ"
+            NEUTRAL -> "˙"
+        }
+
+    val chosen: Boolean
+        get() = this != NONE
+}
+
+/**
  * Accumulates bopomofo in syllable order.
  * A key that cannot extend the current syllable starts the next one, so
  * ㄓㄨㄥㄍㄨㄛ stays one composition instead of being committed key by key.
  * A tone replaces the tone already on the open syllable. A leading tone is ignored.
+ * 平聲 is stored on the syllable and does not add a character.
  */
 internal class ZhuyinComposer {
-    private val parts = ArrayList<StringBuilder>()
+    private val parts = ArrayList<Syllable>()
 
     val text: String
-        get() = parts.joinToString("") { it.toString() }
+        get() = parts.joinToString("") { it.display() }
 
     val syllables: List<String>
-        get() = parts.map { it.toString() }
+        get() = parts.map { it.display() }
 
     val isEmpty: Boolean
         get() = parts.isEmpty()
+
+    /**
+     * Syllable codes for an exact lexicon lookup.
+     * Null until every syllable has a tone. 平聲 is the body alone.
+     */
+    fun queries(): List<String>? {
+        if (parts.isEmpty() || parts.any { !it.tone.chosen }) return null
+        return parts.map { it.body.toString() + it.tone.mark }
+    }
 
     fun append(glyph: String): Boolean {
         if (glyph.length != 1) return false
@@ -58,28 +94,43 @@ internal class ZhuyinComposer {
         val kind = ZhuyinPhonology.classify(ch) ?: return false
         if (parts.isEmpty()) {
             if (kind == ZhuyinClass.TONE) return false
-            parts += StringBuilder().append(ch)
+            parts += Syllable().also { it.body.append(ch) }
             return true
         }
         val current = parts.last()
-        if (canAppend(current, kind)) {
-            current.append(ch)
+        if (kind == ZhuyinClass.TONE) {
+            if (current.body.isEmpty()) return false
+            current.tone = toneOf(ch)
             return true
         }
-        if (kind == ZhuyinClass.TONE && endsWithTone(current)) {
-            current.setCharAt(current.lastIndex, ch)
+        if (current.tone == ZhuyinTone.NONE && canAppendBody(current.body, kind)) {
+            current.body.append(ch)
             return true
         }
-        if (kind == ZhuyinClass.TONE) return false
-        parts += StringBuilder().append(ch)
+        parts += Syllable().also { it.body.append(ch) }
+        return true
+    }
+
+    /** Marks the open syllable as 平聲 and drops any tone mark already on it. */
+    fun markLevelTone(): Boolean {
+        val current = parts.lastOrNull() ?: return false
+        if (current.body.isEmpty()) return false
+        current.tone = ZhuyinTone.LEVEL
         return true
     }
 
     fun backspace() {
-        if (parts.isEmpty()) return
-        val current = parts.last()
-        current.deleteCharAt(current.lastIndex)
-        if (current.isEmpty()) parts.removeAt(parts.lastIndex)
+        val current = parts.lastOrNull() ?: return
+        if (current.tone != ZhuyinTone.NONE) {
+            current.tone = ZhuyinTone.NONE
+            return
+        }
+        if (current.body.isEmpty()) {
+            parts.removeAt(parts.lastIndex)
+            return
+        }
+        current.body.deleteCharAt(current.body.lastIndex)
+        if (current.body.isEmpty()) parts.removeAt(parts.lastIndex)
     }
 
     fun clear() {
@@ -94,12 +145,20 @@ internal class ZhuyinComposer {
         for (ch in glyphs) append(ch.toString())
     }
 
-    private fun canAppend(current: StringBuilder, kind: ZhuyinClass): Boolean {
-        if (current.isEmpty()) return kind != ZhuyinClass.TONE
+    private fun toneOf(ch: Char): ZhuyinTone = when (ch) {
+        'ˊ' -> ZhuyinTone.SECOND
+        'ˇ' -> ZhuyinTone.THIRD
+        'ˋ' -> ZhuyinTone.FOURTH
+        '˙' -> ZhuyinTone.NEUTRAL
+        else -> ZhuyinTone.NONE
+    }
+
+    private fun canAppendBody(current: StringBuilder, kind: ZhuyinClass): Boolean {
+        if (kind == ZhuyinClass.TONE) return false
+        if (current.isEmpty()) return true
         var seenInitial = false
         var seenMedial = false
         var seenFinal = false
-        var seenTone = false
         var last = ZhuyinClass.INITIAL
         for (ch in current) {
             val classified = ZhuyinPhonology.classify(ch) ?: return false
@@ -108,24 +167,23 @@ internal class ZhuyinComposer {
                 ZhuyinClass.INITIAL -> seenInitial = true
                 ZhuyinClass.MEDIAL -> seenMedial = true
                 ZhuyinClass.FINAL -> seenFinal = true
-                ZhuyinClass.TONE -> seenTone = true
+                ZhuyinClass.TONE -> return false
             }
         }
-        if (kind == ZhuyinClass.TONE) {
-            return !seenTone && (seenInitial || seenMedial || seenFinal)
-        }
-        if (seenTone) return false
         val already = when (kind) {
             ZhuyinClass.INITIAL -> seenInitial
             ZhuyinClass.MEDIAL -> seenMedial
             ZhuyinClass.FINAL -> seenFinal
-            ZhuyinClass.TONE -> false
+            ZhuyinClass.TONE -> true
         }
         if (already) return false
         return kind.ordinal > last.ordinal
     }
+}
 
-    private fun endsWithTone(current: StringBuilder): Boolean {
-        return current.isNotEmpty() && ZhuyinPhonology.classify(current.last()) == ZhuyinClass.TONE
-    }
+private class Syllable {
+    val body = StringBuilder()
+    var tone: ZhuyinTone = ZhuyinTone.NONE
+
+    fun display(): String = body.toString() + tone.mark
 }

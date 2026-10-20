@@ -3,9 +3,9 @@
     <string name="app_name">FsKeyboard</string>
     <string name="ime_name">FsKeyboard 注音</string>
     <string name="subtype_zhuyin">中文（臺灣注音）</string>
-    <string name="status_loading">正在部署輸入方案…</string>
-    <string name="status_missing_rime">尚未載入 librime，按鍵會直接上屏</string>
-    <string name="status_failed">Rime 啟動失敗：%1$s</string>
+    <string name="status_loading">正在載入注音詞庫…</string>
+    <string name="status_missing_rime">尚未載入注音詞庫，仍可組字</string>
+    <string name="status_failed">詞庫載入失敗：%1$s</string>
     <string name="ime_settings_title">FsKeyboard 設定</string>
     <string name="keyboard_height_label">鍵盤高度</string>
     <string name="keyboard_height_value">目前 %1$d%%，預設是 100%%</string>

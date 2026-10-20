@@ -53,19 +53,18 @@ class RerankContractTest {
     }
 
     @Test
-    fun spaceAcceptsThePresentedCandidateRatherThanRimesOrder() {
-        val presented = listOf(Candidate("後", engineIndex = 2), Candidate("候", engineIndex = 0))
+    fun spaceMarksLevelToneAndDoesNotSelectACandidate() {
         assertEquals(
-            KeyPolicy.Space.AcceptFirst,
-            KeyPolicy.space(KeyboardMode.ZHUYIN, presented, composing = true),
-        )
-        assertEquals(
-            KeyPolicy.Space.CommitComposition,
-            KeyPolicy.space(KeyboardMode.ZHUYIN, emptyList(), composing = true),
+            KeyPolicy.Space.MarkLevelTone,
+            KeyPolicy.space(KeyboardMode.ZHUYIN, composing = true),
         )
         assertEquals(
             KeyPolicy.Space.CommitSpace,
-            KeyPolicy.space(KeyboardMode.LATIN, presented, composing = true),
+            KeyPolicy.space(KeyboardMode.ZHUYIN, composing = false),
+        )
+        assertEquals(
+            KeyPolicy.Space.CommitSpace,
+            KeyPolicy.space(KeyboardMode.LATIN, composing = true),
         )
     }
 }
