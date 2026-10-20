@@ -5,10 +5,10 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.util.TypedValue
-import android.view.Choreographer
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import com.fskeyboard.ime.traced
 import com.fskeyboard.ime.ui.KeyboardPalette
 import com.fskeyboard.ime.ui.dp
 import com.fskeyboard.ime.ui.isNightMode
@@ -28,6 +28,7 @@ internal class KeyboardView(context: Context) : View(context) {
     private var rows = KeyboardLayouts.rows(mode, shifted)
     private val boxes = ArrayList<KeyBox>()
     private var down: KeyBox? = null
+    private var downPointer = NO_POINTER
     private var gap = 0f
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -35,7 +36,6 @@ internal class KeyboardView(context: Context) : View(context) {
         textAlign = Paint.Align.CENTER
     }
     private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private var longPressFired = false
 
     private val repeat = object : Runnable {
         override fun run() {
@@ -48,12 +48,8 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private val longPress = Runnable {
         val action = down?.spec?.secondary ?: return@Runnable
-        longPressFired = true
-        down = null
-        stopRepeat()
-        invalidate()
-        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-        afterFrame { dispatch(action, haptic = false) }
+        release()
+        fire(action)
     }
 
     fun setMode(mode: KeyboardMode) {
@@ -100,54 +96,65 @@ internal class KeyboardView(context: Context) : View(context) {
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                longPressFired = false
-                down = hit(event.x, event.y)
-                val spec = down?.spec
-                invalidate()
-                if (spec?.action == KeyAction.Backspace) {
-                    val action = spec.action
-                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    afterFrame { dispatch(action, haptic = false) }
-                    postDelayed(repeat, 320L)
-                } else if (spec?.secondary != null) {
-                    postDelayed(longPress, 400L)
-                }
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                // A finger landing before the held one lifts commits the held key first,
+                // so fast two-thumb rollover keeps both keys in order.
+                commitHeld()
+                val index = event.actionIndex
+                press(event.getPointerId(index), event.getX(index), event.getY(index))
             }
             MotionEvent.ACTION_MOVE -> {
-                val box = hit(event.x, event.y)
-                if (box != down) {
-                    stopRepeat()
-                    down = null
-                    invalidate()
+                val box = down ?: return true
+                val index = event.findPointerIndex(downPointer)
+                if (index >= 0 && hit(event.getX(index), event.getY(index)) != box) {
+                    release()
                 }
             }
-            MotionEvent.ACTION_UP -> {
-                stopRepeat()
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                val index = event.actionIndex
+                if (event.getPointerId(index) != downPointer) return true
                 val box = down
-                val released = hit(event.x, event.y)
-                val action = box?.spec?.action
-                val fire = !longPressFired &&
-                    box != null &&
-                    box == released &&
-                    action != null &&
-                    action != KeyAction.Backspace
-                longPressFired = false
-                down = null
-                invalidate()
-                if (fire && action != null) {
-                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    afterFrame { dispatch(action, haptic = false) }
+                val released = hit(event.getX(index), event.getY(index))
+                release()
+                if (box != null && box == released && box.spec.action != KeyAction.Backspace) {
+                    fire(box.spec.action)
                 }
             }
-            MotionEvent.ACTION_CANCEL -> {
-                stopRepeat()
-                longPressFired = false
-                down = null
-                invalidate()
-            }
+            MotionEvent.ACTION_CANCEL -> release()
         }
         return true
+    }
+
+    private fun press(pointer: Int, x: Float, y: Float) {
+        down = hit(x, y)
+        downPointer = pointer
+        val spec = down?.spec
+        invalidate()
+        if (spec?.action == KeyAction.Backspace) {
+            fire(spec.action)
+            postDelayed(repeat, 320L)
+        } else if (spec?.secondary != null) {
+            postDelayed(longPress, 400L)
+        }
+    }
+
+    /** Commits the key still under a finger. Backspace already fired on its down. */
+    private fun commitHeld() {
+        val action = down?.spec?.action ?: return
+        release()
+        if (action != KeyAction.Backspace) fire(action)
+    }
+
+    private fun release() {
+        stopRepeat()
+        down = null
+        downPointer = NO_POINTER
+        invalidate()
+    }
+
+    private fun fire(action: KeyAction) {
+        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        dispatch(action, haptic = false)
     }
 
     private fun dispatch(action: KeyAction, haptic: Boolean = true) {
@@ -157,19 +164,10 @@ internal class KeyboardView(context: Context) : View(context) {
             return
         }
         if (haptic) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-        onKey(action)
+        traced("ime.dispatch") { onKey(action) }
         if (action is KeyAction.Character && shifted && mode == KeyboardMode.LATIN) {
             shifted = false
             rebuild()
-        }
-    }
-
-    /** Lets the pressed-key frame draw before lookup and the editor update. */
-    private fun afterFrame(block: () -> Unit) {
-        Choreographer.getInstance().postFrameCallback {
-            post {
-                if (isAttachedToWindow) block()
-            }
         }
     }
 
@@ -231,4 +229,8 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     private data class KeyBox(val spec: KeySpec, val rect: RectF)
+
+    private companion object {
+        const val NO_POINTER = -1
+    }
 }

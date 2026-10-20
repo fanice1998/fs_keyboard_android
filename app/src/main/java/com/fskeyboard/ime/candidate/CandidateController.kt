@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import android.view.Choreographer
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import com.fskeyboard.ime.R
@@ -20,6 +19,7 @@ import com.fskeyboard.ime.rerank.RerankFallback
 import com.fskeyboard.ime.rerank.RerankLimits
 import com.fskeyboard.ime.rerank.RerankTrace
 import com.fskeyboard.ime.rerank.acceptRerankUpdate
+import com.fskeyboard.ime.traced
 
 internal class CandidateController(
     private val context: Context,
@@ -38,7 +38,6 @@ internal class CandidateController(
     private var composing = false
     private val composer = ZhuyinComposer()
     private var generation = 0L
-    private var composingWrite = 0L
     private var closed = false
 
     fun start() {
@@ -89,7 +88,6 @@ internal class CandidateController(
         composer.clear()
         composing = false
         presented = emptyList()
-        composingWrite += 1
         val ic = connection()
         ic?.commitText(candidate.text, 1)
         ic?.finishComposingText()
@@ -128,7 +126,7 @@ internal class CandidateController(
     private fun refresh(): EngineSnapshot {
         val queries = composer.queries()
         val hits = if (queries != null && lexicon.isReady) {
-            lexicon.lookup(queries.joinToString(" "), composer.exact)
+            traced("ime.lookup") { lexicon.lookup(queries.joinToString(" "), composer.exact) }
         } else {
             emptyList()
         }
@@ -172,7 +170,6 @@ internal class CandidateController(
             if (composer.isEmpty) {
                 composing = false
                 presented = emptyList()
-                composingWrite += 1
                 val ic = connection()
                 ic?.setComposingText("", 1)
                 ic?.finishComposingText()
@@ -205,7 +202,6 @@ internal class CandidateController(
         composer.clear()
         composing = false
         presented = emptyList()
-        composingWrite += 1
         connection()?.commitText(text, 1)
         connection()?.finishComposingText()
         publish(EngineSnapshot())
@@ -223,11 +219,10 @@ internal class CandidateController(
 
     private fun apply(snapshot: EngineSnapshot) {
         val inline = snapshot.composingPreview.ifEmpty { snapshot.preedit }
-        val ticket = ++composingWrite
         publish(snapshot)
-        afterFrame {
-            if (closed || ticket != composingWrite) return@afterFrame
-            val ic = connection() ?: return@afterFrame
+        if (closed) return
+        val ic = connection() ?: return
+        traced("ime.setComposing") {
             if (inline.isNotEmpty()) {
                 ic.setComposingText(inline, 1)
             } else {
@@ -237,19 +232,12 @@ internal class CandidateController(
         }
     }
 
-    private fun afterFrame(block: () -> Unit) {
-        Choreographer.getInstance().postFrameCallback {
-            post { block() }
-        }
-    }
-
     private fun commit(text: String) {
         connection()?.commitText(text, 1)
     }
 
     private fun cancelComposition() {
         composer.clear()
-        composingWrite += 1
         val ic = connection()
         ic?.setComposingText("", 1)
         ic?.finishComposingText()
@@ -319,13 +307,15 @@ internal class CandidateController(
     }
 
     private fun contextBefore(): String {
-        return try {
-            connection()
-                ?.getTextBeforeCursor(RerankLimits.CONTEXT_CHARS, 0)
-                ?.toString()
-                .orEmpty()
-        } catch (_: Exception) {
-            ""
+        return traced("ime.contextBefore") {
+            try {
+                connection()
+                    ?.getTextBeforeCursor(RerankLimits.CONTEXT_CHARS, 0)
+                    ?.toString()
+                    .orEmpty()
+            } catch (_: Exception) {
+                ""
+            }
         }
     }
 

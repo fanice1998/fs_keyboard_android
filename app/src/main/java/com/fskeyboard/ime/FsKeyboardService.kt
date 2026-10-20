@@ -337,8 +337,10 @@ class FsKeyboardService : InputMethodService() {
 
     private fun render(state: ImeUiState) {
         pending = state
-        keyboard?.setMode(state.mode)
-        candidateBar?.render(state.candidates)
+        traced("ime.render") {
+            keyboard?.setMode(state.mode)
+            candidateBar?.render(state.candidates)
+        }
     }
 
     private companion object {

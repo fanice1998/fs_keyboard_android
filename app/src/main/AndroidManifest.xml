@@ -6,6 +6,8 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.FsKeyboard">
 
+        <profileable android:shell="true" />
+
         <service
             android:name=".FsKeyboardService"
             android:exported="true"
