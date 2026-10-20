@@ -46,6 +46,18 @@ class ZhuyinComposerTest {
     }
 
     @Test
+    fun anIllegalInitialMedialPairStartsTheNextSyllable() {
+        assertEquals(listOf("ㄍ", "ㄧ"), type("ㄍㄧ").syllables)
+        assertEquals(listOf("ㄐ", "ㄨ"), type("ㄐㄨ").syllables)
+        assertEquals(listOf("ㄓ", "ㄧ"), type("ㄓㄧ").syllables)
+        assertEquals(listOf("ㄅ", "ㄩ"), type("ㄅㄩ").syllables)
+        assertEquals(listOf("ㄈ", "ㄧ"), type("ㄈㄧ").syllables)
+        assertEquals(listOf("ㄐㄧ"), type("ㄐㄧ").syllables)
+        assertEquals(listOf("ㄍㄨ"), type("ㄍㄨ").syllables)
+        assertEquals(listOf("ㄓㄨ"), type("ㄓㄨ").syllables)
+    }
+
+    @Test
     fun medialThenFinalStaysTogetherAndFinalThenMedialSplits() {
         assertEquals(listOf("ㄧㄚ"), type("ㄧㄚ").syllables)
         assertEquals(listOf("ㄚ", "ㄧ"), type("ㄚㄧ").syllables)
@@ -125,6 +137,15 @@ class ZhuyinComposerTest {
         assertEquals(listOf("ㄅㄚ"), composer.queries())
         composer.backspace()
         assertEquals("ㄅ", composer.text)
+    }
+
+    @Test
+    fun aClosedToneSurvivesWhileTheNextSyllableIsUnfinished() {
+        val composer = type("ㄊㄞˊㄨㄢ")
+        assertFalse(composer.exact)
+        assertEquals(listOf("ㄊㄞˊ", "ㄨㄢ"), composer.partialExactQueries())
+        assertEquals(listOf("ㄊㄞˊ", "ㄨㄢ"), composer.queries())
+        assertEquals("ㄊㄞˊㄨㄢ", composer.text)
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.fskeyboard.ime
 
 import android.content.res.Resources
 import android.graphics.Color
+import java.lang.ref.WeakReference
 import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.util.Log
@@ -40,9 +41,16 @@ class FsKeyboardService : InputMethodService() {
     private var navigationSpacer: View? = null
     private var latestInsets: WindowInsets? = null
     private var insetsListenerInstalled = false
+    private var appliedInsetStamp = Long.MIN_VALUE
+    private var navFrameResolved = false
+    private var cachedImeNav: WeakReference<View>? = null
+    private val navigationBarFramePx by lazy { navigationBarDimension("navigation_bar_frame_height") }
+    private val navigationBarHeightPx by lazy { navigationBarDimension("navigation_bar_height") }
     private var pending = ImeUiState()
     private val relayoutInsets = ViewTreeObserver.OnGlobalLayoutListener {
-        latestInsets?.let(::applyNavigationInset)
+        val insets = latestInsets ?: return@OnGlobalLayoutListener
+        if (insetStamp(insets) == appliedInsetStamp && navFrameResolved) return@OnGlobalLayoutListener
+        applyNavigationInset(insets)
     }
 
     override fun onCreate() {
@@ -161,9 +169,16 @@ class FsKeyboardService : InputMethodService() {
 
     private fun applyNavigationInset(insets: WindowInsets) {
         latestInsets = insets
+        val stamp = insetStamp(insets)
+        if (stamp != appliedInsetStamp) {
+            navFrameResolved = false
+            cachedImeNav = null
+        }
         val root = inputRoot ?: return
         val spacer = navigationSpacer ?: return
-        val embedded = embeddedNavigationBarHeight()
+        val embedded = embeddedNavigationBarHeight(allowSearch = !navFrameResolved)
+        navFrameResolved = true
+        appliedInsetStamp = stamp
         val frame = systemBarFrame()
         val samsung = isSamsung()
         val bottom = if (Build.VERSION.SDK_INT >= 30) {
@@ -232,7 +247,7 @@ class FsKeyboardService : InputMethodService() {
 
     private fun initialBottomClearance(): Int {
         return KeyboardInsets.bottomClearance(
-            navigationBars = navigationBarDimension("navigation_bar_height"),
+            navigationBars = navigationBarHeightPx,
             captionBar = 0,
             mandatoryGestures = 0,
             tappableElements = 0,
@@ -242,14 +257,18 @@ class FsKeyboardService : InputMethodService() {
         )
     }
 
-    private fun embeddedNavigationBarHeight(): Int {
+    private fun embeddedNavigationBarHeight(allowSearch: Boolean): Int {
         val decor = window?.window?.decorView as? ViewGroup ?: return 0
         val background = decor.findViewById<View>(android.R.id.navigationBarBackground)
             ?.takeIf { it.visibility == View.VISIBLE }
             ?.height ?: 0
-        val imeNav = findImeNavigationFrame(decor)
-            ?.takeIf { it.visibility == View.VISIBLE }
-            ?.height ?: 0
+        val cached = cachedImeNav?.get()?.takeIf { it.isAttachedToWindow }
+        val frame = cached ?: if (allowSearch) {
+            findImeNavigationFrame(decor)?.also { cachedImeNav = WeakReference(it) }
+        } else {
+            null
+        }
+        val imeNav = frame?.takeIf { it.visibility == View.VISIBLE }?.height ?: 0
         return maxOf(background, imeNav)
     }
 
@@ -262,11 +281,21 @@ class FsKeyboardService : InputMethodService() {
         return null
     }
 
-    private fun systemBarFrame(): Int {
-        return maxOf(
-            navigationBarDimension("navigation_bar_frame_height"),
-            navigationBarDimension("navigation_bar_height"),
-        )
+    private fun systemBarFrame(): Int = maxOf(navigationBarFramePx, navigationBarHeightPx)
+
+    private fun insetStamp(insets: WindowInsets): Long {
+        if (Build.VERSION.SDK_INT >= 30) {
+            val bars = insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+            val caption = insets.getInsets(WindowInsets.Type.captionBar()).bottom
+            val mandatory = insets.getInsets(WindowInsets.Type.mandatorySystemGestures()).bottom
+            val tappable = insets.getInsets(WindowInsets.Type.tappableElement()).bottom
+            return (bars.toLong() shl 48) or
+                (caption.toLong() shl 32) or
+                (mandatory.toLong() shl 16) or
+                tappable.toLong()
+        }
+        @Suppress("DEPRECATION")
+        return insets.systemWindowInsetBottom.toLong()
     }
 
     private fun navigationBarDimension(name: String): Int {

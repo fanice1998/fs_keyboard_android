@@ -32,6 +32,20 @@ internal object ZhuyinPhonology {
         in tones -> ZhuyinClass.TONE
         else -> null
     }
+
+    /** Taiwan bopomofo: a medial only follows the initials that can take it. */
+    fun medialFits(initial: Char?, medial: Char): Boolean {
+        val head = initial ?: return true
+        return when (head) {
+            'ㄅ', 'ㄆ', 'ㄇ' -> medial != 'ㄩ'
+            'ㄈ' -> medial == 'ㄨ'
+            'ㄉ', 'ㄊ', 'ㄋ', 'ㄌ' -> true
+            'ㄍ', 'ㄎ', 'ㄏ' -> medial == 'ㄨ'
+            'ㄐ', 'ㄑ', 'ㄒ' -> medial == 'ㄧ' || medial == 'ㄩ'
+            'ㄓ', 'ㄔ', 'ㄕ', 'ㄖ', 'ㄗ', 'ㄘ', 'ㄙ' -> medial == 'ㄨ'
+            else -> true
+        }
+    }
 }
 
 /**
@@ -87,12 +101,15 @@ internal class ZhuyinComposer {
         get() = parts.isNotEmpty() && parts.all { it.tone.chosen }
 
     /**
-     * Syllable codes for lookup. Tone marks are included only when [exact] is true.
-     * 平聲 is the body alone. Null when nothing has been typed.
+     * Syllable codes for lookup. Each syllable keeps the tone already chosen.
+     * 平聲 and an unfinished syllable contribute the body alone.
+     * Null when nothing has been typed.
      */
-    fun queries(): List<String>? {
+    fun queries(): List<String>? = partialExactQueries()
+
+    fun partialExactQueries(): List<String>? {
         if (parts.isEmpty()) return null
-        return parts.map { it.body.toString() + if (exact) it.tone.mark else "" }
+        return parts.map { it.body.toString() + it.tone.mark }
     }
 
     fun append(glyph: String): Boolean {
@@ -110,7 +127,7 @@ internal class ZhuyinComposer {
             current.tone = toneOf(ch)
             return true
         }
-        if (current.tone == ZhuyinTone.NONE && canAppendBody(current.body, kind)) {
+        if (current.tone == ZhuyinTone.NONE && canAppendBody(current.body, ch, kind)) {
             current.body.append(ch)
             return true
         }
@@ -160,23 +177,28 @@ internal class ZhuyinComposer {
         else -> ZhuyinTone.NONE
     }
 
-    private fun canAppendBody(current: StringBuilder, kind: ZhuyinClass): Boolean {
+    private fun canAppendBody(current: StringBuilder, ch: Char, kind: ZhuyinClass): Boolean {
         if (kind == ZhuyinClass.TONE) return false
         if (current.isEmpty()) return true
         var seenInitial = false
         var seenMedial = false
         var seenFinal = false
+        var initial: Char? = null
         var last = ZhuyinClass.INITIAL
-        for (ch in current) {
-            val classified = ZhuyinPhonology.classify(ch) ?: return false
+        for (glyph in current) {
+            val classified = ZhuyinPhonology.classify(glyph) ?: return false
             last = classified
             when (classified) {
-                ZhuyinClass.INITIAL -> seenInitial = true
+                ZhuyinClass.INITIAL -> {
+                    seenInitial = true
+                    initial = glyph
+                }
                 ZhuyinClass.MEDIAL -> seenMedial = true
                 ZhuyinClass.FINAL -> seenFinal = true
                 ZhuyinClass.TONE -> return false
             }
         }
+        if (kind == ZhuyinClass.MEDIAL && !ZhuyinPhonology.medialFits(initial, ch)) return false
         val already = when (kind) {
             ZhuyinClass.INITIAL -> seenInitial
             ZhuyinClass.MEDIAL -> seenMedial

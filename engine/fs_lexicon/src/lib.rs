@@ -5,20 +5,112 @@ const CANDIDATE_LIMIT: usize = 40;
 
 static LEXICON: Mutex<Option<Lexicon>> = Mutex::new(None);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
+struct Entry {
+    text: String,
+    weight: i32,
+}
+
+#[derive(Clone, Debug)]
 pub struct Lexicon {
-    exact: HashMap<String, Vec<String>>,
-    predicted: HashMap<String, Vec<String>>,
+    exact: HashMap<String, Vec<Entry>>,
+    predicted: HashMap<String, Vec<Entry>>,
 }
 
 impl Lexicon {
     pub fn lookup(&self, code: &str, exact: bool) -> Vec<String> {
-        let table = if exact { &self.exact } else { &self.predicted };
-        table.get(code).cloned().unwrap_or_default()
+        let mut out = String::new();
+        self.write_lookup(&mut out, code, exact);
+        if out.is_empty() {
+            Vec::new()
+        } else {
+            out.split('\n').map(str::to_string).collect()
+        }
     }
 
+    /// One newline-separated block. Callers append from stored rows and do not clone them.
     fn lookup_lines(&self, code: &str, exact: bool) -> String {
-        self.lookup(code, exact).join("\n")
+        let mut out = String::new();
+        self.write_lookup(&mut out, code, exact);
+        out
+    }
+
+    fn write_lookup(&self, out: &mut String, code: &str, exact: bool) {
+        let direct = self.rows(code, exact);
+        if !direct.is_empty() {
+            write_entries(out, direct);
+            return;
+        }
+        self.write_fallback(out, code, exact);
+    }
+
+    fn rows(&self, code: &str, exact: bool) -> &[Entry] {
+        if exact {
+            self.exact.get(code).map(Vec::as_slice).unwrap_or(&[])
+        } else {
+            let bare = without_tones(code);
+            self.predicted.get(&bare).map(Vec::as_slice).unwrap_or(&[])
+        }
+    }
+
+    fn write_fallback(&self, out: &mut String, code: &str, exact: bool) {
+        let syllables: Vec<&str> = code.split(' ').filter(|part| !part.is_empty()).collect();
+        if syllables.len() <= 1 {
+            if exact {
+                let bare = without_tones(code);
+                if bare != code {
+                    write_entries(out, self.rows(&bare, false));
+                }
+            }
+            return;
+        }
+        let mut ranked: Vec<(i32, &str)> = Vec::new();
+        let mut index_of: HashMap<&str, usize> = HashMap::new();
+        for length in (1..syllables.len()).rev() {
+            let prefix = syllables[..length].join(" ");
+            let rows = self.rows(&prefix, exact);
+            if rows.is_empty() {
+                continue;
+            }
+            consider(&mut ranked, &mut index_of, rows);
+            break;
+        }
+        if let Some(last) = syllables.last() {
+            consider(&mut ranked, &mut index_of, self.rows(last, exact));
+        }
+        ranked.sort_by(|left, right| right.0.cmp(&left.0));
+        for (index, (_, text)) in ranked.iter().take(CANDIDATE_LIMIT).enumerate() {
+            if index > 0 {
+                out.push('\n');
+            }
+            out.push_str(text);
+        }
+    }
+}
+
+fn write_entries(out: &mut String, rows: &[Entry]) {
+    for (index, entry) in rows.iter().take(CANDIDATE_LIMIT).enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        out.push_str(&entry.text);
+    }
+}
+
+fn consider<'a>(
+    ranked: &mut Vec<(i32, &'a str)>,
+    index_of: &mut HashMap<&'a str, usize>,
+    rows: &'a [Entry],
+) {
+    for entry in rows {
+        if let Some(slot) = index_of.get(entry.text.as_str()).copied() {
+            if entry.weight > ranked[slot].0 {
+                ranked[slot].0 = entry.weight;
+            }
+        } else {
+            index_of.insert(entry.text.as_str(), ranked.len());
+            ranked.push((entry.weight, entry.text.as_str()));
+        }
     }
 }
 
@@ -28,11 +120,17 @@ fn without_tones(code: &str) -> String {
         .collect()
 }
 
-fn finish(mut rows: Vec<(String, i32)>) -> Vec<String> {
+fn finish(mut rows: Vec<(String, i32)>) -> Vec<Entry> {
     rows.sort_by(|left, right| right.1.cmp(&left.1));
     let mut seen = HashSet::new();
     rows.into_iter()
-        .filter_map(|(text, _weight)| seen.insert(text.clone()).then_some(text))
+        .filter_map(|(text, weight)| {
+            if seen.insert(text.clone()) {
+                Some(Entry { text, weight })
+            } else {
+                None
+            }
+        })
         .take(CANDIDATE_LIMIT)
         .collect()
 }
@@ -179,6 +277,31 @@ mod tests {
             lexicon.lookup("ㄋㄧ ㄏㄠ", false).first().map(String::as_str),
             Some("你好")
         );
+    }
+
+    #[test]
+    fn a_missing_phrase_falls_back_to_the_longest_prefix_and_the_last_syllable() {
+        let lexicon = parse_dict(&project_dict());
+        let linked = lexicon.lookup("ㄍㄨㄥ ㄎㄜˋ", true);
+        assert!(linked.iter().any(|text| text == "公"));
+        assert!(linked.iter().any(|text| text == "課"));
+        assert!(linked.iter().all(|text| text != "家"));
+        assert_eq!(
+            lexicon.lookup("ㄊㄞˊ ㄨㄢ", true).first().map(String::as_str),
+            Some("臺灣")
+        );
+
+        let yaml = "\
+...
+公\tㄍㄨㄥ\t80
+課\tㄎㄜˋ\t60
+台灣\tㄊㄞˊ ㄨㄢ\t500
+灣\tㄨㄢ\t40
+";
+        let sample = parse_dict(yaml);
+        assert_eq!(sample.lookup("ㄊㄞˊ ㄨㄢ", false).first().map(String::as_str), Some("台灣"));
+        let split = sample.lookup("ㄍㄨㄥ ㄎㄜˋ", true);
+        assert_eq!(split, vec!["公".to_string(), "課".to_string()]);
     }
 
     #[test]
