@@ -11,11 +11,12 @@ internal object KeyboardLayouts {
         base: KeyboardMode = KeyboardMode.ZHUYIN,
         fullWidth: Boolean = true,
         capsLock: Boolean = false,
+        enter: EnterChoice = EnterChoice(),
     ): List<KeyRow> = when (mode) {
-        KeyboardMode.ZHUYIN -> zhuyin()
-        KeyboardMode.LATIN -> latin(shifted, capsLock)
-        KeyboardMode.SYMBOLS -> symbols(base, more = false, fullWidth)
-        KeyboardMode.SYMBOLS_MORE -> symbols(base, more = true, fullWidth)
+        KeyboardMode.ZHUYIN -> zhuyin(enter)
+        KeyboardMode.LATIN -> latin(shifted, capsLock, enter)
+        KeyboardMode.SYMBOLS -> symbols(base, more = false, fullWidth, enter)
+        KeyboardMode.SYMBOLS_MORE -> symbols(base, more = true, fullWidth, enter)
     }
 
     fun letterKeys(mode: KeyboardMode, shifted: Boolean = false): Set<Char> {
@@ -27,7 +28,7 @@ internal object KeyboardLayouts {
             .toSet()
     }
 
-    private fun zhuyin(): List<KeyRow> {
+    private fun zhuyin(enter: EnterChoice): List<KeyRow> {
         val phonetic = ZhuyinLayout.rows.mapIndexed { index, row ->
             // Ten keys share the eleven-key pitch. iOS splits the spare key
             // one-to-two, then mirrors that split on the next row.
@@ -62,12 +63,12 @@ internal object KeyboardLayouts {
                 ),
                 // Labelled as a space bar; while composing it marks 平聲.
                 KeySpec("空格", KeyAction.Space, weight = 4.6f, role = KeyRole.SPACE),
-                iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.85f),
+                enterKey(enter, 1.85f),
             ),
         )
     }
 
-    private fun latin(shifted: Boolean, capsLock: Boolean): List<KeyRow> {
+    private fun latin(shifted: Boolean, capsLock: Boolean, enter: EnterChoice): List<KeyRow> {
         val upper = shifted || capsLock
         return listOf(
             KeyRow(letters("qwertyuiop", upper)),
@@ -85,7 +86,7 @@ internal object KeyboardLayouts {
                     KeySpec(",", KeyAction.Character(',')),
                     space(),
                     KeySpec(".", KeyAction.Character('.')),
-                    iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.7f),
+                    enterKey(enter, 1.7f),
                 ),
             ),
         )
@@ -97,7 +98,7 @@ internal object KeyboardLayouts {
      * Either way they return to the letter keyboard they were opened from.
      * On row three the keys between the page key and delete share seven key widths.
      */
-    private fun symbols(base: KeyboardMode, more: Boolean, fullWidth: Boolean): List<KeyRow> {
+    private fun symbols(base: KeyboardMode, more: Boolean, fullWidth: Boolean, enter: EnterChoice): List<KeyRow> {
         val chinese = base == KeyboardMode.ZHUYIN && fullWidth
         val (first, second, third) = when {
             !more && !chinese -> Triple(split("1234567890"), split("-/:;()$&@\""), split(".,?!'"))
@@ -132,7 +133,7 @@ internal object KeyboardLayouts {
                         secondary = KeyAction.NextInputMethod,
                     ),
                     KeySpec("空格", KeyAction.Space, weight = 4.6f, role = KeyRole.SPACE),
-                    iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.85f),
+                    enterKey(enter, 1.85f),
                 ),
             ),
         )
@@ -175,6 +176,16 @@ internal object KeyboardLayouts {
         role = KeyRole.ACTION,
         icon = KeyIcon.DELETE,
     )
+
+    private fun enterKey(choice: EnterChoice, weight: Float): KeySpec {
+        if (choice.newline) return iconKey(KeyIcon.RETURN, KeyAction.Enter, weight)
+        return KeySpec(
+            label = choice.label.orEmpty(),
+            action = KeyAction.Enter,
+            weight = weight,
+            role = KeyRole.ACTION,
+        )
+    }
 
     private fun iconKey(
         icon: KeyIcon,

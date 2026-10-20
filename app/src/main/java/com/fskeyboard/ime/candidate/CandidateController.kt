@@ -13,6 +13,7 @@ import com.fskeyboard.ime.engine.EngineStatus
 import com.fskeyboard.ime.engine.KeyPolicy
 import com.fskeyboard.ime.engine.ZhuyinLexicon
 import com.fskeyboard.ime.keyboard.CursorMotion
+import com.fskeyboard.ime.keyboard.EnterActions
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.keyboard.ZhuyinComposer
@@ -312,16 +313,13 @@ internal class CandidateController(
     }
 
     private fun performEnter() {
-        val info = editorInfo()
-        val actionId = info?.imeOptions?.and(EditorInfo.IME_MASK_ACTION) ?: EditorInfo.IME_ACTION_NONE
-        val noAction = actionId == EditorInfo.IME_ACTION_NONE ||
-            actionId == EditorInfo.IME_ACTION_UNSPECIFIED
+        val choice = EnterActions.choose(editorInfo())
         val ic = connection() ?: return
-        if (!noAction && ic.performEditorAction(actionId)) {
+        if (!choice.newline && ic.performEditorAction(choice.actionId)) {
             recent.setLength(0)
             return
         }
-        commit("\n")
+        if (choice.newline) commit("\n")
     }
 
     private fun apply(snapshot: EngineSnapshot) {

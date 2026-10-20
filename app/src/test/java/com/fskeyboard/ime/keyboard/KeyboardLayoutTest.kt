@@ -23,6 +23,12 @@ class KeyboardLayoutTest {
         assertTrue(locked.map { it.label }.contains("Q"))
         assertTrue(locked.map { it.label }.contains("⇪"))
         assertTrue(locked.first { it.action == KeyAction.Shift }.highlighted)
+        val search = KeyboardLayouts.rows(
+            KeyboardMode.LATIN,
+            enter = EnterChoice(label = "搜尋", actionId = 3),
+        ).flatMap { it.keys }.first { it.action == KeyAction.Enter }
+        assertEquals("搜尋", search.label)
+        assertEquals(null, search.icon)
         assertTrue(specs.any { it.icon == KeyIcon.GLOBE && it.action == KeyAction.SetMode(KeyboardMode.ZHUYIN) })
     }
 

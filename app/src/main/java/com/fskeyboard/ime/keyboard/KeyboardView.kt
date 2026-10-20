@@ -41,6 +41,14 @@ internal class KeyboardView(context: Context) : View(context) {
             requestLayout()
         }
 
+    /** Label of the enter key for the field that is open. A newline keeps the return arrow. */
+    var enterChoice: EnterChoice = EnterChoice()
+        set(value) {
+            if (field == value) return
+            field = value
+            rebuild()
+        }
+
     /** Full-width Chinese punctuation on the symbol pages opened from zhuyin. */
     var fullWidthSymbols: Boolean = true
         set(value) {
@@ -132,7 +140,12 @@ internal class KeyboardView(context: Context) : View(context) {
                 KeyIcons.draw(canvas, icon, draw, palette.text, iconPaint)
             } else if (box.spec.label.isNotEmpty()) {
                 label.color = if (box.spec.role == KeyRole.SPACE) palette.hint else palette.text
-                label.textSize = if (box.spec.label.length > 1) sp(15f) else sp(20f)
+                label.textSize = when {
+                    box.spec.label.length >= 6 -> sp(11f)
+                    box.spec.label.length >= 4 -> sp(13f)
+                    box.spec.label.length > 1 -> sp(15f)
+                    else -> sp(20f)
+                }
                 val baseline = draw.centerY() - (label.ascent() + label.descent()) / 2f
                 canvas.drawText(box.spec.label, draw.centerX(), baseline, label)
             }
@@ -318,6 +331,7 @@ internal class KeyboardView(context: Context) : View(context) {
             base = base,
             fullWidth = fullWidthSymbols,
             capsLock = shiftLock.mode == ShiftMode.LOCKED,
+            enter = enterChoice,
         )
         requestLayout()
         if (width > 0 && height > 0) {

@@ -21,6 +21,7 @@ import com.fskeyboard.ime.candidate.CandidateController
 import com.fskeyboard.ime.candidate.CandidatePanelView
 import com.fskeyboard.ime.candidate.ImeUiState
 import com.fskeyboard.ime.engine.RustZhuyinLexicon
+import com.fskeyboard.ime.keyboard.EnterActions
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardView
 import com.fskeyboard.ime.latency.FrameLatencyProbe
@@ -143,6 +144,7 @@ class FsKeyboardService : InputMethodService() {
                     controller.onKey(action)
                 }
             }
+            enterChoice = EnterActions.choose(currentInputEditorInfo)
         }
         val spacer = View(this)
         val initial = KeyboardInsets.resolve(
@@ -385,6 +387,7 @@ class FsKeyboardService : InputMethodService() {
         val preferences = KeyboardPreferences(this)
         keyboard?.rowHeightDp = preferences.rowHeightDp()
         keyboard?.fullWidthSymbols = preferences.fullWidthSymbols()
+        keyboard?.enterChoice = EnterActions.choose(info)
         controller.onStartInput(restarting)
         window?.window?.decorView?.requestApplyInsets()
         latestInsets?.let(::applyNavigationInset)
