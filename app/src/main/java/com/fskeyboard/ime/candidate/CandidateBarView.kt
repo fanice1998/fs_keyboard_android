@@ -15,12 +15,10 @@ import com.fskeyboard.ime.ui.isNightMode
  * Candidates in one scrolling row. The zhuyin being typed shows only in the editor.
  * The text on the left is a status message, shown only when there is one.
  * The arrow on the right opens every candidate over the keys.
+ * The bar is at least 40dp tall; chips are 18sp with 4dp above and below.
  */
 internal class CandidateBarView(context: Context) : LinearLayout(context) {
     var onCandidate: (Candidate) -> Unit = {}
-
-    /** The multi-function key next to the arrow. It has no function yet. */
-    var onMore: () -> Unit = {}
     var onExpand: () -> Unit = {}
 
     /** Whether the candidate panel is open; flips the arrow. */
@@ -34,7 +32,6 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
     private val status = TextView(context)
     private val strip = LinearLayout(context)
     private val scroll = HorizontalScrollView(context)
-    private val more = TextView(context)
     private val expand = TextView(context)
     private val chips = ArrayList<TextView>()
     private var shown: List<Candidate> = emptyList()
@@ -43,8 +40,8 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         orientation = HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         val pad = dp(8)
-        setPadding(pad, dp(4), pad, dp(4))
-        minimumHeight = dp(48)
+        setPadding(pad, dp(2), pad, dp(2))
+        minimumHeight = dp(40)
 
         status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
         status.maxLines = 1
@@ -57,7 +54,6 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         scroll.addView(strip, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
         addView(scroll, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
 
-        sideKey(more, "⋯", "更多功能") { onMore() }
         sideKey(expand, "▾", "展開候選字") { onExpand() }
         expand.visibility = INVISIBLE
     }
@@ -69,10 +65,8 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         status.text = state.message
         status.visibility = if (state.message.isEmpty()) GONE else VISIBLE
         scroll.visibility = if (state.message.isEmpty()) VISIBLE else GONE
-        for (key in listOf(more, expand)) {
-            key.setTextColor(palette.text)
-            (key.background as? GradientDrawable)?.setColor(palette.accent)
-        }
+        expand.setTextColor(palette.text)
+        (expand.background as? GradientDrawable)?.setColor(palette.accent)
         expand.visibility = if (state.candidates.isEmpty()) INVISIBLE else VISIBLE
 
         if (shown == state.candidates) return
@@ -99,7 +93,7 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
         view.gravity = Gravity.CENTER
         view.minWidth = dp(40)
-        view.setPadding(dp(8), dp(6), dp(8), dp(6))
+        view.setPadding(dp(8), dp(4), dp(8), dp(4))
         view.background = CandidateChips.rounded(this, 0)
         view.text = label
         view.contentDescription = description

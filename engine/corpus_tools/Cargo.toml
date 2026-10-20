@@ -1,0 +1,11 @@
+[package]
+name = "corpus_tools"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Offline corpus tools for the bigram model. Not packaged into the app."
+
+[dependencies]
+
+[profile.release]
+opt-level = 3

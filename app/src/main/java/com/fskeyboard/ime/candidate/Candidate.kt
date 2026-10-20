@@ -3,6 +3,9 @@ package com.fskeyboard.ime.candidate
 internal enum class CandidateSource {
     RIME,
     SYNTHETIC,
+
+    /** Offered with nothing typed, such as punctuation after a particle. It uses no syllables. */
+    SUGGESTION,
 }
 
 /**
@@ -11,6 +14,7 @@ internal enum class CandidateSource {
  * can update the built-in user dictionary.
  * A candidate invented by a reranker uses a negative index and [CandidateSource.SYNTHETIC].
  * [span] is how many syllables, from the front of the composition, the candidate uses.
+ * [reading] is the lexicon reading it was found under; empty for one the lexicon did not give.
  */
 internal data class Candidate(
     val text: String,
@@ -19,4 +23,5 @@ internal data class Candidate(
     val source: CandidateSource =
         if (engineIndex >= 0) CandidateSource.RIME else CandidateSource.SYNTHETIC,
     val span: Int = 1,
+    val reading: String = "",
 )

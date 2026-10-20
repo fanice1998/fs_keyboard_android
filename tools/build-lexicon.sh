@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Cross-compile engine/fs_lexicon for the app ABIs and copy libfs_lexicon.so
-# into app/src/main/jniLibs. The .so stays out of git.
+# into app/src/main/jniLibs, then compile the phrase table, the Rime dictionary and
+# the bigrams into app/src/main/assets/lexicon/lexicon.bin. Neither output is in git.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -37,8 +38,13 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CLANG_BIN/aarch64-linux-andro
 export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$CLANG_BIN/x86_64-linux-android26-clang"
 
 cd "$ROOT/engine/fs_lexicon"
-cargo build --release --target aarch64-linux-android
-cargo build --release --target x86_64-linux-android
+cargo build --release --lib --target aarch64-linux-android
+cargo build --release --lib --target x86_64-linux-android
+cargo run --release --bin compile_lexicon -- \
+  "$ROOT/data/lexicon/mcbopomofo.tsv" \
+  "$ROOT/app/src/main/assets/rime/shared/fs_zhuyin.dict.yaml" \
+  "$ROOT/data/lexicon/bigram.tsv" \
+  "$ROOT/app/src/main/assets/lexicon/lexicon.bin"
 
 mkdir -p "$ROOT/app/src/main/jniLibs/arm64-v8a" "$ROOT/app/src/main/jniLibs/x86_64"
 cp "$ROOT/engine/fs_lexicon/target/aarch64-linux-android/release/libfs_lexicon.so" \

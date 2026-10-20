@@ -20,7 +20,7 @@ class ZhuyinCompositionTest {
         assertNull(composition.choose(word("今天", span = 2)))
         assertEquals("今天ㄊㄧㄢㄑㄧˋ", composition.text)
         assertEquals(listOf("ㄊㄧㄢ*", "ㄑㄧˋ"), composition.pending.queries())
-        assertEquals("今天天氣", composition.choose(word("天氣", span = 2)))
+        assertEquals("今天天氣", composition.choose(word("天氣", span = 2))?.text)
         assertTrue(composition.isEmpty)
     }
 
@@ -57,7 +57,8 @@ class ZhuyinCompositionTest {
             assertEquals(listOf("ㄅㄣˇ"), pending.queries())
             listOf(word("本", span = 1))
         }
-        assertEquals("功課本", result)
+        assertEquals("功課本", result.text)
+        assertTrue(result.learned.isEmpty())
         assertTrue(composition.isEmpty)
     }
 
@@ -65,7 +66,7 @@ class ZhuyinCompositionTest {
     fun convertAllKeepsChosenWordsAndFallsBackToZhuyin() {
         val composition = typed("ㄍㄨㄥㄅㄚ")
         composition.choose(word("公", span = 1))
-        assertEquals("公ㄅㄚ", composition.convertAll(first = null) { emptyList() })
+        assertEquals("公ㄅㄚ", composition.convertAll(first = null) { emptyList() }.text)
         assertTrue(composition.isEmpty)
     }
 
@@ -82,6 +83,25 @@ class ZhuyinCompositionTest {
         val shown = candidatesFor(composition.pending, listOf(word("公", span = 1)))
         assertEquals(listOf("公", "ㄍㄨㄥㄅㄚ"), shown.map { it.text })
         assertEquals(2, shown.last().span)
-        assertEquals("ㄍㄨㄥㄅㄚ", composition.choose(shown.last()))
+        assertEquals("ㄍㄨㄥㄅㄚ", composition.choose(shown.last())?.text)
+    }
+
+    @Test
+    fun twoWordsChosenInARowAreLearnedAsOnePhrase() {
+        val composition = typed("ㄓㄣㄉㄜㄐㄧㄚㄉㄜ")
+        fun lexical(text: String, reading: String) =
+            Candidate(text = text, engineIndex = -1, span = 2, reading = reading)
+        composition.choose(lexical("真的", "ㄓㄣ ㄉㄜ˙"))
+        val done = composition.choose(lexical("假的", "ㄐㄧㄚˇ ㄉㄜ˙"))!!
+        assertEquals("真的假的", done.text)
+        assertEquals(listOf("ㄓㄣ ㄉㄜ˙ ㄐㄧㄚˇ ㄉㄜ˙" to "真的假的"), done.learned)
+    }
+
+    @Test
+    fun aWordWithoutAReadingIsNotLearned() {
+        val composition = typed("ㄍㄨㄥㄅㄚ")
+        composition.choose(Candidate(text = "公", engineIndex = -1, reading = "ㄍㄨㄥ"))
+        val done = composition.choose(word("ㄅㄚ", span = 1))!!
+        assertTrue(done.learned.isEmpty())
     }
 }
