@@ -41,6 +41,9 @@ internal class KeyboardView(context: Context) : View(context) {
     private val boxes = ArrayList<KeyBox>()
     private var down: KeyBox? = null
     private var downPointer = NO_POINTER
+    private var downX = 0f
+    private var downY = 0f
+    private var zhuyinAreas: List<KeyArea> = emptyList()
     private var gap = 0f
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -143,6 +146,8 @@ internal class KeyboardView(context: Context) : View(context) {
     private fun press(pointer: Int, x: Float, y: Float, eventTime: Long) {
         down = hit(x, y)
         downPointer = pointer
+        downX = x
+        downY = y
         val spec = down?.spec
         invalidate()
         // Feedback on touch, not on release. The key itself still fires on release.
@@ -169,8 +174,14 @@ internal class KeyboardView(context: Context) : View(context) {
         invalidate()
     }
 
+    /** A zhuyin key from a touch carries the keys that touch may have meant. */
     private fun fire(action: KeyAction, eventTime: Long? = null) {
-        dispatch(action, haptic = false)
+        val typed = if (action is KeyAction.Bopomofo && eventTime != null) {
+            action.copy(nearby = TouchModel.nearby(downX, downY, zhuyinAreas))
+        } else {
+            action
+        }
+        dispatch(typed, haptic = false)
         eventTime?.let(onTyped)
     }
 
@@ -199,6 +210,7 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private fun layoutKeys(width: Int, height: Int) {
         boxes.clear()
+        zhuyinAreas = emptyList()
         if (rows.isEmpty() || width == 0 || height == 0) return
         gap = dp(6).toFloat()
         val pad = dp(3).toFloat()
@@ -215,6 +227,10 @@ internal class KeyboardView(context: Context) : View(context) {
                 left += cellWidth
             }
             top += rowHeight
+        }
+        zhuyinAreas = boxes.mapNotNull { box ->
+            val action = box.spec.action as? KeyAction.Bopomofo ?: return@mapNotNull null
+            KeyArea(action.label, box.rect.centerX(), box.rect.centerY(), box.rect.width(), box.rect.height())
         }
     }
 
