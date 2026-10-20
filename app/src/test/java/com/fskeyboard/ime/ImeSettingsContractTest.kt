@@ -19,4 +19,14 @@ class ImeSettingsContractTest {
         assertTrue(activity.contains("android:exported=\"true\""))
         assertTrue(activity.contains("android.intent.action.MAIN"))
     }
+
+    @Test
+    fun settingsPageClearsTheTitleAndPreviewsHeight() {
+        val activity = readProjectFile("src/main/java/com/fskeyboard/ime/settings/ImeSettingsActivity.kt")
+        val layout = readProjectFile("src/main/res/layout/activity_ime_settings.xml")
+        assertTrue(activity.contains("SettingsSafeArea.padding"))
+        assertTrue(activity.contains("titleBottomInWindow"))
+        assertTrue(layout.contains("@+id/settings_root"))
+        assertTrue(layout.contains("@+id/keyboard_height_preview"))
+    }
 }
