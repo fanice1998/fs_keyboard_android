@@ -141,7 +141,6 @@ class ImeSettingsActivity : Activity() {
         val bar = CandidateBarView(this)
         bar.render(
             CandidateUiState(
-                preedit = "ㄋㄧˇ",
                 candidates = listOf(
                     Candidate("你", engineIndex = 0),
                     Candidate("妳", engineIndex = 1),

@@ -14,9 +14,11 @@ import android.view.ViewTreeObserver
 import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import com.fskeyboard.ime.candidate.CandidateBarView
 import com.fskeyboard.ime.candidate.CandidateController
+import com.fskeyboard.ime.candidate.CandidatePanelView
 import com.fskeyboard.ime.candidate.ImeUiState
 import com.fskeyboard.ime.engine.RustZhuyinLexicon
 import com.fskeyboard.ime.keyboard.KeyAction
@@ -41,6 +43,8 @@ class FsKeyboardService : InputMethodService() {
     private lateinit var controller: CandidateController
     private var keyboard: KeyboardView? = null
     private var candidateBar: CandidateBarView? = null
+    private var candidatePanel: CandidatePanelView? = null
+    private var panelOpen = false
     private var inputRoot: LinearLayout? = null
     private var navigationSpacer: View? = null
     private var latestInsets: WindowInsets? = null
@@ -104,12 +108,21 @@ class FsKeyboardService : InputMethodService() {
 
     override fun onCreateInputView(): View {
         configureWindow()
+        panelOpen = false
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(KeyboardPalette.of(isNightMode()).background)
         }
         candidateBar = CandidateBarView(this).apply {
             onCandidate = { controller.onCandidate(it) }
+            onExpand = { showPanel(!panelOpen) }
+        }
+        candidatePanel = CandidatePanelView(this).apply {
+            visibility = View.GONE
+            onCandidate = {
+                showPanel(false)
+                controller.onCandidate(it)
+            }
         }
         keyboard = KeyboardView(this).apply {
             rowHeightDp = KeyboardPreferences(this@FsKeyboardService).rowHeightDp()
@@ -136,8 +149,25 @@ class FsKeyboardService : InputMethodService() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
+        // The panel lies over the keys, so opening it does not change the keyboard height.
+        val keys = FrameLayout(this).apply {
+            addView(
+                keyboard,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            addView(
+                candidatePanel,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        }
         root.addView(
-            keyboard,
+            keys,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -363,7 +393,20 @@ class FsKeyboardService : InputMethodService() {
         traced("ime.render") {
             keyboard?.setMode(state.mode)
             candidateBar?.render(state.candidates)
+            when {
+                state.candidates.candidates.isEmpty() -> showPanel(false)
+                panelOpen -> candidatePanel?.render(state.candidates.candidates)
+            }
         }
+    }
+
+    /** Opens every candidate over the keys. It stays closed while there are no candidates. */
+    private fun showPanel(open: Boolean) {
+        val candidates = pending.candidates.candidates
+        panelOpen = open && candidates.isNotEmpty()
+        if (panelOpen) candidatePanel?.render(candidates)
+        candidatePanel?.visibility = if (panelOpen) View.VISIBLE else View.GONE
+        candidateBar?.expanded = panelOpen
     }
 
     private companion object {

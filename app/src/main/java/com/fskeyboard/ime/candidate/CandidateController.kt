@@ -229,7 +229,7 @@ internal class CandidateController(
             presented = shown
             Log.i(TAG, "latency lookup=${snapshot.decodeMillis}ms candidates=${snapshot.candidates.size}")
         }
-        onUi(ui(snapshot, presented))
+        onUi(ui(presented))
         if (snapshot != null && mode == KeyboardMode.ZHUYIN && pipeline.willScore(snapshot.candidates.size)) {
             val contextBefore = contextBefore()
             pipeline.presentAsync(snapshot, contextBefore) { trace ->
@@ -253,23 +253,18 @@ internal class CandidateController(
         if (superseded || !acceptRerankUpdate(ticket, generation, trace.fallback)) return
         if (trace.candidates == presented) return
         presented = trace.candidates
-        onUi(ui(snapshot, presented))
+        onUi(ui(presented))
     }
 
     private fun worthLogging(trace: RerankTrace): Boolean {
         return trace.fallback != RerankFallback.DISABLED && trace.fallback != RerankFallback.UNAVAILABLE
     }
 
-    private fun ui(snapshot: EngineSnapshot?, candidates: List<Candidate>): ImeUiState {
-        val preedit = when {
-            mode != KeyboardMode.ZHUYIN || snapshot == null -> ""
-            else -> snapshot.preedit.ifEmpty { snapshot.composingPreview }
-        }
+    private fun ui(candidates: List<Candidate>): ImeUiState {
         val visible = if (mode == KeyboardMode.ZHUYIN) candidates else emptyList()
         return ImeUiState(
             mode = mode,
             candidates = CandidateUiState(
-                preedit = preedit,
                 candidates = visible,
                 message = if (visible.isEmpty()) statusMessage() else "",
             ),
