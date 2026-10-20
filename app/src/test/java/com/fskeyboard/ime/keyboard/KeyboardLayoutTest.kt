@@ -74,14 +74,50 @@ class KeyboardLayoutTest {
     }
 
     @Test
-    fun symbolsReturnsToZhuyin() {
-        val actions = KeyboardLayouts.rows(KeyboardMode.SYMBOLS)
+    fun symbolsFromZhuyinUseChinesePunctuationAndReturnToZhuyin() {
+        val specs = KeyboardLayouts.rows(KeyboardMode.SYMBOLS, base = KeyboardMode.ZHUYIN)
             .flatMap { it.keys }
-            .map { it.action }
-        assertTrue(actions.contains(KeyAction.SetMode(KeyboardMode.ZHUYIN)))
+        val actions = specs.map { it.action }
         assertTrue(actions.contains(KeyAction.Character('，')))
         assertTrue(actions.contains(KeyAction.Character('。')))
-        assertEquals(KeyIcon.RETURN, KeyboardLayouts.rows(KeyboardMode.SYMBOLS).flatMap { it.keys }
-            .first { it.action == KeyAction.Enter }.icon)
+        assertTrue(actions.contains(KeyAction.Character('「')))
+        assertTrue(actions.contains(KeyAction.SetMode(KeyboardMode.SYMBOLS_MORE)))
+        assertEquals("ㄅㄆㄇ", specs.first { it.action == KeyAction.SetMode(KeyboardMode.ZHUYIN) }.label)
+        assertEquals(KeyIcon.RETURN, specs.first { it.action == KeyAction.Enter }.icon)
+    }
+
+    @Test
+    fun symbolsFromLatinUseAsciiAndReturnToLatin() {
+        for (mode in listOf(KeyboardMode.SYMBOLS, KeyboardMode.SYMBOLS_MORE)) {
+            val specs = KeyboardLayouts.rows(mode, base = KeyboardMode.LATIN).flatMap { it.keys }
+            val back = specs.first { it.role == KeyRole.MODIFIER && it.label == "ABC" }
+            assertEquals(KeyAction.SetMode(KeyboardMode.LATIN), back.action)
+            assertFalse(specs.any { it.action == KeyAction.Character('，') })
+        }
+        val numbers = KeyboardLayouts.rows(KeyboardMode.SYMBOLS, base = KeyboardMode.LATIN)
+        assertEquals("1234567890", numbers[0].keys.joinToString("") { it.label })
+        assertEquals("-/:;()$&@\"", numbers[1].keys.joinToString("") { it.label })
+    }
+
+    @Test
+    fun theTwoSymbolPagesSwitchToEachOther() {
+        for (base in listOf(KeyboardMode.ZHUYIN, KeyboardMode.LATIN)) {
+            val numbers = KeyboardLayouts.rows(KeyboardMode.SYMBOLS, base = base).flatMap { it.keys }
+            val more = KeyboardLayouts.rows(KeyboardMode.SYMBOLS_MORE, base = base).flatMap { it.keys }
+            assertEquals("#+=", numbers.first { it.action == KeyAction.SetMode(KeyboardMode.SYMBOLS_MORE) }.label)
+            assertEquals("123", more.first { it.action == KeyAction.SetMode(KeyboardMode.SYMBOLS) }.label)
+        }
+    }
+
+    @Test
+    fun everySymbolRowIsAsWideAsTenKeys() {
+        for (base in listOf(KeyboardMode.ZHUYIN, KeyboardMode.LATIN)) {
+            for (mode in listOf(KeyboardMode.SYMBOLS, KeyboardMode.SYMBOLS_MORE)) {
+                val rows = KeyboardLayouts.rows(mode, base = base)
+                for (row in rows.take(3)) {
+                    assertEquals("$base $mode", 10f, row.keys.sumOf { it.weight.toDouble() }.toFloat(), 0.001f)
+                }
+            }
+        }
     }
 }

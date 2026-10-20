@@ -33,6 +33,9 @@ internal class CandidateController(
     },
 ) {
     private var mode = KeyboardMode.ZHUYIN
+
+    /** The letter keyboard the symbol pages return to. */
+    private var base = KeyboardMode.ZHUYIN
     private var presented: List<Candidate> = emptyList()
     private val composition = ZhuyinComposition()
     private var generation = 0L
@@ -95,11 +98,13 @@ internal class CandidateController(
         }
     }
 
+    /** Leaving zhuyin commits what was typed, the way Enter does. */
     private fun setMode(next: KeyboardMode) {
         if (next == mode) return
-        if (mode == KeyboardMode.ZHUYIN) {
-            cancelComposition()
+        if (mode == KeyboardMode.ZHUYIN && hasComposition) {
+            finishComposition(convertAll())
         }
+        if (next.isLetters) base = next
         mode = next
         presented = emptyList()
         publish()
@@ -264,6 +269,7 @@ internal class CandidateController(
         val visible = if (mode == KeyboardMode.ZHUYIN) candidates else emptyList()
         return ImeUiState(
             mode = mode,
+            base = base,
             candidates = CandidateUiState(
                 candidates = visible,
                 message = if (visible.isEmpty()) statusMessage() else "",

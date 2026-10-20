@@ -391,7 +391,7 @@ class FsKeyboardService : InputMethodService() {
     private fun render(state: ImeUiState) {
         pending = state
         traced("ime.render") {
-            keyboard?.setMode(state.mode)
+            keyboard?.setMode(state.mode, state.base)
             candidateBar?.render(state.candidates)
             when {
                 state.candidates.candidates.isEmpty() -> showPanel(false)

@@ -1,10 +1,16 @@
 package com.fskeyboard.ime.keyboard
 
 internal object KeyboardLayouts {
-    fun rows(mode: KeyboardMode, shifted: Boolean = false): List<KeyRow> = when (mode) {
+    /** [base] is the letter keyboard the symbol pages were opened from. */
+    fun rows(
+        mode: KeyboardMode,
+        shifted: Boolean = false,
+        base: KeyboardMode = KeyboardMode.ZHUYIN,
+    ): List<KeyRow> = when (mode) {
         KeyboardMode.ZHUYIN -> zhuyin()
         KeyboardMode.LATIN -> latin(shifted)
-        KeyboardMode.SYMBOLS -> symbols()
+        KeyboardMode.SYMBOLS -> symbols(base, more = false)
+        KeyboardMode.SYMBOLS_MORE -> symbols(base, more = true)
     }
 
     fun letterKeys(mode: KeyboardMode, shifted: Boolean = false): Set<Char> {
@@ -76,20 +82,45 @@ internal object KeyboardLayouts {
         ),
     )
 
-    private fun symbols(): List<KeyRow> = listOf(
-        KeyRow(chars("1234567890")),
-        KeyRow(chars("@#\$%&*-+()")),
-        KeyRow(chars("~`|\\/[]{}") + deleteKey()),
-        KeyRow(
-            listOf(
-                modeKey("注", KeyboardMode.ZHUYIN, 1.5f),
-                KeySpec("，", KeyAction.Character('，')),
-                space(),
-                KeySpec("。", KeyAction.Character('。')),
-                iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.7f),
+    /**
+     * iOS 123 and #+= pages. From Latin they are the ASCII pages; from zhuyin the
+     * punctuation is full-width Chinese. Row three is five wide keys between the
+     * page key and delete, the same width as ten keys.
+     */
+    private fun symbols(base: KeyboardMode, more: Boolean): List<KeyRow> {
+        val chinese = base == KeyboardMode.ZHUYIN
+        val (first, second, third) = when {
+            !more && !chinese -> Triple("1234567890", "-/:;()$&@\"", ".,?!'")
+            !more && chinese -> Triple("1234567890", "-/：；（）$＠「」", "。，、？！")
+            !chinese -> Triple("[]{}#%^*+=", "_\\|~<>€£¥•", ".,?!'")
+            else -> Triple("【】｛｝#%^*+=", "_—\\｜～《》$&·", "…『』〈〉")
+        }
+        val page = if (more) {
+            modeKey("123", KeyboardMode.SYMBOLS, 1.5f)
+        } else {
+            modeKey("#+=", KeyboardMode.SYMBOLS_MORE, 1.5f)
+        }
+        val letters = if (chinese) KeyboardMode.ZHUYIN else KeyboardMode.LATIN
+        val other = if (chinese) KeyboardMode.LATIN else KeyboardMode.ZHUYIN
+        return listOf(
+            KeyRow(chars(first)),
+            KeyRow(chars(second)),
+            KeyRow(listOf(page) + chars(third).map { it.copy(weight = 1.4f) } + deleteKey()),
+            KeyRow(
+                listOf(
+                    modeKey(if (chinese) "ㄅㄆㄇ" else "ABC", letters, 1.45f),
+                    iconKey(
+                        icon = KeyIcon.GLOBE,
+                        action = KeyAction.SetMode(other),
+                        weight = 1.15f,
+                        secondary = KeyAction.NextInputMethod,
+                    ),
+                    KeySpec("空格", KeyAction.Space, weight = 4.6f, role = KeyRole.SPACE),
+                    iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.85f),
+                ),
             ),
-        ),
-    )
+        )
+    }
 
     private fun letters(value: String, shifted: Boolean = false): List<KeySpec> {
         return value.map { letter ->

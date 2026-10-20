@@ -27,8 +27,9 @@ internal class KeyboardView(context: Context) : View(context) {
         }
 
     private var mode = KeyboardMode.ZHUYIN
+    private var base = KeyboardMode.ZHUYIN
     private var shifted = false
-    private var rows = KeyboardLayouts.rows(mode, shifted)
+    private var rows = KeyboardLayouts.rows(mode, shifted, base)
     private val boxes = ArrayList<KeyBox>()
     private var down: KeyBox? = null
     private var downPointer = NO_POINTER
@@ -56,9 +57,11 @@ internal class KeyboardView(context: Context) : View(context) {
         fire(action)
     }
 
-    fun setMode(mode: KeyboardMode) {
-        if (this.mode == mode) return
+    /** [base] is the letter keyboard that the symbol pages return to. */
+    fun setMode(mode: KeyboardMode, base: KeyboardMode = this.base) {
+        if (this.mode == mode && this.base == base) return
         this.mode = mode
+        this.base = base
         shifted = false
         rebuild()
     }
@@ -178,7 +181,7 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     private fun rebuild() {
-        rows = KeyboardLayouts.rows(mode, shifted)
+        rows = KeyboardLayouts.rows(mode, shifted, base)
         requestLayout()
         if (width > 0 && height > 0) {
             layoutKeys(width, height)

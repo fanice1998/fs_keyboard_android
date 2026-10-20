@@ -9,5 +9,7 @@ internal data class CandidateUiState(
 
 internal data class ImeUiState(
     val mode: KeyboardMode = KeyboardMode.ZHUYIN,
+    /** The letter keyboard the symbol pages return to. */
+    val base: KeyboardMode = KeyboardMode.ZHUYIN,
     val candidates: CandidateUiState = CandidateUiState(),
 )

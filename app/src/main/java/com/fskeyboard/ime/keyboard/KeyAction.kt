@@ -1,9 +1,18 @@
 package com.fskeyboard.ime.keyboard
 
+/**
+ * [ZHUYIN] and [LATIN] are letter keyboards. [SYMBOLS] is the 123 page and
+ * [SYMBOLS_MORE] the #+= page; both return to the letter keyboard they were opened from.
+ */
 internal enum class KeyboardMode {
     ZHUYIN,
     LATIN,
     SYMBOLS,
+    SYMBOLS_MORE,
+    ;
+
+    val isLetters: Boolean
+        get() = this == ZHUYIN || this == LATIN
 }
 
 internal sealed interface KeyAction {
