@@ -14,6 +14,7 @@ captures/
 /engine/fs_lexicon/target/
 *.ocd2
 app/src/main/assets/rerank/*.onnx
+app/src/main/assets/lexicon/lexicon.bin
 third_party/librime/include/**
 third_party/librime/jniLibs/**
 !third_party/librime/include/.gitkeep

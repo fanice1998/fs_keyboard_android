@@ -8,7 +8,7 @@ Each data row is `reading text score`, syllables joined by `-`, score a log10 pr
 Output rows are `reading<TAB>text<TAB>score`, syllables joined by a space, sorted by
 reading and then by descending score. Punctuation, symbols and date macros are dropped.
 
-    python3 -I tools/import-mcbopomofo.py <data.txt> <commit> app/src/main/assets/lexicon/mcbopomofo.tsv
+    python3 -I tools/import-mcbopomofo.py <data.txt> <commit> data/lexicon/mcbopomofo.tsv
 """
 import sys
 

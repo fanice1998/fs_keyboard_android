@@ -215,7 +215,7 @@ tools/install-shared-data.sh /path/to/opencc/share/opencc
 - `default.yaml`：`schema_list` 指向 `fs_zhuyin`
 - `fs_zhuyin.schema.yaml`：注音、`zh_tw` 預設開啟、`simplifier.opencc_config: t2tw.json`、`enable_user_dict: true`
 - `fs_zhuyin.dict.yaml`：單字是全字庫注音（CNS 第 1、2 字面），詞組是專案自寫的。文字是臺灣繁體，編碼是注音，聲調在音節最後，輕聲也是後綴
-- `../../lexicon/mcbopomofo.tsv`：Rust 詞庫的主要詞組表，約 17 萬筆，由 `tools/import-mcbopomofo.py` 從小麥注音（MIT）轉出。`fs_zhuyin.dict.yaml` 只補它沒有的讀音，排在最後
+- `data/lexicon/mcbopomofo.tsv`（不在 assets 裡）：Rust 詞庫的主要詞組表，約 17 萬筆，由 `tools/import-mcbopomofo.py` 從小麥注音（MIT）轉出。`fs_zhuyin.dict.yaml` 只補它沒有的讀音，排在最後。`tools/build-lexicon.sh` 把兩者編成 `assets/lexicon/lexicon.bin`，App 啟動時直接讀進記憶體，不用解析
 - `opencc/t2tw.json`：預設。通用繁體對到臺灣標準
 - `opencc/s2tw.json`：詞庫若改成簡體，把方案的 `opencc_config` 換成這個檔
 

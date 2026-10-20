@@ -97,11 +97,10 @@ internal class RustZhuyinLexicon : ZhuyinLexicon {
         try {
             val start = SystemClock.elapsedRealtime()
             RustLexiconNative.load()
-            val table = context.assets.open(TABLE).use { it.readBytes() }
-            val dict = context.assets.open(DICT).use { it.readBytes() }
+            val compiled = context.assets.open(COMPILED).use { it.readBytes() }
             val user = File(context.filesDir, USER_FILE).also { userFile = it }
             val learned = if (user.isFile) user.readBytes() else ByteArray(0)
-            val rc = RustLexiconNative.nativeLoad(table, dict, learned)
+            val rc = RustLexiconNative.nativeLoad(compiled, learned)
             if (rc == 0) {
                 Log.i(TAG, "lexicon loaded in ${SystemClock.elapsedRealtime() - start}ms")
                 statusValue = EngineStatus.READY
@@ -122,8 +121,8 @@ internal class RustZhuyinLexicon : ZhuyinLexicon {
 
     private companion object {
         const val TAG = "FsKeyboard"
-        const val TABLE = "lexicon/mcbopomofo.tsv"
-        const val DICT = "rime/shared/fs_zhuyin.dict.yaml"
+        /** Built by tools/build-lexicon.sh from data/lexicon/mcbopomofo.tsv and the Rime dictionary. */
+        const val COMPILED = "lexicon/lexicon.bin"
         const val USER_FILE = "lexicon/user.tsv"
     }
 }

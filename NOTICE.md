@@ -53,7 +53,7 @@ Unicode, Inc. Unicode data is used under the Unicode Terms of Use,
 https://www.unicode.org/copyright.html. The data files are provided "AS IS",
 without warranty.
 
-app/src/main/assets/lexicon/mcbopomofo.tsv is converted by
+data/lexicon/mcbopomofo.tsv is converted by
 tools/import-mcbopomofo.py from the data.txt that McBopomofo builds from its
 Source/Data (https://github.com/openvanilla/McBopomofo, commit
 be6564acad6c4d3265c34a2e1a872d80f9db6068). McBopomofo is MIT License,
@@ -76,7 +76,8 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 The keyboard looks phrases up in mcbopomofo.tsv first. fs_zhuyin.dict.yaml adds
-the readings that table lacks, ranked below every table row.
+the readings that table lacks, ranked below every table row. Both are compiled
+into app/src/main/assets/lexicon/lexicon.bin at build time.
 
 ONNX Runtime for Android (com.microsoft.onnxruntime:onnxruntime-android) is
 MIT. The neural reranker calls its public Java API. No model file is vendored.

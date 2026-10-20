@@ -1,8 +1,12 @@
+mod store;
+
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-/// Longest phrase, in typed syllables, that a candidate list looks for.
+pub use store::Row;
+use store::{initials_of, EntryRef, Store};
+
 const MAX_SPAN: usize = 8;
 /// Tones are packed three bits per syllable, so longer readings are skipped.
 const MAX_SYLLABLES: usize = 10;
@@ -23,25 +27,21 @@ const MAX_SPLITS: usize = 3;
 
 static LEXICON: Mutex<Option<Lexicon>> = Mutex::new(None);
 
-#[derive(Clone, Debug)]
-struct Entry {
-    text: Box<str>,
-    /// Toneless reading, syllables joined by a space. Shared with the [Lexicon::exact] key.
-    reading: Arc<str>,
-    /// Tone of syllable i in bits 3i..3i+3: 1 level, 2 ˊ, 3 ˇ, 4 ˋ, 5 ˙, 0 any.
-    tones: u32,
-    score: f32,
-}
-
-#[derive(Clone, Debug, Default)]
+/// The compiled lexicon, plus the phrases learned since it was opened.
+/// Learned entries take the ids after the compiled ones.
 pub struct Lexicon {
-    entries: Vec<Entry>,
-    /// Entry ids by toneless reading, best score first.
-    exact: HashMap<Arc<str>, Vec<u32>>,
-    /// Entry ids by the first glyph of each syllable, best score first.
-    initials: HashMap<Box<str>, Vec<u32>>,
+    store: Store,
+    learned: Vec<Learned>,
+    learned_by_reading: HashMap<Box<str>, Vec<u32>>,
+    learned_by_initials: HashMap<Box<str>, Vec<u32>>,
     /// Syllable bodies that a longer syllable starts with, such as ㄐ and ㄐㄧ.
     open: HashSet<Box<str>>,
+}
+
+struct Learned {
+    text: Box<str>,
+    reading: Box<str>,
+    tones: u32,
 }
 
 /// One candidate. [span] is how many typed syllables, from the front, it uses.
@@ -94,12 +94,12 @@ impl Lexicon {
                 if out.len() >= CANDIDATE_LIMIT || taken >= limit {
                     break;
                 }
-                let entry = &self.entries[id as usize];
-                let text: &str = &entry.text;
+                let entry = self.entry(id);
+                let text = entry.text;
                 if sentence_text.as_deref() == Some(text) || !seen.insert(text) {
                     continue;
                 }
-                out.push(Hit { span, text: Cow::Borrowed(text), reading: reading_of(entry) });
+                out.push(Hit { span, text: Cow::Borrowed(text), reading: reading_of(&entry) });
                 taken += 1;
             }
         }
@@ -112,7 +112,8 @@ impl Lexicon {
     }
 
     /// Remembers [text] under [reading], given the way [Lexicon::candidates] reports
-    /// readings, at [USER_SCORE]. Returns false when it was already remembered.
+    /// readings, at [USER_SCORE], above the same word already in the table.
+    /// Returns false when it was already learned.
     pub fn learn(&mut self, reading: &str, text: &str) -> bool {
         let Some((key, tones)) = split_reading(reading) else {
             return false;
@@ -120,28 +121,25 @@ impl Lexicon {
         if text.is_empty() {
             return false;
         }
-        let existing = self.exact.get(key.as_str()).and_then(|ids| {
-            ids.iter().copied().find(|&id| {
-                let entry = &self.entries[id as usize];
-                &*entry.text == text && (entry.tones == tones || tones_cover(tones, entry.tones))
+        let known = self.learned_by_reading.get(key.as_str()).is_some_and(|ids| {
+            ids.iter().any(|&id| {
+                let entry = self.entry(id);
+                entry.text == text && (entry.tones == tones || tones_cover(tones, entry.tones))
             })
         });
-        match existing {
-            Some(id) if self.entries[id as usize].score >= USER_SCORE => false,
-            Some(id) => {
-                self.entries[id as usize].score = USER_SCORE;
-                self.resort(&key);
-                true
-            }
-            None => {
-                let id = self.push(&key, tones, text, USER_SCORE);
-                let initials = initials_of(&key);
-                self.initials.entry(initials.into_boxed_str()).or_default().push(id);
-                self.add_open(&key);
-                self.resort(&key);
-                true
+        if known {
+            return false;
+        }
+        let id = (self.store.len() + self.learned.len()) as u32;
+        self.learned.push(Learned { text: text.into(), reading: key.as_str().into(), tones });
+        self.learned_by_reading.entry(key.as_str().into()).or_default().push(id);
+        self.learned_by_initials.entry(initials_of(&key).into_boxed_str()).or_default().push(id);
+        for syllable in key.split(' ') {
+            for (index, _) in syllable.char_indices().skip(1) {
+                self.open.insert(syllable[..index].into());
             }
         }
+        true
     }
 
     /// Highest summed log probability over every way to split [query] into words.
@@ -160,8 +158,8 @@ impl Lexicon {
                 }
                 let word = match self.ranked_span(&query[start..end], 1).first() {
                     Some(&(id, score)) => {
-                        let entry = &self.entries[id as usize];
-                        Some((score, Cow::Borrowed(&*entry.text), reading_of(entry)))
+                        let entry = self.entry(id);
+                        Some((score, Cow::Borrowed(entry.text), reading_of(&entry)))
                     }
                     None if span == 1 => {
                         let typed = &query[start];
@@ -218,12 +216,12 @@ impl Lexicon {
     fn ranked(&self, tokens: &[Token<'_>], limit: usize) -> Vec<(u32, f32)> {
         let key = tokens.iter().map(|token| token.body).collect::<Vec<_>>().join(" ");
         let mut out = Vec::new();
-        for &id in self.exact.get(key.as_str()).into_iter().flatten() {
+        for id in self.by_reading(&key) {
             if out.len() >= limit {
                 break;
             }
-            let entry = &self.entries[id as usize];
-            if tones_match(entry.tones, tokens) {
+            let entry = self.entry(id);
+            if tones_match(&entry, tokens) {
                 out.push((id, entry.score));
             }
         }
@@ -232,15 +230,15 @@ impl Lexicon {
             .any(|token| token.tone.is_none() && self.open.contains(token.body));
         if abbreviated {
             let mut taken = 0;
-            for &id in self.initials.get(initials_of(&key).as_str()).into_iter().flatten() {
+            for id in self.by_initials(&initials_of(&key)) {
                 if taken >= limit {
                     break;
                 }
-                let entry = &self.entries[id as usize];
-                if *entry.reading == *key || !starts_match(&entry.reading, tokens) {
+                let entry = self.entry(id);
+                if entry.reading == key || !starts_match(entry.reading, tokens) {
                     continue;
                 }
-                if tones_match(entry.tones, tokens) {
+                if tones_match(&entry, tokens) {
                     out.push((id, entry.score - ABBREVIATION_PENALTY));
                     taken += 1;
                 }
@@ -251,82 +249,25 @@ impl Lexicon {
         out
     }
 
-    fn push(&mut self, key: &str, tones: u32, text: &str, score: f32) -> u32 {
-        let id = self.entries.len() as u32;
-        let reading: Arc<str> = match self.exact.get_key_value(key) {
-            Some((shared, _)) => shared.clone(),
-            None => Arc::from(key),
-        };
-        self.exact.entry(reading.clone()).or_default().push(id);
-        self.entries.push(Entry { text: text.into(), reading, tones, score });
-        id
-    }
-
-    /// [unique] skips the duplicate check for a source that is already deduplicated.
-    fn insert(&mut self, reading: &str, text: &str, score: f32, unique: bool) {
-        let Some((key, tones)) = split_reading(reading) else {
-            return;
-        };
-        if !unique {
-            let duplicate = self.exact.get(key.as_str()).is_some_and(|ids| {
-                ids.iter().any(|&id| {
-                    let entry = &self.entries[id as usize];
-                    entry.tones == tones && &*entry.text == text
-                })
-            });
-            if duplicate {
-                return;
+    fn entry(&self, id: u32) -> EntryRef<'_> {
+        match (id as usize).checked_sub(self.store.len()) {
+            None => self.store.entry(id),
+            Some(index) => {
+                let learned = &self.learned[index];
+                EntryRef { text: &learned.text, reading: &learned.reading, tones: learned.tones, score: USER_SCORE }
             }
         }
-        self.push(&key, tones, text, score);
     }
 
-    fn finish(&mut self) {
-        let entries = &self.entries;
-        let by_score = |left: &u32, right: &u32| {
-            entries[*right as usize].score.total_cmp(&entries[*left as usize].score)
-        };
-        for ids in self.exact.values_mut() {
-            ids.sort_by(by_score);
-            ids.shrink_to_fit();
-        }
-        let mut initials: HashMap<Box<str>, Vec<u32>> = HashMap::new();
-        let mut open = HashSet::new();
-        for (key, ids) in &self.exact {
-            initials.entry(initials_of(key).into_boxed_str()).or_default().extend(ids);
-            for syllable in key.split(' ') {
-                for (index, _) in syllable.char_indices().skip(1) {
-                    open.insert(syllable[..index].into());
-                }
-            }
-        }
-        for ids in initials.values_mut() {
-            ids.sort_by(by_score);
-            ids.shrink_to_fit();
-        }
-        self.initials = initials;
-        self.open = open;
+    /// Learned entries first: they all score [USER_SCORE], above every compiled one.
+    fn by_reading<'a>(&'a self, key: &str) -> impl Iterator<Item = u32> + 'a {
+        let learned = self.learned_by_reading.get(key).into_iter().flatten().copied();
+        learned.chain(self.store.by_reading(key))
     }
 
-    fn resort(&mut self, key: &str) {
-        let entries = &self.entries;
-        let by_score = |left: &u32, right: &u32| {
-            entries[*right as usize].score.total_cmp(&entries[*left as usize].score)
-        };
-        if let Some(ids) = self.exact.get_mut(key) {
-            ids.sort_by(by_score);
-        }
-        if let Some(ids) = self.initials.get_mut(initials_of(key).as_str()) {
-            ids.sort_by(by_score);
-        }
-    }
-
-    fn add_open(&mut self, key: &str) {
-        for syllable in key.split(' ') {
-            for (index, _) in syllable.char_indices().skip(1) {
-                self.open.insert(syllable[..index].into());
-            }
-        }
+    fn by_initials<'a>(&'a self, key: &str) -> impl Iterator<Item = u32> + 'a {
+        let learned = self.learned_by_initials.get(key).into_iter().flatten().copied();
+        learned.chain(self.store.by_initials(key))
     }
 
     /// `span<TAB>text<TAB>reading` lines, one per candidate.
@@ -346,18 +287,17 @@ impl Lexicon {
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.store.len() + self.learned.len()
     }
 }
 
-/// Builds the lexicon from the phrase table, the Rime dictionary below it, and the
-/// phrases the user taught it.
+/// Entries from the phrase table, then the Rime dictionary rows it lacks.
 /// The table rows are `reading<TAB>text<TAB>log10 probability`, one per reading and text,
 /// as tools/import-mcbopomofo.py writes them; `#` lines are comments.
 /// Dictionary rows that the table already has keep the table score.
-/// User rows are `reading<TAB>text`, as [Lexicon::learn] takes them.
-pub fn build(table: &str, dict_yaml: &str, user: &str) -> Lexicon {
-    let mut lexicon = Lexicon::default();
+pub fn rows(table: &str, dict_yaml: &str) -> Vec<Row> {
+    let mut out = Vec::new();
+    let mut seen: HashSet<(String, u32, String)> = HashSet::new();
     for line in table.lines() {
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -366,23 +306,52 @@ pub fn build(table: &str, dict_yaml: &str, user: &str) -> Lexicon {
         let (Some(reading), Some(text), Some(score)) = (parts.next(), parts.next(), parts.next()) else {
             continue;
         };
-        let Ok(score) = score.trim().parse::<f32>() else {
+        let (Ok(score), Some((key, tones))) = (score.trim().parse::<f32>(), split_reading(reading)) else {
             continue;
         };
         if !text.is_empty() {
-            lexicon.insert(reading, text, score, true);
+            seen.insert((key.clone(), tones, text.to_string()));
+            out.push(Row { key, tones, text: text.to_string(), score });
         }
     }
     for (reading, text) in dict_rows(dict_yaml) {
-        lexicon.insert(reading, text, SUPPLEMENT_SCORE, false);
+        let Some((key, tones)) = split_reading(reading) else {
+            continue;
+        };
+        if seen.insert((key.clone(), tones, text.to_string())) {
+            out.push(Row { key, tones, text: text.to_string(), score: SUPPLEMENT_SCORE });
+        }
     }
-    lexicon.finish();
+    out
+}
+
+/// The phrase table and Rime dictionary in the compiled format `assets/lexicon/lexicon.bin` holds.
+pub fn compile(table: &str, dict_yaml: &str) -> Vec<u8> {
+    store::compile(&rows(table, dict_yaml))
+}
+
+/// Opens a compiled lexicon and learns the user's `reading<TAB>text` lines on top.
+pub fn open(compiled: Vec<u8>, user: &str) -> Result<Lexicon, &'static str> {
+    let store = Store::open(compiled)?;
+    let open = store.open_bodies().map(Box::from).collect();
+    let mut lexicon = Lexicon {
+        store,
+        learned: Vec::new(),
+        learned_by_reading: HashMap::new(),
+        learned_by_initials: HashMap::new(),
+        open,
+    };
     for line in user.lines() {
         if let Some((reading, text)) = line.split_once('\t') {
             lexicon.learn(reading, text);
         }
     }
-    lexicon
+    Ok(lexicon)
+}
+
+/// Compiles and opens in one step, for tests and tools.
+pub fn build(table: &str, dict_yaml: &str, user: &str) -> Lexicon {
+    open(compile(table, dict_yaml), user).expect("a freshly compiled lexicon opens")
 }
 
 /// Rows of a Rime dictionary: the body after the `...` line, `text<TAB>code<TAB>weight`.
@@ -512,21 +481,12 @@ fn split_reading(reading: &str) -> Option<(String, u32)> {
     (count > 0).then_some((key, tones))
 }
 
-fn reading_of(entry: &Entry) -> String {
+fn reading_of(entry: &EntryRef<'_>) -> String {
     entry
         .reading
         .split(' ')
         .enumerate()
         .map(|(index, body)| format!("{body}{}", mark_of((entry.tones >> (3 * index)) & 0b111)))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// The first glyph of each syllable, joined by a space.
-fn initials_of(key: &str) -> String {
-    key.split(' ')
-        .filter_map(|syllable| syllable.chars().next())
-        .map(String::from)
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -542,14 +502,27 @@ fn starts_match(reading: &str, tokens: &[Token<'_>]) -> bool {
 }
 
 /// A stored tone of 0 matches any typed tone; a token without a tone matches any stored one.
-fn tones_match(tones: u32, tokens: &[Token<'_>]) -> bool {
+/// 一 and 不 change tone before another syllable, and people type either tone, so for
+/// those characters the base tone and the changed one match each other.
+fn tones_match(entry: &EntryRef<'_>, tokens: &[Token<'_>]) -> bool {
+    let mut characters = entry.text.chars();
     tokens.iter().enumerate().all(|(index, token)| {
-        let stored = (tones >> (3 * index)) & 0b111;
-        match token.tone {
-            Some(tone) => stored == 0 || stored == u32::from(tone),
-            None => true,
-        }
+        let character = characters.next();
+        let stored = (entry.tones >> (3 * index)) & 0b111;
+        let Some(typed) = token.tone.map(u32::from) else {
+            return true;
+        };
+        stored == 0 || stored == typed || sandhi(character, stored, typed)
     })
+}
+
+/// 一 is ㄧ, ㄧˊ before a fourth tone, ㄧˋ before the others; 不 is ㄅㄨˋ, ㄅㄨˊ before a fourth tone.
+fn sandhi(character: Option<char>, stored: u32, typed: u32) -> bool {
+    match character {
+        Some('一') => matches!(stored, 1 | 2 | 4) && matches!(typed, 1 | 2 | 4),
+        Some('不') => matches!(stored, 2 | 4) && matches!(typed, 2 | 4),
+        _ => false,
+    }
 }
 
 /// Whether packed tones [wide], where 0 is any tone, include every tone in [narrow].
@@ -561,7 +534,7 @@ fn tones_cover(wide: u32, narrow: u32) -> bool {
 }
 
 mod android {
-    use super::{build, LEXICON};
+    use super::{open, LEXICON};
     use jni::objects::{JByteArray, JClass, JString};
     use jni::sys::{jboolean, jint, jstring, JNI_FALSE, JNI_TRUE};
     use jni::JNIEnv;
@@ -571,20 +544,20 @@ mod android {
         String::from_utf8(raw).ok()
     }
 
+    /// 0 on success, -1 when an argument cannot be read, -2 when the lexicon is malformed.
     #[no_mangle]
     pub extern "system" fn Java_com_fskeyboard_ime_engine_RustLexiconNative_nativeLoad<'local>(
         env: JNIEnv<'local>,
         _class: JClass<'local>,
-        table: JByteArray<'local>,
-        dict: JByteArray<'local>,
+        compiled: JByteArray<'local>,
         user: JByteArray<'local>,
     ) -> jint {
-        let (Some(table), Some(dict), Some(user)) =
-            (utf8(&env, &table), utf8(&env, &dict), utf8(&env, &user))
-        else {
+        let (Ok(compiled), Some(user)) = (env.convert_byte_array(&compiled), utf8(&env, &user)) else {
             return -1;
         };
-        let lexicon = build(&table, &dict, &user);
+        let Ok(lexicon) = open(compiled, &user) else {
+            return -2;
+        };
         match LEXICON.lock() {
             Ok(mut guard) => *guard = Some(lexicon),
             Err(poisoned) => *poisoned.into_inner() = Some(lexicon),
@@ -647,9 +620,10 @@ mod tests {
     use std::path::Path;
 
     fn project() -> Lexicon {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../app/src/main/assets");
-        let table = std::fs::read_to_string(root.join("lexicon/mcbopomofo.tsv")).expect("mcbopomofo.tsv");
-        let dict = std::fs::read_to_string(root.join("rime/shared/fs_zhuyin.dict.yaml")).expect("dict");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let table = std::fs::read_to_string(root.join("data/lexicon/mcbopomofo.tsv")).expect("mcbopomofo.tsv");
+        let dict = std::fs::read_to_string(root.join("app/src/main/assets/rime/shared/fs_zhuyin.dict.yaml"))
+            .expect("dict");
         build(&table, &dict, "")
     }
 
@@ -787,11 +761,46 @@ name: sample
     }
 
     #[test]
+    fn yi_and_bu_match_their_base_and_changed_tones() {
+        let yaml = "\
+ㄧˊ ㄍㄜ˙\t一個\t-3.0
+ㄧ\t衣\t-3.5
+ㄅㄨˊ ㄗㄞˋ ㄏㄨ\t不在乎\t-4.0
+ㄅㄨˇ\t補\t-3.5
+";
+        let lexicon = build(yaml, "", "");
+        assert_eq!(texts(&lexicon.candidates("ㄧ ㄍㄜ˙"))[0], "一個");
+        assert_eq!(texts(&lexicon.candidates("ㄧˋ ㄍㄜ˙"))[0], "一個");
+        assert_eq!(texts(&lexicon.candidates("ㄅㄨˋ ㄗㄞˋ ㄏㄨ"))[0], "不在乎");
+        // Only 一 and 不 change tone: 衣 stays level, 補 stays third.
+        assert!(lexicon.candidates("ㄧˊ").is_empty());
+        assert!(lexicon.candidates("ㄅㄨˋ").is_empty());
+    }
+
+    #[test]
     fn learning_an_existing_row_raises_it() {
         let mut lexicon = build(SAMPLE, "", "");
         assert!(lexicon.learn("ㄍㄨㄥ", "工"));
+        assert!(!lexicon.learn("ㄍㄨㄥ", "工"));
         assert_eq!(texts(&lexicon.candidates("ㄍㄨㄥ")), vec!["工", "公"]);
-        assert_eq!(lexicon.len(), 8);
+        assert_eq!(lexicon.len(), 9);
+    }
+
+    #[test]
+    fn a_damaged_lexicon_is_refused_instead_of_read_out_of_bounds() {
+        let compiled = super::compile(SAMPLE, "");
+        assert!(super::open(compiled.clone(), "").is_ok());
+        assert!(super::open(Vec::new(), "").is_err());
+        assert!(super::open(compiled[..compiled.len() - 1].to_vec(), "").is_err());
+        let mut magic = compiled.clone();
+        magic[0] = b'X';
+        assert!(super::open(magic, "").is_err());
+        // The first id in the id block, pointed past the last entry.
+        let mut id = compiled.clone();
+        let field = |at: usize| u32::from_le_bytes(compiled[at..at + 4].try_into().unwrap()) as usize;
+        let ids_at = 40 + field(8) * 20 + (field(12) + field(16)) * 16 + field(20) * 8;
+        id[ids_at..ids_at + 4].copy_from_slice(&999u32.to_le_bytes());
+        assert!(super::open(id, "").is_err());
     }
 
     #[test]

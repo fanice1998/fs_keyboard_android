@@ -11,11 +11,11 @@ internal class RustLexiconNative private constructor() {
         }
 
         /**
-         * [table] is the phrase table, [dict] the Rime dictionary and [user] the learned
-         * `reading<TAB>text` lines, all UTF-8.
+         * [compiled] is assets/lexicon/lexicon.bin and [user] the learned `reading<TAB>text`
+         * lines in UTF-8. 0 on success, -2 when the compiled lexicon is malformed.
          */
         @JvmStatic
-        external fun nativeLoad(table: ByteArray, dict: ByteArray, user: ByteArray): Int
+        external fun nativeLoad(compiled: ByteArray, user: ByteArray): Int
 
         /** `span<TAB>text<TAB>reading` lines for syllable queries joined by a space. */
         @JvmStatic
