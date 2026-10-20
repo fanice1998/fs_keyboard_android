@@ -129,6 +129,13 @@ class FsKeyboardService : InputMethodService() {
             rowHeightDp = preferences.rowHeightDp()
             fullWidthSymbols = preferences.fullWidthSymbols()
             onTyped = latencyProbe::keyHandled
+            trackpadAllowed = { controller.canMoveCursor() }
+            onTrackpadStart = { controller.beginCursor() }
+            onCursorStep = { dx, dy -> controller.moveCursor(dx, dy) }
+            onTrackpadActive = { active ->
+                candidateBar?.alpha = if (active) 0.35f else 1f
+                if (!active) controller.endCursor()
+            }
             onKey = { action ->
                 if (action == KeyAction.NextInputMethod) {
                     switchToAnotherKeyboard()

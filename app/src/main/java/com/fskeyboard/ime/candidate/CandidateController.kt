@@ -5,12 +5,14 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import com.fskeyboard.ime.R
 import com.fskeyboard.ime.engine.EngineSnapshot
 import com.fskeyboard.ime.engine.EngineStatus
 import com.fskeyboard.ime.engine.KeyPolicy
 import com.fskeyboard.ime.engine.ZhuyinLexicon
+import com.fskeyboard.ime.keyboard.CursorMotion
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.keyboard.ZhuyinComposer
@@ -44,6 +46,7 @@ internal class CandidateController(
     private var generation = 0L
     private var closed = false
     private var lastLookupMillis = 0L
+    private var cursorSession: CursorSession? = null
 
     private val hasComposition: Boolean
         get() = !composition.isEmpty
@@ -60,6 +63,7 @@ internal class CandidateController(
     fun close() {
         closed = true
         generation += 1
+        endCursor()
         lexicon.close()
     }
 
@@ -72,7 +76,45 @@ internal class CandidateController(
     }
 
     fun onFinishInput() {
+        endCursor()
         cancelComposition()
+    }
+
+    /** Space can glide the caret only when it is not marking 平聲. */
+    fun canMoveCursor(): Boolean = !closed && !hasComposition
+
+    /**
+     * Takes the editor text once. Later steps reuse it, so a drag does not re-read the field.
+     * False when the field does not report a caret; the space bar then stays a tap.
+     */
+    fun beginCursor(): Boolean {
+        if (!canMoveCursor()) return false
+        val session = readCursor() ?: return false
+        dismissSuggestions()
+        cursorSession = session
+        return true
+    }
+
+    /** [dx] is graphemes to the right, [dy] is lines down. False when the caret did not move. */
+    fun moveCursor(dx: Int, dy: Int): Boolean {
+        val session = cursorSession ?: return false
+        val local = session.cursor - session.startOffset
+        if (local !in 0..session.text.length) return false
+        val moved = CursorMotion.move(session.text, local, dx, dy)
+        val absolute = session.startOffset + moved
+        if (absolute == session.cursor) return false
+        val applied = try {
+            connection()?.setSelection(absolute, absolute) == true
+        } catch (_: Exception) {
+            false
+        }
+        if (!applied) return false
+        session.cursor = absolute
+        return true
+    }
+
+    fun endCursor() {
+        cursorSession = null
     }
 
     fun onKey(action: KeyAction) {
@@ -330,6 +372,26 @@ internal class CandidateController(
         )
     }
 
+    private fun readCursor(): CursorSession? {
+        val ic = connection() ?: return null
+        return try {
+            val request = ExtractedTextRequest().apply { hintMaxChars = MAX_EXTRACT }
+            val extracted = ic.getExtractedText(request, 0)
+            val extractedText = extracted?.text?.toString()
+            val selection = extracted?.selectionEnd ?: -1
+            if (extracted != null && extractedText != null && selection >= 0) {
+                return CursorSession(extractedText, extracted.startOffset, selection)
+            }
+            val before = ic.getTextBeforeCursor(MAX_EXTRACT, 0)?.toString() ?: return null
+            val after = ic.getTextAfterCursor(MAX_EXTRACT, 0)?.toString() ?: return null
+            // A full before-cursor read is an absolute offset. A capped one is not.
+            if (before.length >= MAX_EXTRACT) return null
+            CursorSession(before + after, startOffset = 0, cursor = before.length)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun contextBefore(): String {
         return traced("ime.contextBefore") {
             try {
@@ -347,7 +409,10 @@ internal class CandidateController(
         const val TAG = "FsKeyboard"
         const val RECENT_CHARS = 32
         const val SLOW_LOOKUP_MS = 5L
+        const val MAX_EXTRACT = 20_000
     }
+
+    private class CursorSession(val text: String, val startOffset: Int, var cursor: Int)
 
     private fun statusMessage(): String = when (lexicon.status) {
         EngineStatus.READY -> ""

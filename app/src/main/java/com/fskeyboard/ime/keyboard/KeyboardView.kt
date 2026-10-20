@@ -9,6 +9,7 @@ import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewTreeObserver
 import com.fskeyboard.ime.traced
 import com.fskeyboard.ime.ui.KeyboardPalette
@@ -20,6 +21,18 @@ internal class KeyboardView(context: Context) : View(context) {
 
     /** After a touch-fired key is handled, with that touch's event time. Not for repeat or long press. */
     var onTyped: (eventUptimeMillis: Long) -> Unit = {}
+
+    /** False while zhuyin is being composed: space then stays 平聲. */
+    var trackpadAllowed: () -> Boolean = { false }
+
+    /** Opens the cursor track. False keeps the gesture a space tap. */
+    var onTrackpadStart: () -> Boolean = { false }
+
+    /** Steps are graphemes right and lines down. Returns whether the caret moved. */
+    var onCursorStep: (dx: Int, dy: Int) -> Boolean = { _, _ -> false }
+
+    /** The keys are blank and the candidate bar should fade while this is true. */
+    var onTrackpadActive: (Boolean) -> Unit = {}
     var rowHeightDp: Int = KeyboardHeight.DEFAULT_ROW_DP
         set(value) {
             val next = KeyboardHeight.clamp(value)
@@ -45,6 +58,8 @@ internal class KeyboardView(context: Context) : View(context) {
     private var downPointer = NO_POINTER
     private var downX = 0f
     private var downY = 0f
+    private var spaceCursor: SpaceCursor? = null
+    private var trackpad = false
     private var zhuyinAreas: List<KeyArea> = emptyList()
     private var gap = 0f
 
@@ -68,6 +83,14 @@ internal class KeyboardView(context: Context) : View(context) {
         release()
         buzz()
         fire(action)
+    }
+
+    /** A still finger on space becomes a trackpad, the way a hold does on iOS. */
+    private val holdTrackpad = Runnable {
+        val cursor = spaceCursor ?: return@Runnable
+        if (cursor.tracking || down?.spec?.action != KeyAction.Space) return@Runnable
+        cursor.hold()
+        if (onTrackpadStart()) showTrackpad() else spaceCursor = null
     }
 
     /** [base] is the letter keyboard that the symbol pages return to. */
@@ -94,14 +117,16 @@ internal class KeyboardView(context: Context) : View(context) {
         canvas.drawColor(palette.background)
         val radius = dp(11).toFloat()
         for (box in boxes) {
-            val pressed = box == down || box.spec.highlighted
+            val pressed = !trackpad && (box == down || box.spec.highlighted)
             fill.color = when {
+                trackpad -> palette.key
                 pressed -> palette.keyPressed
                 box.spec.role == KeyRole.ACTION || box.spec.role == KeyRole.MODIFIER -> palette.keyAction
                 else -> palette.key
             }
             val draw = inset(box.rect)
             canvas.drawRoundRect(draw, radius, radius, fill)
+            if (trackpad) continue
             val icon = box.spec.icon
             if (icon != null) {
                 KeyIcons.draw(canvas, icon, draw, palette.text, iconPaint)
@@ -124,6 +149,7 @@ internal class KeyboardView(context: Context) : View(context) {
                 press(event.getPointerId(index), event.getX(index), event.getY(index), event.eventTime)
             }
             MotionEvent.ACTION_MOVE -> {
+                if (moveSpace(event)) return true
                 val box = down ?: return true
                 val index = event.findPointerIndex(downPointer)
                 if (index >= 0 && hit(event.getX(index), event.getY(index)) != box) {
@@ -135,8 +161,9 @@ internal class KeyboardView(context: Context) : View(context) {
                 if (event.getPointerId(index) != downPointer) return true
                 val box = down
                 val released = hit(event.getX(index), event.getY(index))
+                val tracking = trackpad
                 release()
-                if (box != null && box == released && box.spec.action != KeyAction.Backspace) {
+                if (!tracking && box != null && box == released && box.spec.action != KeyAction.Backspace) {
                     fire(box.spec.action, event.eventTime)
                 }
             }
@@ -155,7 +182,11 @@ internal class KeyboardView(context: Context) : View(context) {
         // Feedback on touch, not on release. The key itself still fires on release.
         // The vibration waits until this frame is submitted so it does not hold the highlight back.
         if (spec != null) buzz()
-        if (spec?.action == KeyAction.Backspace) {
+        if (spec?.action == KeyAction.Space && trackpadAllowed()) {
+            spaceCursor = SpaceCursor(slop = dp(10).toFloat(), xPerStep = dp(8).toFloat(), yPerStep = dp(22).toFloat())
+            spaceCursor?.down(x, y)
+            postDelayed(holdTrackpad, ViewConfiguration.getLongPressTimeout().toLong())
+        } else if (spec?.action == KeyAction.Backspace) {
             fire(spec.action, eventTime)
             postDelayed(repeat, 320L)
         } else if (spec?.secondary != null) {
@@ -163,8 +194,47 @@ internal class KeyboardView(context: Context) : View(context) {
         }
     }
 
-    /** Commits the key still under a finger. Backspace already fired on its down. */
+    /**
+     * True once the space gesture owns the finger, including across the rest of the keyboard.
+     * Leaving the space key before the slop still cancels, the same as any other key.
+     */
+    private fun moveSpace(event: MotionEvent): Boolean {
+        val cursor = spaceCursor ?: return false
+        val index = event.findPointerIndex(downPointer)
+        if (index < 0) return false
+        val wasTracking = cursor.tracking
+        val steps = cursor.move(event.getX(index), event.getY(index)) ?: return false
+        if (!wasTracking) {
+            if (!onTrackpadStart()) {
+                spaceCursor = null
+                removeCallbacks(holdTrackpad)
+                return false
+            }
+            showTrackpad()
+        }
+        val (sx, sy) = steps
+        if ((sx != 0 || sy != 0) && onCursorStep(sx, sy)) {
+            // A fast flick can cross several graphemes in one sample. One tick per sample
+            // would add a binder call on top of setSelection and make that flick hesitate.
+            if (kotlin.math.abs(sx) + kotlin.math.abs(sy) == 1) tick()
+        }
+        return true
+    }
+
+    private fun showTrackpad() {
+        removeCallbacks(holdTrackpad)
+        down = null
+        trackpad = true
+        onTrackpadActive(true)
+        invalidate()
+    }
+
+    /** Commits the key still under a finger. Backspace already fired on its down. A trackpad does not. */
     private fun commitHeld(eventTime: Long) {
+        if (trackpad) {
+            release()
+            return
+        }
         val action = down?.spec?.action ?: return
         release()
         if (action != KeyAction.Backspace) fire(action, eventTime)
@@ -172,9 +242,24 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private fun release() {
         stopRepeat()
+        removeCallbacks(holdTrackpad)
+        val wasTracking = trackpad
+        spaceCursor = null
+        trackpad = false
         down = null
         downPointer = NO_POINTER
         invalidate()
+        if (wasTracking) onTrackpadActive(false)
+    }
+
+    /** One tick per move that actually crossed a character or a line. */
+    private fun tick() {
+        val effect = if (Build.VERSION.SDK_INT >= 27) {
+            HapticFeedbackConstants.TEXT_HANDLE_MOVE
+        } else {
+            HapticFeedbackConstants.CLOCK_TICK
+        }
+        performHapticFeedback(effect)
     }
 
     /**
