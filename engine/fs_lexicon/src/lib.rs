@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 pub use store::Row;
-use store::{initials_of, EntryRef, Store};
+use store::{initials_of, EntryRef, Store, START};
 
 const MAX_SPAN: usize = 8;
 /// Tones are packed three bits per syllable, so longer readings are skipped.
@@ -24,6 +24,14 @@ const ABBREVIATION_PENALTY: f32 = 2.0;
 const USER_SCORE: f32 = -1.0;
 /// A span with more initial+medial syllables than this is read only as typed.
 const MAX_SPLITS: usize = 3;
+/// With a bigram model, splits kept per position, each ending in a different word.
+const BEAM: usize = 8;
+/// With a bigram model, words tried for each span of syllables.
+const WORDS_PER_SPAN: usize = 6;
+/// λ in λ·P(word|previous) + (1 − λ)·P(word), tuned on data/review/c_testset.tsv.
+const BIGRAM_WEIGHT: f32 = 0.3;
+/// How many characters before the cursor are searched for the previous word.
+const CONTEXT_CHARS: usize = 8;
 
 static LEXICON: Mutex<Option<Lexicon>> = Mutex::new(None);
 
@@ -36,12 +44,43 @@ pub struct Lexicon {
     learned_by_initials: HashMap<Box<str>, Vec<u32>>,
     /// Syllable bodies that a longer syllable starts with, such as ㄐ and ㄐㄧ.
     open: HashSet<Box<str>>,
+    /// λ for the stored bigrams; 0 turns them off.
+    bigram_weight: f32,
+}
+
+/// A word that can cover some syllables during conversion.
+struct Word<'a> {
+    text: Cow<'a, str>,
+    /// Its id in the word table, for bigrams.
+    id: Option<u32>,
+    reading: String,
+    /// The stored log10 probability.
+    score: f32,
+    /// What the input match costs, such as [ABBREVIATION_PENALTY].
+    penalty: f32,
+}
+
+/// One split of the syllables before a position, and how it got there.
+#[derive(Clone, Copy)]
+struct State {
+    score: f32,
+    from: Option<Step>,
+}
+
+/// The last word of a split: its span, its index among the words for that span, and
+/// the state it extends at the position where it starts.
+#[derive(Clone, Copy)]
+struct Step {
+    span: usize,
+    word: usize,
+    state: usize,
 }
 
 struct Learned {
     text: Box<str>,
     reading: Box<str>,
     tones: u32,
+    word: Option<u32>,
 }
 
 /// One candidate. [span] is how many typed syllables, from the front, it uses.
@@ -75,9 +114,16 @@ impl Lexicon {
     /// no mark is the level tone, and `*` means the tone is not chosen yet. A syllable
     /// without a tone also matches longer ones that start with it, so ㄐ* finds ㄐㄧㄣ.
     pub fn candidates(&self, code: &str) -> Vec<Hit<'_>> {
+        self.candidates_after(code, "")
+    }
+
+    /// [Lexicon::candidates] for input typed right after [before], the text before the
+    /// cursor. Its last word starts the conversion and orders the front words.
+    pub fn candidates_after(&self, code: &str, before: &str) -> Vec<Hit<'_>> {
         let query = parse_code(code);
+        let previous = self.context_word(before);
         let mut out = Vec::new();
-        let sentence = if query.len() > 1 { self.best_path(&query) } else { Vec::new() };
+        let sentence = if query.len() > 1 { self.best_path(&query, previous) } else { Vec::new() };
         if sentence.len() > 1 {
             out.push(Hit {
                 span: query.len(),
@@ -90,7 +136,7 @@ impl Lexicon {
         for span in (1..=query.len().min(MAX_SPAN)).rev() {
             let limit = if span > 1 { PHRASE_LIMIT } else { CANDIDATE_LIMIT };
             let mut taken = 0;
-            for (id, _) in self.ranked_span(&query[..span], limit) {
+            for (id, _) in self.in_context(self.ranked_span(&query[..span], limit), previous) {
                 if out.len() >= CANDIDATE_LIMIT || taken >= limit {
                     break;
                 }
@@ -108,7 +154,41 @@ impl Lexicon {
 
     /// The words of the best conversion of all of [code], front to back.
     pub fn convert(&self, code: &str) -> Vec<Hit<'_>> {
-        self.best_path(&parse_code(code))
+        self.best_path(&parse_code(code), self.store.word(START))
+    }
+
+    /// Sets λ for the stored bigrams, for tuning; 0 turns them off.
+    pub fn set_bigram_weight(&mut self, lambda: f32) {
+        self.bigram_weight = lambda.clamp(0.0, 1.0);
+    }
+
+    fn uses_bigrams(&self) -> bool {
+        self.bigram_weight > 0.0 && self.store.pair_count() > 0
+    }
+
+    /// The word that [before] ends with: its longest suffix that is a word, or the sentence
+    /// start when it is empty or ends with anything but a Han character.
+    fn context_word(&self, before: &str) -> Option<u32> {
+        let start = self.store.word(START);
+        let tail: Vec<(usize, char)> = before.char_indices().rev().take(CONTEXT_CHARS).collect();
+        if !tail.first().is_some_and(|(_, ch)| is_han(*ch)) {
+            return start;
+        }
+        let han = tail.iter().take_while(|(_, ch)| is_han(*ch)).count();
+        tail[..han].iter().rev().find_map(|(at, _)| self.store.word(&before[*at..])).or(start)
+    }
+
+    /// [ranked] entries reordered by how well each follows [previous], when bigrams are on.
+    fn in_context(&self, mut ranked: Vec<(u32, f32)>, previous: Option<u32>) -> Vec<(u32, f32)> {
+        if !self.uses_bigrams() {
+            return ranked;
+        }
+        for (id, adjusted) in ranked.iter_mut() {
+            let entry = self.entry(*id);
+            *adjusted = self.transition(previous, entry.word, entry.score) - (entry.score - *adjusted);
+        }
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+        ranked
     }
 
     /// Remembers [text] under [reading], given the way [Lexicon::candidates] reports
@@ -131,7 +211,8 @@ impl Lexicon {
             return false;
         }
         let id = (self.store.len() + self.learned.len()) as u32;
-        self.learned.push(Learned { text: text.into(), reading: key.as_str().into(), tones });
+        let word = self.store.word(text);
+        self.learned.push(Learned { text: text.into(), reading: key.as_str().into(), tones, word });
         self.learned_by_reading.entry(key.as_str().into()).or_default().push(id);
         self.learned_by_initials.entry(initials_of(&key).into_boxed_str()).or_default().push(id);
         for syllable in key.split(' ') {
@@ -143,56 +224,95 @@ impl Lexicon {
     }
 
     /// Highest summed log probability over every way to split [query] into words.
+    /// With bigrams each word is scored given the one before it, the first given
+    /// [previous], and every position keeps the [BEAM] best splits that end in different
+    /// words. Without them, a single best split per position, by word score alone.
     /// A syllable with no word of its own stays as typed, at [UNKNOWN_SCORE].
-    fn best_path<'a>(&'a self, query: &[Syllable]) -> Vec<Hit<'a>> {
+    fn best_path<'a>(&'a self, query: &[Syllable], previous: Option<u32>) -> Vec<Hit<'a>> {
         let n = query.len();
-        // best[end]: total score of the best split of query[..end], and its last word.
-        let mut best: Vec<Option<(f32, Hit<'a>)>> = vec![None; n + 1];
-        let mut scores = vec![f32::NEG_INFINITY; n + 1];
-        scores[0] = 0.0;
+        let (beam, choices) = if self.uses_bigrams() { (BEAM, WORDS_PER_SPAN) } else { (1, 1) };
+        // words[end][span - 1]: the words that can cover query[end - span..end].
+        let mut words: Vec<Vec<Vec<Word<'a>>>> = vec![Vec::new()];
+        let mut states: Vec<Vec<State>> = vec![vec![State { score: 0.0, from: None }]];
         for end in 1..=n {
-            for span in 1..=end.min(MAX_SPAN) {
-                let start = end - span;
-                if scores[start] == f32::NEG_INFINITY {
-                    continue;
-                }
-                let word = match self.ranked_span(&query[start..end], 1).first() {
-                    Some(&(id, score)) => {
-                        let entry = self.entry(id);
-                        Some((score, Cow::Borrowed(entry.text), reading_of(&entry)))
+            let here: Vec<Vec<Word<'a>>> = (1..=end.min(MAX_SPAN))
+                .map(|span| self.words_for(&query[end - span..end], span, choices))
+                .collect();
+            let mut found: Vec<(State, &str)> = Vec::new();
+            for (span_index, candidates) in here.iter().enumerate() {
+                let start = end - span_index - 1;
+                for (state_index, state) in states[start].iter().enumerate() {
+                    let before = state.from.map_or(previous, |step| words[start][step.span - 1][step.word].id);
+                    for (word_index, word) in candidates.iter().enumerate() {
+                        let score = state.score + self.transition(before, word.id, word.score) - word.penalty;
+                        let from = Some(Step { span: span_index + 1, word: word_index, state: state_index });
+                        found.push((State { score, from }, word.text.as_ref()));
                     }
-                    None if span == 1 => {
-                        let typed = &query[start];
-                        let reading = if typed.tone.is_none() {
-                            format!("{}*", typed.body)
-                        } else {
-                            typed.display.clone()
-                        };
-                        Some((UNKNOWN_SCORE, Cow::Owned(typed.display.clone()), reading))
-                    }
-                    None => None,
-                };
-                let Some((score, text, reading)) = word else {
-                    continue;
-                };
-                let total = scores[start] + score;
-                if total > scores[end] {
-                    scores[end] = total;
-                    best[end] = Some((total, Hit { span, text, reading }));
                 }
             }
+            found.sort_by(|a, b| b.0.score.total_cmp(&a.0.score));
+            let mut seen = HashSet::new();
+            let kept: Vec<State> = found
+                .into_iter()
+                .filter(|(_, text)| seen.insert(*text))
+                .take(beam)
+                .map(|(state, _)| state)
+                .collect();
+            words.push(here);
+            states.push(kept);
         }
         let mut out = Vec::new();
-        let mut end = n;
+        let (mut end, mut index) = (n, 0);
         while end > 0 {
-            let Some((_, hit)) = best[end].take() else {
+            let Some(step) = states[end].get(index).and_then(|state| state.from) else {
                 break;
             };
-            end -= hit.span;
-            out.push(hit);
+            let word = &words[end][step.span - 1][step.word];
+            out.push(Hit { span: step.span, text: word.text.clone(), reading: word.reading.clone() });
+            end -= step.span;
+            index = step.state;
         }
         out.reverse();
         out
+    }
+
+    /// Up to [limit] words for exactly [query], or the syllable as typed when a single
+    /// syllable has none.
+    fn words_for<'a>(&'a self, query: &[Syllable], span: usize, limit: usize) -> Vec<Word<'a>> {
+        let mut out: Vec<Word<'a>> = self
+            .ranked_span(query, limit)
+            .into_iter()
+            .map(|(id, adjusted)| {
+                let entry = self.entry(id);
+                Word {
+                    text: Cow::Borrowed(entry.text),
+                    id: entry.word,
+                    reading: reading_of(&entry),
+                    score: entry.score,
+                    penalty: entry.score - adjusted,
+                }
+            })
+            .collect();
+        if out.is_empty() && span == 1 {
+            let typed = &query[0];
+            let reading = if typed.tone.is_none() { format!("{}*", typed.body) } else { typed.display.clone() };
+            out.push(Word { text: Cow::Owned(typed.display.clone()), id: None, reading, score: UNKNOWN_SCORE, penalty: 0.0 });
+        }
+        out
+    }
+
+    /// log10 of [word] after [previous]: the bigram probability mixed with the word's own
+    /// [score] as λ·P(word|previous) + (1 − λ)·P(word). An unseen pair keeps the second part.
+    fn transition(&self, previous: Option<u32>, word: Option<u32>, score: f32) -> f32 {
+        if !self.uses_bigrams() {
+            return score;
+        }
+        let pair = match (previous, word) {
+            (Some(previous), Some(word)) => self.store.bigram(previous, word),
+            _ => None,
+        };
+        let lambda = self.bigram_weight;
+        (lambda * pair.map_or(0.0, |p| 10f32.powf(p)) + (1.0 - lambda) * 10f32.powf(score)).log10()
     }
 
     /// Entries for exactly the typed syllables [query], best adjusted score first,
@@ -254,7 +374,13 @@ impl Lexicon {
             None => self.store.entry(id),
             Some(index) => {
                 let learned = &self.learned[index];
-                EntryRef { text: &learned.text, reading: &learned.reading, tones: learned.tones, score: USER_SCORE }
+                EntryRef {
+                    text: &learned.text,
+                    reading: &learned.reading,
+                    tones: learned.tones,
+                    score: USER_SCORE,
+                    word: learned.word,
+                }
             }
         }
     }
@@ -271,9 +397,9 @@ impl Lexicon {
     }
 
     /// `span<TAB>text<TAB>reading` lines, one per candidate.
-    fn candidate_lines(&self, code: &str) -> String {
+    fn candidate_lines(&self, code: &str, before: &str) -> String {
         let mut out = String::new();
-        for (index, hit) in self.candidates(code).iter().enumerate() {
+        for (index, hit) in self.candidates_after(code, before).iter().enumerate() {
             if index > 0 {
                 out.push('\n');
             }
@@ -325,9 +451,20 @@ pub fn rows(table: &str, dict_yaml: &str) -> Vec<Row> {
     out
 }
 
-/// The phrase table and Rime dictionary in the compiled format `assets/lexicon/lexicon.bin` holds.
-pub fn compile(table: &str, dict_yaml: &str) -> Vec<u8> {
-    store::compile(&rows(table, dict_yaml))
+/// The phrase table, Rime dictionary and bigrams in the compiled format
+/// `assets/lexicon/lexicon.bin` holds. [bigrams] is `w1<TAB>w2<TAB>log10 P(w2|w1)` lines,
+/// as corpus_tools count writes them; `#` lines are comments.
+pub fn compile(table: &str, dict_yaml: &str, bigrams: &str) -> Vec<u8> {
+    let pairs: Vec<(String, String, f32)> = bigrams
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| {
+            let mut parts = line.split('\t');
+            let (left, right, p) = (parts.next()?, parts.next()?, parts.next()?.parse().ok()?);
+            Some((left.to_string(), right.to_string(), p))
+        })
+        .collect();
+    store::compile(&rows(table, dict_yaml), &pairs)
 }
 
 /// Opens a compiled lexicon and learns the user's `reading<TAB>text` lines on top.
@@ -340,6 +477,7 @@ pub fn open(compiled: Vec<u8>, user: &str) -> Result<Lexicon, &'static str> {
         learned_by_reading: HashMap::new(),
         learned_by_initials: HashMap::new(),
         open,
+        bigram_weight: BIGRAM_WEIGHT,
     };
     for line in user.lines() {
         if let Some((reading, text)) = line.split_once('\t') {
@@ -349,9 +487,13 @@ pub fn open(compiled: Vec<u8>, user: &str) -> Result<Lexicon, &'static str> {
     Ok(lexicon)
 }
 
-/// Compiles and opens in one step, for tests and tools.
+/// Compiles and opens in one step, without bigrams, for tests and tools.
 pub fn build(table: &str, dict_yaml: &str, user: &str) -> Lexicon {
-    open(compile(table, dict_yaml), user).expect("a freshly compiled lexicon opens")
+    open(compile(table, dict_yaml, ""), user).expect("a freshly compiled lexicon opens")
+}
+
+fn is_han(ch: char) -> bool {
+    matches!(ch as u32, 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0x20000..=0x3134F)
 }
 
 /// Rows of a Rime dictionary: the body after the `...` line, `text<TAB>code<TAB>weight`.
@@ -570,17 +712,18 @@ mod android {
         mut env: JNIEnv<'local>,
         _class: JClass<'local>,
         code: JString<'local>,
+        before: JString<'local>,
     ) -> jstring {
-        let key: String = match env.get_string(&code) {
-            Ok(value) => value.into(),
-            Err(_) => return std::ptr::null_mut(),
+        let (Ok(key), Ok(before)) = (env.get_string(&code), env.get_string(&before)) else {
+            return std::ptr::null_mut();
         };
+        let (key, before): (String, String) = (key.into(), before.into());
         let found = match LEXICON.lock() {
-            Ok(guard) => guard.as_ref().map(|lexicon| lexicon.candidate_lines(&key)),
+            Ok(guard) => guard.as_ref().map(|lexicon| lexicon.candidate_lines(&key, &before)),
             Err(poisoned) => poisoned
                 .into_inner()
                 .as_ref()
-                .map(|lexicon| lexicon.candidate_lines(&key)),
+                .map(|lexicon| lexicon.candidate_lines(&key, &before)),
         }
         .unwrap_or_default();
         env.new_string(found)
@@ -778,6 +921,27 @@ name: sample
     }
 
     #[test]
+    fn a_bigram_picks_the_word_that_fits_the_one_before() {
+        let table = "\
+ㄌㄜ˙\t了\t-2.0
+ㄅㄚ\t八\t-3.4
+ㄅㄚ\t吧\t-3.8
+ㄕㄨㄛ\t說\t-3.0
+";
+        assert_eq!(sentence(&build(table, "", ""), "ㄕㄨㄛ ㄌㄜ˙ ㄅㄚ"), "說了八");
+        let bigrams = "# comment\n了\t吧\t-1.0\n了\t八\t-3.0\n不在\t吧\t-1.0\n";
+        let mut lexicon = super::open(super::compile(table, "", bigrams), "").unwrap();
+        assert_eq!(sentence(&lexicon, "ㄕㄨㄛ ㄌㄜ˙ ㄅㄚ"), "說了吧");
+        // With nothing before it, 八 is still the more common word.
+        assert_eq!(sentence(&lexicon, "ㄅㄚ"), "八");
+        // The text before the cursor counts: its last word starts the sentence.
+        assert_eq!(texts(&lexicon.candidates_after("ㄅㄚ", "我們說了"))[0], "吧");
+        assert_eq!(texts(&lexicon.candidates_after("ㄅㄚ", "說了。"))[0], "八");
+        lexicon.set_bigram_weight(0.0);
+        assert_eq!(sentence(&lexicon, "ㄕㄨㄛ ㄌㄜ˙ ㄅㄚ"), "說了八");
+    }
+
+    #[test]
     fn learning_an_existing_row_raises_it() {
         let mut lexicon = build(SAMPLE, "", "");
         assert!(lexicon.learn("ㄍㄨㄥ", "工"));
@@ -788,7 +952,7 @@ name: sample
 
     #[test]
     fn a_damaged_lexicon_is_refused_instead_of_read_out_of_bounds() {
-        let compiled = super::compile(SAMPLE, "");
+        let compiled = super::compile(SAMPLE, "", "");
         assert!(super::open(compiled.clone(), "").is_ok());
         assert!(super::open(Vec::new(), "").is_err());
         assert!(super::open(compiled[..compiled.len() - 1].to_vec(), "").is_err());
@@ -798,7 +962,8 @@ name: sample
         // The first id in the id block, pointed past the last entry.
         let mut id = compiled.clone();
         let field = |at: usize| u32::from_le_bytes(compiled[at..at + 4].try_into().unwrap()) as usize;
-        let ids_at = 40 + field(8) * 20 + (field(12) + field(16)) * 16 + field(20) * 8;
+        // Header fields after the magic and version: entries, readings, initials, open, words, pairs.
+        let ids_at = 48 + field(8) * 20 + (field(12) + field(16)) * 16 + field(20) * 8 + field(24) * 16 + field(28) * 8;
         id[ids_at..ids_at + 4].copy_from_slice(&999u32.to_le_bytes());
         assert!(super::open(id, "").is_err());
     }
@@ -807,10 +972,10 @@ name: sample
     fn candidate_lines_carry_the_span_and_reading() {
         let lexicon = build(SAMPLE, "", "");
         assert_eq!(
-            lexicon.candidate_lines("ㄐㄧㄣ ㄊㄧㄢ"),
+            lexicon.candidate_lines("ㄐㄧㄣ ㄊㄧㄢ", ""),
             "2\t今天\tㄐㄧㄣ ㄊㄧㄢ\n1\t今\tㄐㄧㄣ"
         );
-        assert_eq!(lexicon.candidate_lines("ㄅㄚ"), "");
+        assert_eq!(lexicon.candidate_lines("ㄅㄚ", ""), "");
     }
 
     #[test]

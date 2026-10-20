@@ -19,3 +19,7 @@ third_party/librime/include/**
 third_party/librime/jniLibs/**
 !third_party/librime/include/.gitkeep
 !third_party/librime/jniLibs/.gitkeep
+
+# Text corpora for the bigram model; tools/fetch-corpus.sh downloads them.
+/data/corpus/
+/engine/corpus_tools/target/

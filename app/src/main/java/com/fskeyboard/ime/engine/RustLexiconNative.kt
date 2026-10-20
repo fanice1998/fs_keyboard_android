@@ -17,9 +17,12 @@ internal class RustLexiconNative private constructor() {
         @JvmStatic
         external fun nativeLoad(compiled: ByteArray, user: ByteArray): Int
 
-        /** `span<TAB>text<TAB>reading` lines for syllable queries joined by a space. */
+        /**
+         * `span<TAB>text<TAB>reading` lines for syllable queries joined by a space, typed
+         * after [before], the text before the cursor.
+         */
         @JvmStatic
-        external fun nativeLookup(code: String): String
+        external fun nativeLookup(code: String, before: String): String
 
         /** Remembers [text] under [reading]. False when it was already remembered. */
         @JvmStatic

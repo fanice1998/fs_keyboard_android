@@ -1,25 +1,25 @@
-//! Compiles the phrase table and the Rime dictionary into the lexicon the app loads.
+//! Compiles the phrase table, the Rime dictionary and the bigrams into the lexicon the app loads.
 //!
 //!     cargo run --release --bin compile_lexicon -- \
 //!         data/lexicon/mcbopomofo.tsv app/src/main/assets/rime/shared/fs_zhuyin.dict.yaml \
-//!         app/src/main/assets/lexicon/lexicon.bin
+//!         data/lexicon/bigram.tsv app/src/main/assets/lexicon/lexicon.bin
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
-    let [_, table, dict, out] = args.as_slice() else {
-        eprintln!("usage: compile_lexicon <phrase table> <rime dictionary> <output>");
+    let [_, table, dict, bigrams, out] = args.as_slice() else {
+        eprintln!("usage: compile_lexicon <phrase table> <rime dictionary> <bigrams> <output>");
         return ExitCode::FAILURE;
     };
     let read = |path: &str| std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"));
-    let (table, dict) = match (read(table), read(dict)) {
-        (Ok(table), Ok(dict)) => (table, dict),
-        (Err(error), _) | (_, Err(error)) => {
+    let (table, dict, bigrams) = match (read(table), read(dict), read(bigrams)) {
+        (Ok(table), Ok(dict), Ok(bigrams)) => (table, dict, bigrams),
+        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
             eprintln!("{error}");
             return ExitCode::FAILURE;
         }
     };
-    let compiled = fs_lexicon::compile(&table, &dict);
+    let compiled = fs_lexicon::compile(&table, &dict, &bigrams);
     let entries = match fs_lexicon::open(compiled.clone(), "") {
         Ok(lexicon) => lexicon.len(),
         Err(error) => {

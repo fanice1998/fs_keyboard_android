@@ -1,18 +1,21 @@
 //! The compiled lexicon: one byte buffer read in place, with no parsing at load.
 //!
-//! Built at build time by [compile] from the phrase table and the Rime dictionary,
-//! shipped as `assets/lexicon/lexicon.bin`, and opened with [Store::open]. Every
-//! number is little-endian. After the header come, in this order:
+//! Built at build time by [compile] from the phrase table, the Rime dictionary and the
+//! bigram counts, shipped as `assets/lexicon/lexicon.bin`, and opened with [Store::open].
+//! Every number is little-endian. After the header come, in this order:
 //!
 //! ```text
-//! entries   20 bytes each: text offset u32, reading index u32, tones u32, score f32,
-//!           text length u16, padding u16
+//! entries   20 bytes each: word u32, reading u32, tones u32, score f32, padding u32
 //! readings  16 bytes each, sorted by key: key offset u32, key length u32,
 //!           first id u32, id count u32 — the entries with that toneless reading
 //! initials  16 bytes each, sorted by key, the same shape — the entries whose
 //!           syllables start with those glyphs
 //! open       8 bytes each: offset u32, length u32 — syllable bodies that a longer
 //!           syllable starts with
+//! words     16 bytes each, sorted by text: offset u32, length u32, first pair u32,
+//!           pair count u32 — every entry text, and <s> for the sentence start
+//! pairs      8 bytes each: next word u32, log10 P(next|word) f32 — each word's run
+//!           sorted by next word
 //! ids        u32 entry ids; each run is best score first
 //! strings    UTF-8 bytes; every offset above is into this block
 //! ```
@@ -21,11 +24,16 @@
 use std::collections::{HashMap, HashSet};
 
 const MAGIC: &[u8; 4] = b"FSLX";
-const VERSION: u32 = 1;
-const HEADER: usize = 40;
+const VERSION: u32 = 2;
+const HEADER: usize = 48;
 const ENTRY: usize = 20;
 const KEY: usize = 16;
 const SPAN: usize = 8;
+const WORD: usize = 16;
+const PAIR: usize = 8;
+
+/// The left word of the first pair in a sentence.
+pub const START: &str = "<s>";
 
 /// One entry before compiling: toneless reading, packed tones, text and score.
 pub struct Row {
@@ -42,10 +50,13 @@ pub struct EntryRef<'a> {
     pub reading: &'a str,
     pub tones: u32,
     pub score: f32,
+    /// Its text in the word table, for bigrams. None for a learned text the table lacks.
+    pub word: Option<u32>,
 }
 
-/// Lays out [rows] in the format above.
-pub fn compile(rows: &[Row]) -> Vec<u8> {
+/// Lays out [rows] and [bigrams], given as (word, next word, log10 probability), in the
+/// format above. A pair whose words are not entry texts (or <s> on the left) is dropped.
+pub fn compile(rows: &[Row], bigrams: &[(String, String, f32)]) -> Vec<u8> {
     let mut strings: Vec<u8> = Vec::new();
     let intern = |text: &str, strings: &mut Vec<u8>| -> (u32, u32) {
         let at = (strings.len() as u32, text.len() as u32);
@@ -53,8 +64,22 @@ pub fn compile(rows: &[Row]) -> Vec<u8> {
         at
     };
 
-    let order = |ids: &mut Vec<u32>| ids.sort_by(|a, b| rows[*b as usize].score.total_cmp(&rows[*a as usize].score));
+    let mut texts: Vec<&str> = rows.iter().map(|row| row.text.as_str()).chain([START]).collect();
+    texts.sort_unstable();
+    texts.dedup();
+    let word_of: HashMap<&str, u32> = texts.iter().enumerate().map(|(id, text)| (*text, id as u32)).collect();
+    let mut runs: Vec<Vec<(u32, f32)>> = vec![Vec::new(); texts.len()];
+    for (left, right, p) in bigrams {
+        if let (Some(&left), Some(&right)) = (word_of.get(left.as_str()), word_of.get(right.as_str())) {
+            runs[left as usize].push((right, *p));
+        }
+    }
+    for run in &mut runs {
+        run.sort_by_key(|(right, _)| *right);
+        run.dedup_by_key(|(right, _)| *right);
+    }
 
+    let order = |ids: &mut Vec<u32>| ids.sort_by(|a, b| rows[*b as usize].score.total_cmp(&rows[*a as usize].score));
     let mut by_reading: HashMap<&str, Vec<u32>> = HashMap::new();
     let mut by_initials: HashMap<String, Vec<u32>> = HashMap::new();
     let mut open: HashSet<&str> = HashSet::new();
@@ -83,18 +108,24 @@ pub fn compile(rows: &[Row]) -> Vec<u8> {
             reading_of[id as usize] = index as u32;
         }
         let (offset, length) = intern(key, &mut strings);
-        reading_table.push((offset, length, ids.len() as u32, members.len() as u32));
+        reading_table.push([offset, length, ids.len() as u32, members.len() as u32]);
         ids.extend_from_slice(members);
     }
     let mut initial_table = Vec::with_capacity(initials.len());
     for (key, members) in initials.iter_mut() {
         order(members);
         let (offset, length) = intern(key, &mut strings);
-        initial_table.push((offset, length, ids.len() as u32, members.len() as u32));
+        initial_table.push([offset, length, ids.len() as u32, members.len() as u32]);
         ids.extend_from_slice(members);
     }
     let open_table: Vec<(u32, u32)> = open.iter().map(|body| intern(body, &mut strings)).collect();
-    let entry_table: Vec<(u32, u32)> = rows.iter().map(|row| intern(&row.text, &mut strings)).collect();
+    let mut pairs: Vec<(u32, f32)> = Vec::new();
+    let mut word_table = Vec::with_capacity(texts.len());
+    for (text, run) in texts.iter().zip(&runs) {
+        let (offset, length) = intern(text, &mut strings);
+        word_table.push([offset, length, pairs.len() as u32, run.len() as u32]);
+        pairs.extend_from_slice(run);
+    }
 
     let mut out = Vec::new();
     out.extend_from_slice(MAGIC);
@@ -104,28 +135,38 @@ pub fn compile(rows: &[Row]) -> Vec<u8> {
         reading_table.len() as u32,
         initial_table.len() as u32,
         open_table.len() as u32,
+        word_table.len() as u32,
+        pairs.len() as u32,
         ids.len() as u32,
         strings.len() as u32,
     ] {
         out.extend_from_slice(&value.to_le_bytes());
     }
     out.resize(HEADER, 0);
-    for (row, ((offset, length), reading)) in rows.iter().zip(entry_table.iter().zip(&reading_of)) {
-        out.extend_from_slice(&offset.to_le_bytes());
+    for (row, reading) in rows.iter().zip(&reading_of) {
+        out.extend_from_slice(&word_of[row.text.as_str()].to_le_bytes());
         out.extend_from_slice(&reading.to_le_bytes());
         out.extend_from_slice(&row.tones.to_le_bytes());
         out.extend_from_slice(&row.score.to_le_bytes());
-        out.extend_from_slice(&(*length as u16).to_le_bytes());
-        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
     }
-    for (offset, length, first, count) in reading_table.iter().chain(&initial_table) {
-        for value in [offset, length, first, count] {
+    for record in reading_table.iter().chain(&initial_table) {
+        for value in record {
             out.extend_from_slice(&value.to_le_bytes());
         }
     }
     for (offset, length) in &open_table {
         out.extend_from_slice(&offset.to_le_bytes());
         out.extend_from_slice(&length.to_le_bytes());
+    }
+    for record in &word_table {
+        for value in record {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    for (right, p) in &pairs {
+        out.extend_from_slice(&right.to_le_bytes());
+        out.extend_from_slice(&p.to_le_bytes());
     }
     for id in &ids {
         out.extend_from_slice(&id.to_le_bytes());
@@ -150,11 +191,15 @@ pub struct Store {
     readings: usize,
     initials: usize,
     open: usize,
+    words: usize,
+    pairs: usize,
     ids: usize,
     entries_at: usize,
     readings_at: usize,
     initials_at: usize,
     open_at: usize,
+    words_at: usize,
+    pairs_at: usize,
     ids_at: usize,
     strings_at: usize,
 }
@@ -169,30 +214,35 @@ impl Store {
         if field(0) != VERSION as usize {
             return Err("unknown lexicon version");
         }
-        let (entries, readings, initials, open, ids, strings) =
-            (field(1), field(2), field(3), field(4), field(5), field(6));
-        let entries_at = HEADER;
-        let readings_at = entries_at.checked_add(entries.checked_mul(ENTRY).ok_or("too big")?).ok_or("too big")?;
-        let initials_at = readings_at + readings.checked_mul(KEY).ok_or("too big")?;
-        let open_at = initials_at + initials.checked_mul(KEY).ok_or("too big")?;
-        let ids_at = open_at + open.checked_mul(SPAN).ok_or("too big")?;
-        let strings_at = ids_at + ids.checked_mul(4).ok_or("too big")?;
-        if strings_at.checked_add(strings) != Some(data.len()) {
+        let counts = [field(1), field(2), field(3), field(4), field(5), field(6), field(7)];
+        let sizes = [ENTRY, KEY, KEY, SPAN, WORD, PAIR, 4];
+        let mut at = [0usize; 8];
+        at[0] = HEADER;
+        for index in 0..7 {
+            let size = counts[index].checked_mul(sizes[index]).ok_or("too big")?;
+            at[index + 1] = at[index].checked_add(size).ok_or("too big")?;
+        }
+        let strings = field(8);
+        if at[7].checked_add(strings) != Some(data.len()) {
             return Err("lexicon size does not match its header");
         }
         let store = Store {
             data,
-            entries,
-            readings,
-            initials,
-            open,
-            ids,
-            entries_at,
-            readings_at,
-            initials_at,
-            open_at,
-            ids_at,
-            strings_at,
+            entries: counts[0],
+            readings: counts[1],
+            initials: counts[2],
+            open: counts[3],
+            words: counts[4],
+            pairs: counts[5],
+            ids: counts[6],
+            entries_at: at[0],
+            readings_at: at[1],
+            initials_at: at[2],
+            open_at: at[3],
+            words_at: at[4],
+            pairs_at: at[5],
+            ids_at: at[6],
+            strings_at: at[7],
         };
         store.check(strings)?;
         Ok(store)
@@ -203,20 +253,17 @@ impl Store {
             offset.checked_add(length).is_some_and(|end| end <= strings)
                 && std::str::from_utf8(&self.data[self.strings_at + offset..self.strings_at + offset + length]).is_ok()
         };
+        let run_ok = |first: usize, count: usize, limit: usize| first.checked_add(count).is_some_and(|end| end <= limit);
         for id in 0..self.entries {
             let at = self.entries_at + id * ENTRY;
-            let length = u16::from_le_bytes(self.data[at + 16..at + 18].try_into().unwrap()) as usize;
-            if !text_ok(self.u32_at(at), length) || self.u32_at(at + 4) >= self.readings {
+            if self.u32_at(at) >= self.words || self.u32_at(at + 4) >= self.readings {
                 return Err("bad entry");
             }
         }
         for (table, count) in [(self.readings_at, self.readings), (self.initials_at, self.initials)] {
             for index in 0..count {
                 let at = table + index * KEY;
-                let (first, members) = (self.u32_at(at + 8), self.u32_at(at + 12));
-                if !text_ok(self.u32_at(at), self.u32_at(at + 4))
-                    || first.checked_add(members).map_or(true, |end| end > self.ids)
-                {
+                if !text_ok(self.u32_at(at), self.u32_at(at + 4)) || !run_ok(self.u32_at(at + 8), self.u32_at(at + 12), self.ids) {
                     return Err("bad key");
                 }
             }
@@ -226,6 +273,15 @@ impl Store {
             if !text_ok(self.u32_at(at), self.u32_at(at + 4)) {
                 return Err("bad open syllable");
             }
+        }
+        for index in 0..self.words {
+            let at = self.words_at + index * WORD;
+            if !text_ok(self.u32_at(at), self.u32_at(at + 4)) || !run_ok(self.u32_at(at + 8), self.u32_at(at + 12), self.pairs) {
+                return Err("bad word");
+            }
+        }
+        if (0..self.pairs).any(|index| self.u32_at(self.pairs_at + index * PAIR) >= self.words) {
+            return Err("bad pair");
         }
         if (0..self.ids).any(|index| self.u32_at(self.ids_at + 4 * index) >= self.entries) {
             return Err("bad id");
@@ -237,16 +293,42 @@ impl Store {
         self.entries
     }
 
+    pub fn pair_count(&self) -> usize {
+        self.pairs
+    }
+
     pub fn entry(&self, id: u32) -> EntryRef<'_> {
         let at = self.entries_at + id as usize * ENTRY;
-        let length = u16::from_le_bytes(self.data[at + 16..at + 18].try_into().unwrap()) as usize;
+        let word = self.u32_at(at);
         let reading = self.readings_at + self.u32_at(at + 4) * KEY;
         EntryRef {
-            text: self.text(self.u32_at(at), length),
+            text: self.word_text(word),
             reading: self.text(self.u32_at(reading), self.u32_at(reading + 4)),
             tones: self.u32_at(at + 8) as u32,
-            score: f32::from_le_bytes(self.data[at + 12..at + 16].try_into().unwrap()),
+            score: self.f32_at(at + 12),
+            word: Some(word as u32),
         }
+    }
+
+    /// The word table id of [text], if any entry has that text.
+    pub fn word(&self, text: &str) -> Option<u32> {
+        self.find(self.words_at, self.words, WORD, text).map(|at| ((at - self.words_at) / WORD) as u32)
+    }
+
+    /// log10 P(next|word), when the pair was seen often enough to be kept.
+    pub fn bigram(&self, word: u32, next: u32) -> Option<f32> {
+        let at = self.words_at + word as usize * WORD;
+        let (mut low, mut high) = (self.u32_at(at + 8), self.u32_at(at + 8) + self.u32_at(at + 12));
+        while low < high {
+            let middle = (low + high) / 2;
+            let pair = self.pairs_at + middle * PAIR;
+            match (self.u32_at(pair) as u32).cmp(&next) {
+                std::cmp::Ordering::Less => low = middle + 1,
+                std::cmp::Ordering::Greater => high = middle,
+                std::cmp::Ordering::Equal => return Some(self.f32_at(pair + 4)),
+            }
+        }
+        None
     }
 
     /// Entries with toneless reading [key], best score first.
@@ -267,18 +349,23 @@ impl Store {
         })
     }
 
+    fn word_text(&self, word: usize) -> &str {
+        let at = self.words_at + word * WORD;
+        self.text(self.u32_at(at), self.u32_at(at + 4))
+    }
+
     fn members(&self, table: usize, count: usize, key: &str) -> impl Iterator<Item = u32> + '_ {
-        let found = self.find(table, count, key);
+        let found = self.find(table, count, KEY, key);
         let (first, length) = found.map_or((0, 0), |at| (self.u32_at(at + 8), self.u32_at(at + 12)));
         (first..first + length).map(move |index| self.u32_at(self.ids_at + 4 * index) as u32)
     }
 
-    /// Binary search over a sorted key table; the record's position.
-    fn find(&self, table: usize, count: usize, key: &str) -> Option<usize> {
+    /// Binary search over a table sorted by the text its records start with; the record's position.
+    fn find(&self, table: usize, count: usize, size: usize, key: &str) -> Option<usize> {
         let (mut low, mut high) = (0, count);
         while low < high {
             let middle = (low + high) / 2;
-            let at = table + middle * KEY;
+            let at = table + middle * size;
             match self.bytes(self.u32_at(at), self.u32_at(at + 4)).cmp(key.as_bytes()) {
                 std::cmp::Ordering::Less => low = middle + 1,
                 std::cmp::Ordering::Greater => high = middle,
@@ -292,14 +379,18 @@ impl Store {
         u32::from_le_bytes(self.data[at..at + 4].try_into().unwrap()) as usize
     }
 
+    fn f32_at(&self, at: usize) -> f32 {
+        f32::from_le_bytes(self.data[at..at + 4].try_into().unwrap())
+    }
+
     fn bytes(&self, offset: usize, length: usize) -> &[u8] {
         let start = self.strings_at + offset;
         &self.data[start..start + length]
     }
 
-    /// Only for ranges that [Store::check] read: an entry's text, a key, an open body.
+    /// Only for ranges that [Store::check] read: a key, an open body, a word.
     fn text(&self, offset: usize, length: usize) -> &str {
-        // SAFETY: open() runs check(), which confirms every text, key and open-body
+        // SAFETY: open() runs check(), which confirms every key, open-body and word
         // range is inside the string block and valid UTF-8, and `data` is never changed
         // after that. Every caller passes one of those checked ranges.
         unsafe { std::str::from_utf8_unchecked(self.bytes(offset, length)) }

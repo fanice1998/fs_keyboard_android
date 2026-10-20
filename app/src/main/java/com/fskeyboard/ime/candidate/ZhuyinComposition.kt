@@ -24,7 +24,11 @@ internal class ZhuyinComposition {
         get() = pending.isEmpty && chosen.isEmpty()
 
     val text: String
-        get() = chosenText() + pending.text
+        get() = chosenText + pending.text
+
+    /** The words chosen so far, in order. */
+    val chosenText: String
+        get() = chosen.joinToString("") { it.text }
 
     fun append(glyph: String): Boolean = pending.append(glyph)
 
@@ -38,7 +42,7 @@ internal class ZhuyinComposition {
         if (pending.isEmpty) return null
         chosen += Choice(candidate.text, candidate.reading, pending.take(candidate.span.coerceAtLeast(1)))
         if (!pending.isEmpty) return null
-        return Commit(chosenText(), learned()).also { clear() }
+        return Commit(chosenText, learned()).also { clear() }
     }
 
     fun backspace() {
@@ -55,7 +59,7 @@ internal class ZhuyinComposition {
      */
     fun convertAll(first: Candidate?, candidates: (ZhuyinComposer) -> List<Candidate>): Commit {
         val learned = learned()
-        val out = StringBuilder(chosenText())
+        val out = StringBuilder(chosenText)
         var pick = first
         while (!pending.isEmpty) {
             val candidate = pick ?: candidates(pending).firstOrNull()
@@ -75,8 +79,6 @@ internal class ZhuyinComposition {
         pending.clear()
         chosen.clear()
     }
-
-    private fun chosenText(): String = chosen.joinToString("") { it.text }
 
     /** Each two words chosen one after the other, while both came from the lexicon and fit a phrase. */
     private fun learned(): List<Pair<String, String>> {

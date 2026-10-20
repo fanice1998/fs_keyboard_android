@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cross-compile engine/fs_lexicon for the app ABIs and copy libfs_lexicon.so
-# into app/src/main/jniLibs, then compile the phrase table and the Rime dictionary
-# into app/src/main/assets/lexicon/lexicon.bin. Neither output is in git.
+# into app/src/main/jniLibs, then compile the phrase table, the Rime dictionary and
+# the bigrams into app/src/main/assets/lexicon/lexicon.bin. Neither output is in git.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,6 +43,7 @@ cargo build --release --lib --target x86_64-linux-android
 cargo run --release --bin compile_lexicon -- \
   "$ROOT/data/lexicon/mcbopomofo.tsv" \
   "$ROOT/app/src/main/assets/rime/shared/fs_zhuyin.dict.yaml" \
+  "$ROOT/data/lexicon/bigram.tsv" \
   "$ROOT/app/src/main/assets/lexicon/lexicon.bin"
 
 mkdir -p "$ROOT/app/src/main/jniLibs/arm64-v8a" "$ROOT/app/src/main/jniLibs/x86_64"

@@ -17,8 +17,9 @@ internal interface ZhuyinLexicon {
     /**
      * Candidates for the front of [queries], from [com.fskeyboard.ime.keyboard.ZhuyinComposer.queries].
      * The longest phrase comes first. Each hit carries its span and a negative index.
+     * [before] is the text before the composition; its last word informs the order.
      */
-    fun lookup(queries: List<String>): List<Candidate>
+    fun lookup(queries: List<String>, before: String = ""): List<Candidate>
 
     /**
      * Remembers phrases the user put together, as (reading, text), so they rank first

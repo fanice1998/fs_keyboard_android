@@ -147,7 +147,8 @@ internal class CandidateController(
     private fun lookup(pending: ZhuyinComposer): List<Candidate> {
         val queries = pending.queries() ?: return emptyList()
         if (!lexicon.isReady) return emptyList()
-        return traced("ime.lookup") { lexicon.lookup(queries) }
+        val before = recent.toString() + composition.chosenText
+        return traced("ime.lookup") { lexicon.lookup(queries, before) }
     }
 
     private fun onPunctuation(text: String) {
