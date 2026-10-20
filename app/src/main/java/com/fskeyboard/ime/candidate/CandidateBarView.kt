@@ -13,12 +13,13 @@ import com.fskeyboard.ime.ui.isNightMode
 
 internal class CandidateBarView(context: Context) : LinearLayout(context) {
     var onCandidate: (Candidate) -> Unit = {}
-    var onToggleScript: () -> Unit = {}
+    /** The multi-function key at the end of the bar. It has no function yet. */
+    var onMore: () -> Unit = {}
 
     private val preedit = TextView(context)
     private val strip = LinearLayout(context)
     private val scroll = HorizontalScrollView(context)
-    private val script = TextView(context)
+    private val more = TextView(context)
     private val chips = ArrayList<TextView>()
     private var shown: List<Candidate> = emptyList()
 
@@ -40,13 +41,15 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         scroll.addView(strip, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
         addView(scroll, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
 
-        script.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-        script.gravity = Gravity.CENTER
-        script.minWidth = dp(40)
-        script.setPadding(dp(8), dp(6), dp(8), dp(6))
-        script.background = chipBackground(0)
-        script.setOnClickListener { onToggleScript() }
-        addView(script, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        more.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        more.gravity = Gravity.CENTER
+        more.minWidth = dp(40)
+        more.setPadding(dp(8), dp(6), dp(8), dp(6))
+        more.background = chipBackground(0)
+        more.text = "⋯"
+        more.contentDescription = "更多功能"
+        more.setOnClickListener { onMore() }
+        addView(more, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
     }
 
     fun render(state: CandidateUiState) {
@@ -54,10 +57,8 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         setBackgroundColor(palette.background)
         preedit.setTextColor(if (state.preedit.isEmpty()) palette.hint else palette.text)
         preedit.text = state.preedit.ifEmpty { state.message }
-        script.text = if (state.traditional) "臺" else "通"
-        script.setTextColor(palette.text)
-        (script.background as? GradientDrawable)?.setColor(palette.accent)
-        script.contentDescription = if (state.traditional) "臺灣標準" else "通用繁體"
+        more.setTextColor(palette.text)
+        (more.background as? GradientDrawable)?.setColor(palette.accent)
 
         if (shown == state.candidates) return
         shown = state.candidates

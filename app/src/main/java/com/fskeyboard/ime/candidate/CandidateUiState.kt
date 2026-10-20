@@ -6,7 +6,6 @@ internal data class CandidateUiState(
     val preedit: String = "",
     val candidates: List<Candidate> = emptyList(),
     val message: String = "",
-    val traditional: Boolean = true,
 )
 
 internal data class ImeUiState(

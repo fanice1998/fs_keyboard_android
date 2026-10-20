@@ -110,7 +110,6 @@ class FsKeyboardService : InputMethodService() {
         }
         candidateBar = CandidateBarView(this).apply {
             onCandidate = { controller.onCandidate(it) }
-            onToggleScript = { controller.onToggleScript() }
         }
         keyboard = KeyboardView(this).apply {
             rowHeightDp = KeyboardPreferences(this@FsKeyboardService).rowHeightDp()

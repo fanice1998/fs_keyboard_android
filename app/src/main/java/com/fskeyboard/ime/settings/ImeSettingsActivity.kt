@@ -142,7 +142,6 @@ class ImeSettingsActivity : Activity() {
         bar.render(
             CandidateUiState(
                 preedit = "ㄋㄧˇ",
-                traditional = true,
                 candidates = listOf(
                     Candidate("你", engineIndex = 0),
                     Candidate("妳", engineIndex = 1),

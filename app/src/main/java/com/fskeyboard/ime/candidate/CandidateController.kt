@@ -33,7 +33,6 @@ internal class CandidateController(
     },
 ) {
     private var mode = KeyboardMode.ZHUYIN
-    private var traditional = true
     private var presented: List<Candidate> = emptyList()
     private val composition = ZhuyinComposition()
     private var generation = 0L
@@ -93,15 +92,6 @@ internal class CandidateController(
             finishComposition(finished)
         } else {
             apply(refresh())
-        }
-    }
-
-    fun onToggleScript() {
-        traditional = !traditional
-        if (mode == KeyboardMode.ZHUYIN && hasComposition) {
-            apply(refresh())
-        } else {
-            publish()
         }
     }
 
@@ -282,7 +272,6 @@ internal class CandidateController(
                 preedit = preedit,
                 candidates = visible,
                 message = if (visible.isEmpty()) statusMessage() else "",
-                traditional = traditional,
             ),
         )
     }
