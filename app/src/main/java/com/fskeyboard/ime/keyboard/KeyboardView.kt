@@ -15,6 +15,9 @@ import com.fskeyboard.ime.ui.isNightMode
 
 internal class KeyboardView(context: Context) : View(context) {
     var onKey: (KeyAction) -> Unit = {}
+
+    /** After a touch-fired key is handled, with that touch's event time. Not for repeat or long press. */
+    var onTyped: (eventUptimeMillis: Long) -> Unit = {}
     var rowHeightDp: Int = KeyboardHeight.DEFAULT_ROW_DP
         set(value) {
             val next = KeyboardHeight.clamp(value)
@@ -23,12 +26,24 @@ internal class KeyboardView(context: Context) : View(context) {
             requestLayout()
         }
 
+    /** Full-width Chinese punctuation on the symbol pages opened from zhuyin. */
+    var fullWidthSymbols: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            rebuild()
+        }
+
     private var mode = KeyboardMode.ZHUYIN
+    private var base = KeyboardMode.ZHUYIN
     private var shifted = false
-    private var rows = KeyboardLayouts.rows(mode, shifted)
+    private var rows = KeyboardLayouts.rows(mode, shifted, base, fullWidthSymbols)
     private val boxes = ArrayList<KeyBox>()
     private var down: KeyBox? = null
     private var downPointer = NO_POINTER
+    private var downX = 0f
+    private var downY = 0f
+    private var zhuyinAreas: List<KeyArea> = emptyList()
     private var gap = 0f
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -49,12 +64,15 @@ internal class KeyboardView(context: Context) : View(context) {
     private val longPress = Runnable {
         val action = down?.spec?.secondary ?: return@Runnable
         release()
+        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         fire(action)
     }
 
-    fun setMode(mode: KeyboardMode) {
-        if (this.mode == mode) return
+    /** [base] is the letter keyboard that the symbol pages return to. */
+    fun setMode(mode: KeyboardMode, base: KeyboardMode = this.base) {
+        if (this.mode == mode && this.base == base) return
         this.mode = mode
+        this.base = base
         shifted = false
         rebuild()
     }
@@ -99,9 +117,9 @@ internal class KeyboardView(context: Context) : View(context) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 // A finger landing before the held one lifts commits the held key first,
                 // so fast two-thumb rollover keeps both keys in order.
-                commitHeld()
+                commitHeld(event.eventTime)
                 val index = event.actionIndex
-                press(event.getPointerId(index), event.getX(index), event.getY(index))
+                press(event.getPointerId(index), event.getX(index), event.getY(index), event.eventTime)
             }
             MotionEvent.ACTION_MOVE -> {
                 val box = down ?: return true
@@ -117,7 +135,7 @@ internal class KeyboardView(context: Context) : View(context) {
                 val released = hit(event.getX(index), event.getY(index))
                 release()
                 if (box != null && box == released && box.spec.action != KeyAction.Backspace) {
-                    fire(box.spec.action)
+                    fire(box.spec.action, event.eventTime)
                 }
             }
             MotionEvent.ACTION_CANCEL -> release()
@@ -125,13 +143,17 @@ internal class KeyboardView(context: Context) : View(context) {
         return true
     }
 
-    private fun press(pointer: Int, x: Float, y: Float) {
+    private fun press(pointer: Int, x: Float, y: Float, eventTime: Long) {
         down = hit(x, y)
         downPointer = pointer
+        downX = x
+        downY = y
         val spec = down?.spec
         invalidate()
+        // Feedback on touch, not on release. The key itself still fires on release.
+        if (spec != null) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         if (spec?.action == KeyAction.Backspace) {
-            fire(spec.action)
+            fire(spec.action, eventTime)
             postDelayed(repeat, 320L)
         } else if (spec?.secondary != null) {
             postDelayed(longPress, 400L)
@@ -139,10 +161,10 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     /** Commits the key still under a finger. Backspace already fired on its down. */
-    private fun commitHeld() {
+    private fun commitHeld(eventTime: Long) {
         val action = down?.spec?.action ?: return
         release()
-        if (action != KeyAction.Backspace) fire(action)
+        if (action != KeyAction.Backspace) fire(action, eventTime)
     }
 
     private fun release() {
@@ -152,9 +174,15 @@ internal class KeyboardView(context: Context) : View(context) {
         invalidate()
     }
 
-    private fun fire(action: KeyAction) {
-        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-        dispatch(action, haptic = false)
+    /** A zhuyin key from a touch carries the keys that touch may have meant. */
+    private fun fire(action: KeyAction, eventTime: Long? = null) {
+        val typed = if (action is KeyAction.Bopomofo && eventTime != null) {
+            action.copy(nearby = TouchModel.nearby(downX, downY, zhuyinAreas))
+        } else {
+            action
+        }
+        dispatch(typed, haptic = false)
+        eventTime?.let(onTyped)
     }
 
     private fun dispatch(action: KeyAction, haptic: Boolean = true) {
@@ -172,7 +200,7 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     private fun rebuild() {
-        rows = KeyboardLayouts.rows(mode, shifted)
+        rows = KeyboardLayouts.rows(mode, shifted, base, fullWidthSymbols)
         requestLayout()
         if (width > 0 && height > 0) {
             layoutKeys(width, height)
@@ -182,6 +210,7 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private fun layoutKeys(width: Int, height: Int) {
         boxes.clear()
+        zhuyinAreas = emptyList()
         if (rows.isEmpty() || width == 0 || height == 0) return
         gap = dp(6).toFloat()
         val pad = dp(3).toFloat()
@@ -198,6 +227,10 @@ internal class KeyboardView(context: Context) : View(context) {
                 left += cellWidth
             }
             top += rowHeight
+        }
+        zhuyinAreas = boxes.mapNotNull { box ->
+            val action = box.spec.action as? KeyAction.Bopomofo ?: return@mapNotNull null
+            KeyArea(action.label, box.rect.centerX(), box.rect.centerY(), box.rect.width(), box.rect.height())
         }
     }
 

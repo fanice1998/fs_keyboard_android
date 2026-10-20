@@ -33,18 +33,22 @@ internal class CandidateController(
     },
 ) {
     private var mode = KeyboardMode.ZHUYIN
-    private var traditional = true
+
+    /** The letter keyboard the symbol pages return to. */
+    private var base = KeyboardMode.ZHUYIN
     private var presented: List<Candidate> = emptyList()
-    private var composing = false
-    private val composer = ZhuyinComposer()
+    private val composition = ZhuyinComposition()
     private var generation = 0L
     private var closed = false
+
+    private val hasComposition: Boolean
+        get() = !composition.isEmpty
 
     fun start() {
         publish()
         lexicon.start(context) {
             if (!closed) {
-                if (composer.isEmpty) publish(EngineSnapshot()) else apply(refresh())
+                if (hasComposition) apply(refresh()) else publish(EngineSnapshot())
             }
         }
     }
@@ -80,37 +84,29 @@ internal class CandidateController(
         }
     }
 
+    /** Chooses [candidate] for the front syllables it spans. The rest stays to be chosen. */
     fun onCandidate(candidate: Candidate) {
         if (mode != KeyboardMode.ZHUYIN) {
             commit(candidate.text)
             return
         }
-        composer.clear()
-        composing = false
-        presented = emptyList()
-        val ic = connection()
-        ic?.commitText(candidate.text, 1)
-        ic?.finishComposingText()
-        publish(EngineSnapshot())
-    }
-
-    fun onToggleScript() {
-        traditional = !traditional
-        if (mode == KeyboardMode.ZHUYIN && !composer.isEmpty) {
-            apply(refresh())
+        val finished = composition.choose(candidate)
+        if (finished != null) {
+            finishComposition(finished)
         } else {
-            publish()
+            apply(refresh())
         }
     }
 
+    /** Leaving zhuyin commits what was typed, the way Enter does. */
     private fun setMode(next: KeyboardMode) {
         if (next == mode) return
-        if (mode == KeyboardMode.ZHUYIN) {
-            cancelComposition()
+        if (mode == KeyboardMode.ZHUYIN && hasComposition) {
+            finishComposition(convertAll())
         }
+        if (next.isLetters) base = next
         mode = next
         presented = emptyList()
-        composing = false
         publish()
     }
 
@@ -119,91 +115,73 @@ internal class CandidateController(
             commit(action.label)
             return
         }
-        if (!composer.append(action.label)) return
+        if (!composition.append(action.label)) return
         apply(refresh())
     }
 
     private fun refresh(): EngineSnapshot {
-        val queries = composer.queries()
-        val hits = if (queries != null && lexicon.isReady) {
-            traced("ime.lookup") { lexicon.lookup(queries.joinToString(" "), composer.exact) }
-        } else {
-            emptyList()
-        }
-        val text = composer.text
+        val text = composition.text
         return EngineSnapshot(
             preedit = text,
             composingPreview = text,
-            candidates = candidatesFor(composer, hits),
+            candidates = candidatesFor(composition.pending, lookup(composition.pending)),
             decodeMillis = 0,
         )
     }
 
+    private fun lookup(pending: ZhuyinComposer): List<Candidate> {
+        val queries = pending.queries() ?: return emptyList()
+        if (!lexicon.isReady) return emptyList()
+        return traced("ime.lookup") { lexicon.lookup(queries) }
+    }
+
     private fun onPunctuation(text: String) {
-        when {
-            mode == KeyboardMode.ZHUYIN && presented.isNotEmpty() -> {
-                onCandidate(presented.first())
-                commit(text)
-            }
-            mode == KeyboardMode.ZHUYIN && composing -> {
-                cancelComposition()
-                commit(text)
-                publish()
-            }
-            else -> commit(text)
+        if (mode == KeyboardMode.ZHUYIN && hasComposition) {
+            finishComposition(convertAll())
         }
+        commit(text)
     }
 
     private fun onSpace() {
-        when (KeyPolicy.space(mode, composing = !composer.isEmpty)) {
-            KeyPolicy.Space.MarkLevelTone -> {
-                if (!composer.markLevelTone()) return
-                apply(refresh())
+        when (KeyPolicy.space(mode, composing = hasComposition)) {
+            KeyPolicy.Space.MarkLevelTone -> when {
+                composition.pending.isEmpty -> finishComposition(convertAll())
+                composition.markLevelTone() -> apply(refresh())
             }
             KeyPolicy.Space.CommitSpace -> commit(" ")
         }
     }
 
     private fun onBackspace() {
-        if (mode == KeyboardMode.ZHUYIN && !composer.isEmpty) {
-            composer.backspace()
-            if (composer.isEmpty) {
-                composing = false
-                presented = emptyList()
-                val ic = connection()
-                ic?.setComposingText("", 1)
-                ic?.finishComposingText()
-                publish(EngineSnapshot())
-            } else {
-                apply(refresh())
-            }
-        } else {
+        if (mode != KeyboardMode.ZHUYIN || !hasComposition) {
             connection()?.deleteSurroundingText(1, 0)
+            return
         }
+        composition.backspace()
+        apply(refresh())
     }
 
     private fun onEnter() {
-        if (mode == KeyboardMode.ZHUYIN && composer.text.isNotEmpty()) {
-            if (presented.isNotEmpty()) {
-                onCandidate(presented.first())
-            } else {
-                commitComposition(composer.text)
-            }
+        if (mode == KeyboardMode.ZHUYIN && hasComposition) {
+            finishComposition(convertAll())
         } else {
             performEnter()
         }
     }
 
-    private fun commitComposition(text: String) {
-        if (text.isEmpty()) {
-            commit(" ")
-            return
+    /** The first step uses the candidate on screen, so Enter matches what the bar shows. */
+    private fun convertAll(): String {
+        return composition.convertAll(presented.firstOrNull()) { pending ->
+            candidatesFor(pending, lookup(pending))
         }
-        composer.clear()
-        composing = false
+    }
+
+    private fun finishComposition(text: String) {
+        composition.clear()
         presented = emptyList()
-        connection()?.commitText(text, 1)
-        connection()?.finishComposingText()
+        val ic = connection()
+        ic?.commitText(text, 1)
+        ic?.finishComposingText()
         publish(EngineSnapshot())
     }
 
@@ -237,11 +215,10 @@ internal class CandidateController(
     }
 
     private fun cancelComposition() {
-        composer.clear()
+        composition.clear()
         val ic = connection()
         ic?.setComposingText("", 1)
         ic?.finishComposingText()
-        composing = false
         presented = emptyList()
     }
 
@@ -255,10 +232,9 @@ internal class CandidateController(
         }
         if (snapshot != null) {
             presented = shown
-            composing = if (mode == KeyboardMode.ZHUYIN) composer.text.isNotEmpty() else snapshot.isComposing
             Log.i(TAG, "latency lookup=${snapshot.decodeMillis}ms candidates=${snapshot.candidates.size}")
         }
-        onUi(ui(snapshot, presented))
+        onUi(ui(presented))
         if (snapshot != null && mode == KeyboardMode.ZHUYIN && pipeline.willScore(snapshot.candidates.size)) {
             val contextBefore = contextBefore()
             pipeline.presentAsync(snapshot, contextBefore) { trace ->
@@ -282,26 +258,21 @@ internal class CandidateController(
         if (superseded || !acceptRerankUpdate(ticket, generation, trace.fallback)) return
         if (trace.candidates == presented) return
         presented = trace.candidates
-        onUi(ui(snapshot, presented))
+        onUi(ui(presented))
     }
 
     private fun worthLogging(trace: RerankTrace): Boolean {
         return trace.fallback != RerankFallback.DISABLED && trace.fallback != RerankFallback.UNAVAILABLE
     }
 
-    private fun ui(snapshot: EngineSnapshot?, candidates: List<Candidate>): ImeUiState {
-        val preedit = when {
-            mode != KeyboardMode.ZHUYIN || snapshot == null -> ""
-            else -> snapshot.preedit.ifEmpty { snapshot.composingPreview }
-        }
+    private fun ui(candidates: List<Candidate>): ImeUiState {
         val visible = if (mode == KeyboardMode.ZHUYIN) candidates else emptyList()
         return ImeUiState(
             mode = mode,
+            base = base,
             candidates = CandidateUiState(
-                preedit = preedit,
                 candidates = visible,
                 message = if (visible.isEmpty()) statusMessage() else "",
-                traditional = traditional,
             ),
         )
     }

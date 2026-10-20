@@ -53,5 +53,30 @@ Unicode, Inc. Unicode data is used under the Unicode Terms of Use,
 https://www.unicode.org/copyright.html. The data files are provided "AS IS",
 without warranty.
 
+app/src/main/assets/lexicon/mcbopomofo.tsv is converted by
+tools/import-mcbopomofo.py from the data.txt that McBopomofo builds from its
+Source/Data (https://github.com/openvanilla/McBopomofo, commit
+be6564acad6c4d3265c34a2e1a872d80f9db6068). McBopomofo is MIT License,
+Copyright (c) 2011-2026 Mengjuei Hsieh et al. Its multi-character phrases were
+originally derived from tsi.src of libtabe, which is BSD licensed. The
+conversion keeps the readings, phrases and log-probability scores, and drops
+punctuation, symbols and date macros. Permission is hereby granted, free of
+charge, to any person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use, copy, modify,
+merge, publish, distribute, sublicense, and/or sell copies of the Software, and
+to permit persons to whom the Software is furnished to do so, subject to the
+following conditions: The above copyright notice and this permission notice
+shall be included in all copies or substantial portions of the Software. THE
+SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The keyboard looks phrases up in mcbopomofo.tsv first. fs_zhuyin.dict.yaml adds
+the readings that table lacks, ranked below every table row.
+
 ONNX Runtime for Android (com.microsoft.onnxruntime:onnxruntime-android) is
 MIT. The neural reranker calls its public Java API. No model file is vendored.

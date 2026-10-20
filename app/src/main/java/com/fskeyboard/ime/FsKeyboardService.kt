@@ -5,6 +5,8 @@ import android.graphics.Color
 import java.lang.ref.WeakReference
 import android.inputmethodservice.InputMethodService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -12,13 +14,17 @@ import android.view.ViewTreeObserver
 import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import com.fskeyboard.ime.candidate.CandidateBarView
 import com.fskeyboard.ime.candidate.CandidateController
+import com.fskeyboard.ime.candidate.CandidatePanelView
 import com.fskeyboard.ime.candidate.ImeUiState
 import com.fskeyboard.ime.engine.RustZhuyinLexicon
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardView
+import com.fskeyboard.ime.latency.FrameLatencyProbe
+import com.fskeyboard.ime.latency.KeyLatency
 import com.fskeyboard.ime.ui.KeyboardInsets
 import com.fskeyboard.ime.rerank.CandidatePipeline
 import com.fskeyboard.ime.settings.KeyboardPreferences
@@ -37,6 +43,8 @@ class FsKeyboardService : InputMethodService() {
     private lateinit var controller: CandidateController
     private var keyboard: KeyboardView? = null
     private var candidateBar: CandidateBarView? = null
+    private var candidatePanel: CandidatePanelView? = null
+    private var panelOpen = false
     private var inputRoot: LinearLayout? = null
     private var navigationSpacer: View? = null
     private var latestInsets: WindowInsets? = null
@@ -47,6 +55,8 @@ class FsKeyboardService : InputMethodService() {
     private val navigationBarFramePx by lazy { navigationBarDimension("navigation_bar_frame_height") }
     private val navigationBarHeightPx by lazy { navigationBarDimension("navigation_bar_height") }
     private var pending = ImeUiState()
+    private val latencyProbe = FrameLatencyProbe(KeyLatency.stats) { Log.i(TAG, it) }
+    private var framesWatched = false
     private val relayoutInsets = ViewTreeObserver.OnGlobalLayoutListener {
         val insets = latestInsets ?: return@OnGlobalLayoutListener
         if (insetStamp(insets) == appliedInsetStamp && navFrameResolved) return@OnGlobalLayoutListener
@@ -80,6 +90,10 @@ class FsKeyboardService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        if (framesWatched) {
+            runCatching { window?.window?.removeOnFrameMetricsAvailableListener(latencyProbe) }
+            framesWatched = false
+        }
         window?.window?.decorView?.viewTreeObserver?.let { observer ->
             if (observer.isAlive) observer.removeOnGlobalLayoutListener(relayoutInsets)
         }
@@ -94,16 +108,27 @@ class FsKeyboardService : InputMethodService() {
 
     override fun onCreateInputView(): View {
         configureWindow()
+        panelOpen = false
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(KeyboardPalette.of(isNightMode()).background)
         }
         candidateBar = CandidateBarView(this).apply {
             onCandidate = { controller.onCandidate(it) }
-            onToggleScript = { controller.onToggleScript() }
+            onExpand = { showPanel(!panelOpen) }
+        }
+        candidatePanel = CandidatePanelView(this).apply {
+            visibility = View.GONE
+            onCandidate = {
+                showPanel(false)
+                controller.onCandidate(it)
+            }
         }
         keyboard = KeyboardView(this).apply {
-            rowHeightDp = KeyboardPreferences(this@FsKeyboardService).rowHeightDp()
+            val preferences = KeyboardPreferences(this@FsKeyboardService)
+            rowHeightDp = preferences.rowHeightDp()
+            fullWidthSymbols = preferences.fullWidthSymbols()
+            onTyped = latencyProbe::keyHandled
             onKey = { action ->
                 if (action == KeyAction.NextInputMethod) {
                     switchToAnotherKeyboard()
@@ -126,8 +151,25 @@ class FsKeyboardService : InputMethodService() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
+        // The panel lies over the keys, so opening it does not change the keyboard height.
+        val keys = FrameLayout(this).apply {
+            addView(
+                keyboard,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            addView(
+                candidatePanel,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        }
         root.addView(
-            keyboard,
+            keys,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -143,8 +185,21 @@ class FsKeyboardService : InputMethodService() {
         inputRoot = root
         navigationSpacer = spacer
         window?.window?.decorView?.requestApplyInsets()
+        watchFrames()
         render(pending)
         return root
+    }
+
+    /** Key latency is a measurement. A window that cannot report frames still types. */
+    private fun watchFrames() {
+        if (framesWatched) return
+        val win = window?.window ?: return
+        try {
+            win.addOnFrameMetricsAvailableListener(latencyProbe, Handler(Looper.getMainLooper()))
+            framesWatched = true
+        } catch (error: RuntimeException) {
+            Log.i(TAG, "frame metrics unavailable ${error.javaClass.simpleName}")
+        }
     }
 
     private fun configureWindow() {
@@ -320,7 +375,9 @@ class FsKeyboardService : InputMethodService() {
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         setCandidatesViewShown(false)
-        keyboard?.rowHeightDp = KeyboardPreferences(this).rowHeightDp()
+        val preferences = KeyboardPreferences(this)
+        keyboard?.rowHeightDp = preferences.rowHeightDp()
+        keyboard?.fullWidthSymbols = preferences.fullWidthSymbols()
         controller.onStartInput(restarting)
         window?.window?.decorView?.requestApplyInsets()
         latestInsets?.let(::applyNavigationInset)
@@ -338,9 +395,22 @@ class FsKeyboardService : InputMethodService() {
     private fun render(state: ImeUiState) {
         pending = state
         traced("ime.render") {
-            keyboard?.setMode(state.mode)
+            keyboard?.setMode(state.mode, state.base)
             candidateBar?.render(state.candidates)
+            when {
+                state.candidates.candidates.isEmpty() -> showPanel(false)
+                panelOpen -> candidatePanel?.render(state.candidates.candidates)
+            }
         }
+    }
+
+    /** Opens every candidate over the keys. It stays closed while there are no candidates. */
+    private fun showPanel(open: Boolean) {
+        val candidates = pending.candidates.candidates
+        panelOpen = open && candidates.isNotEmpty()
+        if (panelOpen) candidatePanel?.render(candidates)
+        candidatePanel?.visibility = if (panelOpen) View.VISIBLE else View.GONE
+        candidateBar?.expanded = panelOpen
     }
 
     private companion object {

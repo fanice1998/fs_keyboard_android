@@ -1,9 +1,18 @@
 package com.fskeyboard.ime.keyboard
 
+/**
+ * [ZHUYIN] and [LATIN] are letter keyboards. [SYMBOLS] is the 123 page and
+ * [SYMBOLS_MORE] the #+= page; both return to the letter keyboard they were opened from.
+ */
 internal enum class KeyboardMode {
     ZHUYIN,
     LATIN,
     SYMBOLS,
+    SYMBOLS_MORE,
+    ;
+
+    val isLetters: Boolean
+        get() = this == ZHUYIN || this == LATIN
 }
 
 internal sealed interface KeyAction {
@@ -13,8 +22,14 @@ internal sealed interface KeyAction {
     /**
      * A zhuyin key. [label] is the bopomofo glyph kept in the composition.
      * [key] is the ASCII position librime's speller accepts, and is never committed.
+     * [nearby] is what [TouchModel] made of the touch that typed it, [label] included;
+     * empty when the key did not come from a touch.
      */
-    data class Bopomofo(val label: String, val key: Char) : KeyAction
+    data class Bopomofo(
+        val label: String,
+        val key: Char,
+        val nearby: List<NearbyKey> = emptyList(),
+    ) : KeyAction
 
     /** Chinese punctuation committed by the IME. It is not sent to Rime. */
     data class Punctuation(val text: String) : KeyAction

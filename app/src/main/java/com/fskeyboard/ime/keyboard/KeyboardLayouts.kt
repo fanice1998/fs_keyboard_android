@@ -1,10 +1,20 @@
 package com.fskeyboard.ime.keyboard
 
 internal object KeyboardLayouts {
-    fun rows(mode: KeyboardMode, shifted: Boolean = false): List<KeyRow> = when (mode) {
+    /**
+     * [base] is the letter keyboard the symbol pages were opened from.
+     * [fullWidth] picks the Chinese symbol pages when that keyboard is zhuyin.
+     */
+    fun rows(
+        mode: KeyboardMode,
+        shifted: Boolean = false,
+        base: KeyboardMode = KeyboardMode.ZHUYIN,
+        fullWidth: Boolean = true,
+    ): List<KeyRow> = when (mode) {
         KeyboardMode.ZHUYIN -> zhuyin()
         KeyboardMode.LATIN -> latin(shifted)
-        KeyboardMode.SYMBOLS -> symbols()
+        KeyboardMode.SYMBOLS -> symbols(base, more = false, fullWidth)
+        KeyboardMode.SYMBOLS_MORE -> symbols(base, more = true, fullWidth)
     }
 
     fun letterKeys(mode: KeyboardMode, shifted: Boolean = false): Set<Char> {
@@ -49,7 +59,8 @@ internal object KeyboardLayouts {
                     weight = 1.15f,
                     secondary = KeyAction.NextInputMethod,
                 ),
-                KeySpec("平聲", KeyAction.Space, weight = 4.6f, role = KeyRole.SPACE),
+                // Labelled as a space bar; while composing it marks 平聲.
+                KeySpec("空格", KeyAction.Space, weight = 4.6f, role = KeyRole.SPACE),
                 iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.85f),
             ),
         )
@@ -76,30 +87,66 @@ internal object KeyboardLayouts {
         ),
     )
 
-    private fun symbols(): List<KeyRow> = listOf(
-        KeyRow(chars("1234567890")),
-        KeyRow(chars("@#\$%&*-+()")),
-        KeyRow(chars("~`|\\/[]{}") + deleteKey()),
-        KeyRow(
-            listOf(
-                modeKey("注", KeyboardMode.ZHUYIN, 1.5f),
-                KeySpec("，", KeyAction.Character('，')),
-                space(),
-                KeySpec("。", KeyAction.Character('。')),
-                iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.7f),
+    /**
+     * iOS 123 and #+= pages. From zhuyin with [fullWidth] they are the iOS zhuyin
+     * pages with full-width Chinese punctuation; otherwise they are the ASCII pages.
+     * Either way they return to the letter keyboard they were opened from.
+     * On row three the keys between the page key and delete share seven key widths.
+     */
+    private fun symbols(base: KeyboardMode, more: Boolean, fullWidth: Boolean): List<KeyRow> {
+        val chinese = base == KeyboardMode.ZHUYIN && fullWidth
+        val (first, second, third) = when {
+            !more && !chinese -> Triple(split("1234567890"), split("-/:;()$&@\""), split(".,?!'"))
+            !more -> Triple(split("1234567890"), split("-/：；（）$@「」"), split("。，、？！."))
+            !chinese -> Triple(split("[]{}#%^*+="), split("_\\|~<>€£¥•"), split(".,?!'"))
+            else -> Triple(
+                split("[]{}#%^*+="),
+                split("_—\\|～«»¥&·"),
+                listOf("…", "，", "^_^", "？", "！", "’"),
+            )
+        }
+        val page = if (more) {
+            modeKey("123", KeyboardMode.SYMBOLS, 1.5f)
+        } else {
+            modeKey("#+=", KeyboardMode.SYMBOLS_MORE, 1.5f)
+        }
+        val zhuyin = base == KeyboardMode.ZHUYIN
+        val letters = if (zhuyin) KeyboardMode.ZHUYIN else KeyboardMode.LATIN
+        val other = if (zhuyin) KeyboardMode.LATIN else KeyboardMode.ZHUYIN
+        val wide = 7f / third.size
+        return listOf(
+            KeyRow(symbolKeys(first)),
+            KeyRow(symbolKeys(second)),
+            KeyRow(listOf(page) + symbolKeys(third).map { it.copy(weight = wide) } + deleteKey()),
+            KeyRow(
+                listOf(
+                    modeKey(if (zhuyin) "注音" else "ABC", letters, 1.45f),
+                    iconKey(
+                        icon = KeyIcon.GLOBE,
+                        action = KeyAction.SetMode(other),
+                        weight = 1.15f,
+                        secondary = KeyAction.NextInputMethod,
+                    ),
+                    KeySpec("空格", KeyAction.Space, weight = 4.6f, role = KeyRole.SPACE),
+                    iconKey(KeyIcon.RETURN, KeyAction.Enter, 1.85f),
+                ),
             ),
-        ),
-    )
+        )
+    }
+
+    private fun split(value: String): List<String> = value.map { it.toString() }
+
+    /** One character commits as typed; a longer label such as ^_^ commits as text. */
+    private fun symbolKeys(labels: List<String>): List<KeySpec> = labels.map { label ->
+        val action = if (label.length == 1) KeyAction.Character(label[0]) else KeyAction.Punctuation(label)
+        KeySpec(label, action)
+    }
 
     private fun letters(value: String, shifted: Boolean = false): List<KeySpec> {
         return value.map { letter ->
             val shown = if (shifted) letter.uppercaseChar() else letter
             KeySpec(shown.toString(), KeyAction.Character(shown))
         }
-    }
-
-    private fun chars(value: String): List<KeySpec> {
-        return value.map { KeySpec(it.toString(), KeyAction.Character(it)) }
     }
 
     private fun modeKey(label: String, mode: KeyboardMode, weight: Float) = KeySpec(

@@ -9,6 +9,7 @@ import com.fskeyboard.ime.keyboard.ZhuyinSpelling
  * Keeps engine candidates first.
  * A single syllable with no engine hit still offers its character, and the raw
  * bopomofo is always available so a reading can be committed as zhuyin.
+ * The raw bopomofo spans every syllable.
  */
 internal object CompositionCandidates {
     fun supplement(
@@ -19,29 +20,27 @@ internal object CompositionCandidates {
         if (composition.isEmpty()) return existing
         val seen = existing.map { it.text }.toMutableSet()
         val extra = ArrayList<Candidate>()
-        fun add(text: String) {
+        fun add(text: String, span: Int) {
             if (text.isEmpty() || text in seen) return
             seen += text
-            extra += Candidate(text = text, engineIndex = -(extra.size + 1))
+            extra += Candidate(text = text, engineIndex = -(extra.size + 1), span = span)
         }
         if (syllables.size == 1) {
-            ZhuyinReadings.characters(syllables[0]).forEach(::add)
+            ZhuyinReadings.characters(syllables[0]).forEach { add(it, span = 1) }
         }
-        add(composition)
+        add(composition, span = syllables.size.coerceAtLeast(1))
         return existing + extra
     }
 }
 
 /**
- * Shows the lexicon hits for the current reading.
- * An unfinished tone uses the tone-insensitive hits. A chosen tone uses the exact list.
+ * Shows the lexicon hits for the front of the composition, longest phrase first.
  * The raw bopomofo stays at the end so it can still be committed.
  */
 internal fun candidatesFor(composer: ZhuyinComposer, hits: List<Candidate>): List<Candidate> {
     val text = composer.text
     if (text.isEmpty()) return emptyList()
-    val queries = composer.queries() ?: return emptyList()
-    return CompositionCandidates.supplement(text, queries, hits)
+    return CompositionCandidates.supplement(text, composer.syllables, hits)
 }
 
 /**

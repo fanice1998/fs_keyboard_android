@@ -15,4 +15,11 @@
     <string name="rerank_summary">用游標前最近 20 字，對最多 9 個候選重新排序。超過 50ms 或模型出錯就改回原本順序。</string>
     <string name="rerank_model_ready">已找到 model.onnx。鍵盤啟動時會載入一次。</string>
     <string name="rerank_model_missing">尚未放置 model.onnx。放進 assets/rerank/ 後重新安裝，或推到 files/rerank/。鍵盤啟動時載入一次。</string>
+    <string name="full_width_switch">中文鍵盤使用全形符號</string>
+    <string name="full_width_summary">開啟時，從注音鍵盤打開的符號頁是全形中文標點，例如「，。？！」。關閉後改成跟英文鍵盤一樣的半形符號。</string>
+    <string name="key_latency_label">按鍵延遲</string>
+    <string name="key_latency_value">最近 %1$d 次按鍵\n一般（p50）%2$.1f ms\n偏慢（p95）%3$.1f ms\n很慢（p99）%4$.1f ms\n最慢 %5$.1f ms</string>
+    <string name="key_latency_empty">還沒有資料。先用鍵盤打幾個字，再回來看。</string>
+    <string name="key_latency_summary">從手指放開到鍵盤畫出結果的時間。只留最近 200 次，鍵盤程式重開後會歸零。</string>
+    <string name="key_latency_reset">清除</string>
 </resources>

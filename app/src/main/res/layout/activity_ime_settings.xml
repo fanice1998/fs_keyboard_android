@@ -58,6 +58,22 @@
             android:textSize="15sp" />
 
         <Switch
+            android:id="@+id/full_width_switch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/full_width_switch"
+            android:textSize="18sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="12dp"
+            android:paddingBottom="24dp"
+            android:text="@string/full_width_summary"
+            android:textSize="15sp" />
+
+        <Switch
             android:id="@+id/rerank_switch"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -78,5 +94,33 @@
             android:layout_height="wrap_content"
             android:paddingTop="12dp"
             android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="24dp"
+            android:text="@string/key_latency_label"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/key_latency_value"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="8dp"
+            android:text="@string/key_latency_summary"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/key_latency_reset"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/key_latency_reset" />
     </LinearLayout>
 </ScrollView>

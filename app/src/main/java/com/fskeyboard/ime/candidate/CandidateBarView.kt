@@ -11,14 +11,31 @@ import com.fskeyboard.ime.ui.KeyboardPalette
 import com.fskeyboard.ime.ui.dp
 import com.fskeyboard.ime.ui.isNightMode
 
+/**
+ * Candidates in one scrolling row. The zhuyin being typed shows only in the editor.
+ * The text on the left is a status message, shown only when there is one.
+ * The arrow on the right opens every candidate over the keys.
+ */
 internal class CandidateBarView(context: Context) : LinearLayout(context) {
     var onCandidate: (Candidate) -> Unit = {}
-    var onToggleScript: () -> Unit = {}
 
-    private val preedit = TextView(context)
+    /** The multi-function key next to the arrow. It has no function yet. */
+    var onMore: () -> Unit = {}
+    var onExpand: () -> Unit = {}
+
+    /** Whether the candidate panel is open; flips the arrow. */
+    var expanded: Boolean = false
+        set(value) {
+            field = value
+            expand.text = if (value) "▴" else "▾"
+            expand.contentDescription = if (value) "收合候選字" else "展開候選字"
+        }
+
+    private val status = TextView(context)
     private val strip = LinearLayout(context)
     private val scroll = HorizontalScrollView(context)
-    private val script = TextView(context)
+    private val more = TextView(context)
+    private val expand = TextView(context)
     private val chips = ArrayList<TextView>()
     private var shown: List<Candidate> = emptyList()
 
@@ -29,10 +46,10 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         setPadding(pad, dp(4), pad, dp(4))
         minimumHeight = dp(48)
 
-        preedit.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-        preedit.maxWidth = dp(96)
-        preedit.maxLines = 1
-        addView(preedit, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        status.maxLines = 1
+        status.visibility = GONE
+        addView(status, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
 
         strip.orientation = HORIZONTAL
         strip.gravity = Gravity.CENTER_VERTICAL
@@ -40,75 +57,58 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         scroll.addView(strip, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
         addView(scroll, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
 
-        script.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-        script.gravity = Gravity.CENTER
-        script.minWidth = dp(40)
-        script.setPadding(dp(8), dp(6), dp(8), dp(6))
-        script.background = chipBackground(0)
-        script.setOnClickListener { onToggleScript() }
-        addView(script, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        sideKey(more, "⋯", "更多功能") { onMore() }
+        sideKey(expand, "▾", "展開候選字") { onExpand() }
+        expand.visibility = INVISIBLE
     }
 
     fun render(state: CandidateUiState) {
         val palette = KeyboardPalette.of(isNightMode())
         setBackgroundColor(palette.background)
-        preedit.setTextColor(if (state.preedit.isEmpty()) palette.hint else palette.text)
-        preedit.text = state.preedit.ifEmpty { state.message }
-        script.text = if (state.traditional) "臺" else "通"
-        script.setTextColor(palette.text)
-        (script.background as? GradientDrawable)?.setColor(palette.accent)
-        script.contentDescription = if (state.traditional) "臺灣標準" else "通用繁體"
+        status.setTextColor(palette.hint)
+        status.text = state.message
+        status.visibility = if (state.message.isEmpty()) GONE else VISIBLE
+        scroll.visibility = if (state.message.isEmpty()) VISIBLE else GONE
+        for (key in listOf(more, expand)) {
+            key.setTextColor(palette.text)
+            (key.background as? GradientDrawable)?.setColor(palette.accent)
+        }
+        expand.visibility = if (state.candidates.isEmpty()) INVISIBLE else VISIBLE
 
         if (shown == state.candidates) return
         shown = state.candidates
         state.candidates.forEachIndexed { index, candidate ->
-            val view = if (index < chips.size) {
-                chips[index]
-            } else {
-                newChip().also {
-                    chips += it
-                    strip.addView(it)
+            val view = chips.getOrNull(index) ?: CandidateChips.create(this).also {
+                it.layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                    marginStart = dp(4)
+                    marginEnd = dp(4)
                 }
+                chips += it
+                strip.addView(it)
             }
-            bind(view, candidate, emphasized = index == 0, palette)
+            CandidateChips.bind(view, candidate, emphasized = index == 0, palette, onCandidate)
             view.visibility = VISIBLE
         }
         for (index in state.candidates.size until chips.size) {
             chips[index].visibility = GONE
         }
+        scroll.scrollTo(0, 0)
     }
 
-    private fun newChip(): TextView {
-        return TextView(context).apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-            gravity = Gravity.CENTER
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            background = chipBackground(0)
-            layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+    private fun sideKey(view: TextView, label: String, description: String, onClick: () -> Unit) {
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        view.gravity = Gravity.CENTER
+        view.minWidth = dp(40)
+        view.setPadding(dp(8), dp(6), dp(8), dp(6))
+        view.background = CandidateChips.rounded(this, 0)
+        view.text = label
+        view.contentDescription = description
+        view.setOnClickListener { onClick() }
+        addView(
+            view,
+            LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
                 marginStart = dp(4)
-                marginEnd = dp(4)
-            }
-        }
-    }
-
-    private fun bind(view: TextView, candidate: Candidate, emphasized: Boolean, palette: KeyboardPalette) {
-        view.text = if (candidate.comment.isEmpty()) {
-            candidate.text
-        } else {
-            "${candidate.text} ${candidate.comment}"
-        }
-        view.contentDescription = candidate.text
-        view.setTextColor(palette.text)
-        view.setOnClickListener { onCandidate(candidate) }
-        (view.background as? GradientDrawable)?.setColor(
-            if (emphasized) palette.accent else palette.key,
+            },
         )
-    }
-
-    private fun chipBackground(color: Int): GradientDrawable {
-        return GradientDrawable().apply {
-            cornerRadius = dp(8).toFloat()
-            setColor(color)
-        }
     }
 }
