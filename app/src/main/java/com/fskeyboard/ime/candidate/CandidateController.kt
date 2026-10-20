@@ -43,6 +43,7 @@ internal class CandidateController(
     private val recent = StringBuilder()
     private var generation = 0L
     private var closed = false
+    private var lastLookupMillis = 0L
 
     private val hasComposition: Boolean
         get() = !composition.isEmpty
@@ -140,15 +141,24 @@ internal class CandidateController(
             preedit = text,
             composingPreview = text,
             candidates = candidates,
-            decodeMillis = 0,
+            decodeMillis = lastLookupMillis,
         )
     }
 
     private fun lookup(pending: ZhuyinComposer): List<Candidate> {
-        val queries = pending.queries() ?: return emptyList()
-        if (!lexicon.isReady) return emptyList()
+        val queries = pending.queries() ?: run {
+            lastLookupMillis = 0
+            return emptyList()
+        }
+        if (!lexicon.isReady) {
+            lastLookupMillis = 0
+            return emptyList()
+        }
         val before = recent.toString() + composition.chosenText
-        return traced("ime.lookup") { lexicon.lookup(queries, before) }
+        val start = System.nanoTime()
+        val found = traced("ime.lookup") { lexicon.lookup(queries, before) }
+        lastLookupMillis = (System.nanoTime() - start) / 1_000_000L
+        return found
     }
 
     private fun onPunctuation(text: String) {
@@ -272,7 +282,10 @@ internal class CandidateController(
         }
         if (snapshot != null) {
             presented = shown
-            Log.i(TAG, "latency lookup=${snapshot.decodeMillis}ms candidates=${snapshot.candidates.size}")
+            // logd is a binder call. A line on every key holds the frame that shows that key.
+            if (snapshot.decodeMillis >= SLOW_LOOKUP_MS) {
+                Log.i(TAG, "latency lookup=${snapshot.decodeMillis}ms candidates=${snapshot.candidates.size}")
+            }
         }
         onUi(ui(presented))
         if (snapshot != null && mode == KeyboardMode.ZHUYIN && pipeline.willScore(snapshot.candidates.size)) {
@@ -333,6 +346,7 @@ internal class CandidateController(
     private companion object {
         const val TAG = "FsKeyboard"
         const val RECENT_CHARS = 32
+        const val SLOW_LOOKUP_MS = 5L
     }
 
     private fun statusMessage(): String = when (lexicon.status) {

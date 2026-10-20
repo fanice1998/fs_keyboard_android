@@ -26,17 +26,17 @@ internal object CandidateChips {
         palette: KeyboardPalette,
         onClick: (Candidate) -> Unit,
     ) {
-        view.text = if (candidate.comment.isEmpty()) {
-            candidate.text
-        } else {
-            "${candidate.text} ${candidate.comment}"
-        }
+        view.text = labelOf(candidate)
         view.contentDescription = candidate.text
         view.setTextColor(palette.text)
         view.setOnClickListener { onClick(candidate) }
         (view.background as? GradientDrawable)?.setColor(
             if (emphasized) palette.accent else palette.key,
         )
+    }
+
+    fun labelOf(candidate: Candidate): String {
+        return if (candidate.comment.isEmpty()) candidate.text else "${candidate.text} ${candidate.comment}"
     }
 
     fun rounded(host: View, color: Int): GradientDrawable {

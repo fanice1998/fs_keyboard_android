@@ -16,6 +16,7 @@ import com.fskeyboard.ime.ui.isNightMode
  * The text on the left is a status message, shown only when there is one.
  * The arrow on the right opens every candidate over the keys.
  * The bar is at least 40dp tall; chips are 18sp with 4dp above and below.
+ * The chips are one [CandidateStrip], not a view apiece.
  */
 internal class CandidateBarView(context: Context) : LinearLayout(context) {
     var onCandidate: (Candidate) -> Unit = {}
@@ -30,10 +31,9 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         }
 
     private val status = TextView(context)
-    private val strip = LinearLayout(context)
+    private val strip = CandidateStrip(context)
     private val scroll = HorizontalScrollView(context)
     private val expand = TextView(context)
-    private val chips = ArrayList<TextView>()
     private var shown: List<Candidate> = emptyList()
 
     init {
@@ -48,8 +48,7 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         status.visibility = GONE
         addView(status, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
 
-        strip.orientation = HORIZONTAL
-        strip.gravity = Gravity.CENTER_VERTICAL
+        strip.onCandidate = { onCandidate(it) }
         scroll.isHorizontalScrollBarEnabled = false
         scroll.addView(strip, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
         addView(scroll, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))
@@ -68,25 +67,10 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         expand.setTextColor(palette.text)
         (expand.background as? GradientDrawable)?.setColor(palette.accent)
         expand.visibility = if (state.candidates.isEmpty()) INVISIBLE else VISIBLE
-
-        if (shown == state.candidates) return
+        val changed = shown != state.candidates
         shown = state.candidates
-        state.candidates.forEachIndexed { index, candidate ->
-            val view = chips.getOrNull(index) ?: CandidateChips.create(this).also {
-                it.layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
-                    marginStart = dp(4)
-                    marginEnd = dp(4)
-                }
-                chips += it
-                strip.addView(it)
-            }
-            CandidateChips.bind(view, candidate, emphasized = index == 0, palette, onCandidate)
-            view.visibility = VISIBLE
-        }
-        for (index in state.candidates.size until chips.size) {
-            chips[index].visibility = GONE
-        }
-        scroll.scrollTo(0, 0)
+        strip.show(state.candidates, palette)
+        if (changed) scroll.scrollTo(0, 0)
     }
 
     private fun sideKey(view: TextView, label: String, description: String, onClick: () -> Unit) {

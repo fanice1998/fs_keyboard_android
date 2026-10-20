@@ -4,10 +4,12 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
+import android.os.Build
 import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewTreeObserver
 import com.fskeyboard.ime.traced
 import com.fskeyboard.ime.ui.KeyboardPalette
 import com.fskeyboard.ime.ui.dp
@@ -64,7 +66,7 @@ internal class KeyboardView(context: Context) : View(context) {
     private val longPress = Runnable {
         val action = down?.spec?.secondary ?: return@Runnable
         release()
-        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        buzz()
         fire(action)
     }
 
@@ -151,7 +153,8 @@ internal class KeyboardView(context: Context) : View(context) {
         val spec = down?.spec
         invalidate()
         // Feedback on touch, not on release. The key itself still fires on release.
-        if (spec != null) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        // The vibration waits until this frame is submitted so it does not hold the highlight back.
+        if (spec != null) buzz()
         if (spec?.action == KeyAction.Backspace) {
             fire(spec.action, eventTime)
             postDelayed(repeat, 320L)
@@ -172,6 +175,33 @@ internal class KeyboardView(context: Context) : View(context) {
         down = null
         downPointer = NO_POINTER
         invalidate()
+    }
+
+    /**
+     * Vibrates after the pressed-key frame is submitted.
+     * [performHapticFeedback] calls system_server and does not return until that call does,
+     * so running it inside the touch handler holds the highlight back.
+     */
+    private fun buzz() {
+        val observer = viewTreeObserver
+        if (!observer.isAlive) {
+            performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 29) {
+            observer.registerFrameCommitCallback {
+                performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            }
+            return
+        }
+        observer.addOnDrawListener(object : ViewTreeObserver.OnDrawListener {
+            override fun onDraw() {
+                post {
+                    if (observer.isAlive) observer.removeOnDrawListener(this)
+                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                }
+            }
+        })
     }
 
     /** A zhuyin key from a touch carries the keys that touch may have meant. */
