@@ -82,8 +82,29 @@ class KeyboardLayoutTest {
         assertTrue(actions.contains(KeyAction.Character('。')))
         assertTrue(actions.contains(KeyAction.Character('「')))
         assertTrue(actions.contains(KeyAction.SetMode(KeyboardMode.SYMBOLS_MORE)))
-        assertEquals("ㄅㄆㄇ", specs.first { it.action == KeyAction.SetMode(KeyboardMode.ZHUYIN) }.label)
+        assertEquals("注音", specs.first { it.action == KeyAction.SetMode(KeyboardMode.ZHUYIN) }.label)
         assertEquals(KeyIcon.RETURN, specs.first { it.action == KeyAction.Enter }.icon)
+
+        val rows = KeyboardLayouts.rows(KeyboardMode.SYMBOLS, base = KeyboardMode.ZHUYIN)
+        assertEquals("-/：；（）$@「」", rows[1].keys.joinToString("") { it.label })
+        assertEquals(listOf("#+=", "。", "，", "、", "？", "！", ".", ""), rows[2].keys.map { it.label })
+        val more = KeyboardLayouts.rows(KeyboardMode.SYMBOLS_MORE, base = KeyboardMode.ZHUYIN)
+        assertEquals("_—\\|～«»¥&·", more[1].keys.joinToString("") { it.label })
+        assertTrue(more[2].keys.any { it.action == KeyAction.Punctuation("^_^") })
+    }
+
+    @Test
+    fun halfWidthZhuyinSymbolsMatchLatinButReturnToZhuyin() {
+        for (mode in listOf(KeyboardMode.SYMBOLS, KeyboardMode.SYMBOLS_MORE)) {
+            val half = KeyboardLayouts.rows(mode, base = KeyboardMode.ZHUYIN, fullWidth = false)
+            val latin = KeyboardLayouts.rows(mode, base = KeyboardMode.LATIN)
+            assertEquals(
+                latin.take(3).map { row -> row.keys.map { it.action } },
+                half.take(3).map { row -> row.keys.map { it.action } },
+            )
+            val back = half.flatMap { it.keys }.first { it.label == "注音" }
+            assertEquals(KeyAction.SetMode(KeyboardMode.ZHUYIN), back.action)
+        }
     }
 
     @Test
@@ -113,9 +134,12 @@ class KeyboardLayoutTest {
     fun everySymbolRowIsAsWideAsTenKeys() {
         for (base in listOf(KeyboardMode.ZHUYIN, KeyboardMode.LATIN)) {
             for (mode in listOf(KeyboardMode.SYMBOLS, KeyboardMode.SYMBOLS_MORE)) {
-                val rows = KeyboardLayouts.rows(mode, base = base)
-                for (row in rows.take(3)) {
-                    assertEquals("$base $mode", 10f, row.keys.sumOf { it.weight.toDouble() }.toFloat(), 0.001f)
+                for (fullWidth in listOf(true, false)) {
+                    val rows = KeyboardLayouts.rows(mode, base = base, fullWidth = fullWidth)
+                    for (row in rows.take(3)) {
+                        val width = row.keys.sumOf { it.weight.toDouble() }.toFloat()
+                        assertEquals("$base $mode $fullWidth", 10f, width, 0.001f)
+                    }
                 }
             }
         }

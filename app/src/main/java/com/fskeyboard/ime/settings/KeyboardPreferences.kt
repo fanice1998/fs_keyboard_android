@@ -5,8 +5,8 @@ import com.fskeyboard.ime.keyboard.KeyboardHeight
 import com.fskeyboard.ime.rerank.RerankPreferences
 
 /**
- * Keyboard height stored in the app's private preferences.
- * The value survives process death and reboot, and is cleared only when the app data is removed.
+ * Keyboard height and symbol width stored in the app's private preferences.
+ * The values survive process death and reboot, and are cleared only when the app data is removed.
  */
 internal class KeyboardPreferences(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(
@@ -23,7 +23,15 @@ internal class KeyboardPreferences(context: Context) {
         if (flush) editor.commit() else editor.apply()
     }
 
+    /** Whether the symbol pages opened from zhuyin use full-width Chinese punctuation. */
+    fun fullWidthSymbols(): Boolean = prefs.getBoolean(KEY_FULL_WIDTH, true)
+
+    fun setFullWidthSymbols(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_FULL_WIDTH, enabled).apply()
+    }
+
     companion object {
         const val KEY_ROW_DP = "keyboard_row_height_dp"
+        const val KEY_FULL_WIDTH = "zhuyin_full_width_symbols"
     }
 }

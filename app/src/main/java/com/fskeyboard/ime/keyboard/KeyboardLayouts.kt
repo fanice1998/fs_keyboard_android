@@ -1,16 +1,20 @@
 package com.fskeyboard.ime.keyboard
 
 internal object KeyboardLayouts {
-    /** [base] is the letter keyboard the symbol pages were opened from. */
+    /**
+     * [base] is the letter keyboard the symbol pages were opened from.
+     * [fullWidth] picks the Chinese symbol pages when that keyboard is zhuyin.
+     */
     fun rows(
         mode: KeyboardMode,
         shifted: Boolean = false,
         base: KeyboardMode = KeyboardMode.ZHUYIN,
+        fullWidth: Boolean = true,
     ): List<KeyRow> = when (mode) {
         KeyboardMode.ZHUYIN -> zhuyin()
         KeyboardMode.LATIN -> latin(shifted)
-        KeyboardMode.SYMBOLS -> symbols(base, more = false)
-        KeyboardMode.SYMBOLS_MORE -> symbols(base, more = true)
+        KeyboardMode.SYMBOLS -> symbols(base, more = false, fullWidth)
+        KeyboardMode.SYMBOLS_MORE -> symbols(base, more = true, fullWidth)
     }
 
     fun letterKeys(mode: KeyboardMode, shifted: Boolean = false): Set<Char> {
@@ -83,32 +87,39 @@ internal object KeyboardLayouts {
     )
 
     /**
-     * iOS 123 and #+= pages. From Latin they are the ASCII pages; from zhuyin the
-     * punctuation is full-width Chinese. Row three is five wide keys between the
-     * page key and delete, the same width as ten keys.
+     * iOS 123 and #+= pages. From zhuyin with [fullWidth] they are the iOS zhuyin
+     * pages with full-width Chinese punctuation; otherwise they are the ASCII pages.
+     * Either way they return to the letter keyboard they were opened from.
+     * On row three the keys between the page key and delete share seven key widths.
      */
-    private fun symbols(base: KeyboardMode, more: Boolean): List<KeyRow> {
-        val chinese = base == KeyboardMode.ZHUYIN
+    private fun symbols(base: KeyboardMode, more: Boolean, fullWidth: Boolean): List<KeyRow> {
+        val chinese = base == KeyboardMode.ZHUYIN && fullWidth
         val (first, second, third) = when {
-            !more && !chinese -> Triple("1234567890", "-/:;()$&@\"", ".,?!'")
-            !more && chinese -> Triple("1234567890", "-/：；（）$＠「」", "。，、？！")
-            !chinese -> Triple("[]{}#%^*+=", "_\\|~<>€£¥•", ".,?!'")
-            else -> Triple("【】｛｝#%^*+=", "_—\\｜～《》$&·", "…『』〈〉")
+            !more && !chinese -> Triple(split("1234567890"), split("-/:;()$&@\""), split(".,?!'"))
+            !more -> Triple(split("1234567890"), split("-/：；（）$@「」"), split("。，、？！."))
+            !chinese -> Triple(split("[]{}#%^*+="), split("_\\|~<>€£¥•"), split(".,?!'"))
+            else -> Triple(
+                split("[]{}#%^*+="),
+                split("_—\\|～«»¥&·"),
+                listOf("…", "，", "^_^", "？", "！", "’"),
+            )
         }
         val page = if (more) {
             modeKey("123", KeyboardMode.SYMBOLS, 1.5f)
         } else {
             modeKey("#+=", KeyboardMode.SYMBOLS_MORE, 1.5f)
         }
-        val letters = if (chinese) KeyboardMode.ZHUYIN else KeyboardMode.LATIN
-        val other = if (chinese) KeyboardMode.LATIN else KeyboardMode.ZHUYIN
+        val zhuyin = base == KeyboardMode.ZHUYIN
+        val letters = if (zhuyin) KeyboardMode.ZHUYIN else KeyboardMode.LATIN
+        val other = if (zhuyin) KeyboardMode.LATIN else KeyboardMode.ZHUYIN
+        val wide = 7f / third.size
         return listOf(
-            KeyRow(chars(first)),
-            KeyRow(chars(second)),
-            KeyRow(listOf(page) + chars(third).map { it.copy(weight = 1.4f) } + deleteKey()),
+            KeyRow(symbolKeys(first)),
+            KeyRow(symbolKeys(second)),
+            KeyRow(listOf(page) + symbolKeys(third).map { it.copy(weight = wide) } + deleteKey()),
             KeyRow(
                 listOf(
-                    modeKey(if (chinese) "ㄅㄆㄇ" else "ABC", letters, 1.45f),
+                    modeKey(if (zhuyin) "注音" else "ABC", letters, 1.45f),
                     iconKey(
                         icon = KeyIcon.GLOBE,
                         action = KeyAction.SetMode(other),
@@ -122,15 +133,19 @@ internal object KeyboardLayouts {
         )
     }
 
+    private fun split(value: String): List<String> = value.map { it.toString() }
+
+    /** One character commits as typed; a longer label such as ^_^ commits as text. */
+    private fun symbolKeys(labels: List<String>): List<KeySpec> = labels.map { label ->
+        val action = if (label.length == 1) KeyAction.Character(label[0]) else KeyAction.Punctuation(label)
+        KeySpec(label, action)
+    }
+
     private fun letters(value: String, shifted: Boolean = false): List<KeySpec> {
         return value.map { letter ->
             val shown = if (shifted) letter.uppercaseChar() else letter
             KeySpec(shown.toString(), KeyAction.Character(shown))
         }
-    }
-
-    private fun chars(value: String): List<KeySpec> {
-        return value.map { KeySpec(it.toString(), KeyAction.Character(it)) }
     }
 
     private fun modeKey(label: String, mode: KeyboardMode, weight: Float) = KeySpec(

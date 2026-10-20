@@ -26,10 +26,18 @@ internal class KeyboardView(context: Context) : View(context) {
             requestLayout()
         }
 
+    /** Full-width Chinese punctuation on the symbol pages opened from zhuyin. */
+    var fullWidthSymbols: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            rebuild()
+        }
+
     private var mode = KeyboardMode.ZHUYIN
     private var base = KeyboardMode.ZHUYIN
     private var shifted = false
-    private var rows = KeyboardLayouts.rows(mode, shifted, base)
+    private var rows = KeyboardLayouts.rows(mode, shifted, base, fullWidthSymbols)
     private val boxes = ArrayList<KeyBox>()
     private var down: KeyBox? = null
     private var downPointer = NO_POINTER
@@ -181,7 +189,7 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     private fun rebuild() {
-        rows = KeyboardLayouts.rows(mode, shifted, base)
+        rows = KeyboardLayouts.rows(mode, shifted, base, fullWidthSymbols)
         requestLayout()
         if (width > 0 && height > 0) {
             layoutKeys(width, height)

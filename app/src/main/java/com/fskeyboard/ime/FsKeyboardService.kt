@@ -125,7 +125,9 @@ class FsKeyboardService : InputMethodService() {
             }
         }
         keyboard = KeyboardView(this).apply {
-            rowHeightDp = KeyboardPreferences(this@FsKeyboardService).rowHeightDp()
+            val preferences = KeyboardPreferences(this@FsKeyboardService)
+            rowHeightDp = preferences.rowHeightDp()
+            fullWidthSymbols = preferences.fullWidthSymbols()
             onTyped = latencyProbe::keyHandled
             onKey = { action ->
                 if (action == KeyAction.NextInputMethod) {
@@ -373,7 +375,9 @@ class FsKeyboardService : InputMethodService() {
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         setCandidatesViewShown(false)
-        keyboard?.rowHeightDp = KeyboardPreferences(this).rowHeightDp()
+        val preferences = KeyboardPreferences(this)
+        keyboard?.rowHeightDp = preferences.rowHeightDp()
+        keyboard?.fullWidthSymbols = preferences.fullWidthSymbols()
         controller.onStartInput(restarting)
         window?.window?.decorView?.requestApplyInsets()
         latestInsets?.let(::applyNavigationInset)
