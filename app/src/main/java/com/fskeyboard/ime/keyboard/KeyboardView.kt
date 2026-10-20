@@ -52,6 +52,7 @@ internal class KeyboardView(context: Context) : View(context) {
     private val longPress = Runnable {
         val action = down?.spec?.secondary ?: return@Runnable
         release()
+        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         fire(action)
     }
 
@@ -133,6 +134,8 @@ internal class KeyboardView(context: Context) : View(context) {
         downPointer = pointer
         val spec = down?.spec
         invalidate()
+        // Feedback on touch, not on release. The key itself still fires on release.
+        if (spec != null) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         if (spec?.action == KeyAction.Backspace) {
             fire(spec.action, eventTime)
             postDelayed(repeat, 320L)
@@ -156,7 +159,6 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     private fun fire(action: KeyAction, eventTime: Long? = null) {
-        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         dispatch(action, haptic = false)
         eventTime?.let(onTyped)
     }
