@@ -50,10 +50,10 @@ internal class RustZhuyinLexicon : ZhuyinLexicon {
         worker.shutdown()
     }
 
-    override fun lookup(code: String): List<Candidate> {
+    override fun lookup(code: String, exact: Boolean): List<Candidate> {
         if (!isReady || code.isEmpty()) return emptyList()
         val raw = try {
-            RustLexiconNative.nativeLookup(code)
+            RustLexiconNative.nativeLookup(code, exact)
         } catch (error: UnsatisfiedLinkError) {
             Log.e(TAG, "lexicon lookup failed", error)
             return emptyList()

@@ -12,6 +12,12 @@ internal class CandidatePipeline(
     /** Rime order with script conversion, before the model runs. */
     fun preview(snapshot: EngineSnapshot): List<Candidate> = finish(snapshot.candidates)
 
+    /** False when the model is absent, so the key path can skip reading the editor. */
+    fun willScore(candidateCount: Int): Boolean {
+        val async = reranker as? AsyncCandidateReranker ?: return false
+        return async.willScore(candidateCount)
+    }
+
     fun present(snapshot: EngineSnapshot, contextBefore: String = ""): List<Candidate> {
         return finish(reranker.rerank(request(snapshot, contextBefore)))
     }

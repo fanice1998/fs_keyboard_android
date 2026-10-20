@@ -14,6 +14,6 @@ internal class RustLexiconNative private constructor() {
         external fun nativeLoad(yaml: String): Int
 
         @JvmStatic
-        external fun nativeLookup(code: String): String
+        external fun nativeLookup(code: String, exact: Boolean): String
     }
 }

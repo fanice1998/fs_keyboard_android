@@ -19,6 +19,7 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
     private val strip = LinearLayout(context)
     private val scroll = HorizontalScrollView(context)
     private val script = TextView(context)
+    private val chips = ArrayList<TextView>()
     private var shown: List<Candidate> = emptyList()
 
     init {
@@ -43,6 +44,7 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         script.gravity = Gravity.CENTER
         script.minWidth = dp(40)
         script.setPadding(dp(8), dp(6), dp(8), dp(6))
+        script.background = chipBackground(0)
         script.setOnClickListener { onToggleScript() }
         addView(script, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
     }
@@ -54,37 +56,53 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         preedit.text = state.preedit.ifEmpty { state.message }
         script.text = if (state.traditional) "臺" else "通"
         script.setTextColor(palette.text)
-        script.background = chipBackground(palette.accent)
+        (script.background as? GradientDrawable)?.setColor(palette.accent)
         script.contentDescription = if (state.traditional) "臺灣標準" else "通用繁體"
 
         if (shown == state.candidates) return
         shown = state.candidates
-        strip.removeAllViews()
         state.candidates.forEachIndexed { index, candidate ->
-            strip.addView(chip(candidate, emphasized = index == 0, palette))
+            val view = if (index < chips.size) {
+                chips[index]
+            } else {
+                newChip().also {
+                    chips += it
+                    strip.addView(it)
+                }
+            }
+            bind(view, candidate, emphasized = index == 0, palette)
+            view.visibility = VISIBLE
+        }
+        for (index in state.candidates.size until chips.size) {
+            chips[index].visibility = GONE
         }
     }
 
-    private fun chip(candidate: Candidate, emphasized: Boolean, palette: KeyboardPalette): TextView {
+    private fun newChip(): TextView {
         return TextView(context).apply {
-            val caption = if (candidate.comment.isEmpty()) {
-                candidate.text
-            } else {
-                "${candidate.text} ${candidate.comment}"
-            }
-            text = caption
-            contentDescription = candidate.text
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-            setTextColor(palette.text)
             gravity = Gravity.CENTER
             setPadding(dp(12), dp(6), dp(12), dp(6))
-            background = chipBackground(if (emphasized) palette.accent else palette.key)
-            setOnClickListener { onCandidate(candidate) }
+            background = chipBackground(0)
             layoutParams = LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
                 marginStart = dp(4)
                 marginEnd = dp(4)
             }
         }
+    }
+
+    private fun bind(view: TextView, candidate: Candidate, emphasized: Boolean, palette: KeyboardPalette) {
+        view.text = if (candidate.comment.isEmpty()) {
+            candidate.text
+        } else {
+            "${candidate.text} ${candidate.comment}"
+        }
+        view.contentDescription = candidate.text
+        view.setTextColor(palette.text)
+        view.setOnClickListener { onCandidate(candidate) }
+        (view.background as? GradientDrawable)?.setColor(
+            if (emphasized) palette.accent else palette.key,
+        )
     }
 
     private fun chipBackground(color: Int): GradientDrawable {

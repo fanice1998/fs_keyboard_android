@@ -80,12 +80,19 @@ internal class ZhuyinComposer {
         get() = parts.isEmpty()
 
     /**
-     * Syllable codes for an exact lexicon lookup.
-     * Null until every syllable has a tone. 平聲 is the body alone.
+     * True when every syllable has a tone, including 平聲.
+     * An unfinished syllable stays false so lookup can offer every tone.
+     */
+    val exact: Boolean
+        get() = parts.isNotEmpty() && parts.all { it.tone.chosen }
+
+    /**
+     * Syllable codes for lookup. Tone marks are included only when [exact] is true.
+     * 平聲 is the body alone. Null when nothing has been typed.
      */
     fun queries(): List<String>? {
-        if (parts.isEmpty() || parts.any { !it.tone.chosen }) return null
-        return parts.map { it.body.toString() + it.tone.mark }
+        if (parts.isEmpty()) return null
+        return parts.map { it.body.toString() + if (exact) it.tone.mark else "" }
     }
 
     fun append(glyph: String): Boolean {

@@ -79,9 +79,11 @@ class ZhuyinComposerTest {
     @Test
     fun levelToneKeepsTheGlyphsAndBecomesTheQuery() {
         val composer = type("ㄍㄨㄥ")
-        assertEquals(null, composer.queries())
+        assertEquals(listOf("ㄍㄨㄥ"), composer.queries())
+        assertFalse(composer.exact)
         assertTrue(composer.markLevelTone())
         assertEquals("ㄍㄨㄥ", composer.text)
+        assertTrue(composer.exact)
         assertEquals(listOf("ㄍㄨㄥ"), composer.queries())
     }
 
@@ -108,7 +110,8 @@ class ZhuyinComposerTest {
         composer.markLevelTone()
         composer.backspace()
         assertEquals("ㄍㄨㄥ", composer.text)
-        assertEquals(null, composer.queries())
+        assertFalse(composer.exact)
+        assertEquals(listOf("ㄍㄨㄥ"), composer.queries())
         composer.backspace()
         assertEquals("ㄍㄨ", composer.text)
     }
@@ -118,19 +121,22 @@ class ZhuyinComposerTest {
         val composer = type("ㄅㄚˋ")
         composer.backspace()
         assertEquals("ㄅㄚ", composer.text)
-        assertEquals(null, composer.queries())
+        assertFalse(composer.exact)
+        assertEquals(listOf("ㄅㄚ"), composer.queries())
         composer.backspace()
         assertEquals("ㄅ", composer.text)
     }
 
     @Test
-    fun secondSyllableStaysUnqueriedUntilItHasATone() {
+    fun secondSyllablePredictsUntilItHasATone() {
         val composer = type("ㄅㄚ")
         composer.markLevelTone()
         assertTrue(composer.append("ㄅ"))
         assertTrue(composer.append("ㄚ"))
-        assertEquals(null, composer.queries())
+        assertFalse(composer.exact)
+        assertEquals(listOf("ㄅㄚ", "ㄅㄚ"), composer.queries())
         assertTrue(composer.append("ˋ"))
+        assertTrue(composer.exact)
         assertEquals(listOf("ㄅㄚ", "ㄅㄚˋ"), composer.queries())
     }
 
@@ -140,10 +146,14 @@ class ZhuyinComposerTest {
     }
 
     @Test
-    fun untonedCompositionOffersOnlyTheRawZhuyin() {
-        val composer = type("ㄚ")
-        val shown = candidatesFor(composer, listOf(Candidate("家", engineIndex = -1)))
-        assertEquals(listOf("ㄚ"), shown.map { it.text })
+    fun untonedCompositionShowsPredictionsBeforeATone() {
+        val composer = type("ㄍㄨㄥ")
+        assertFalse(composer.exact)
+        val hits = listOf(
+            Candidate("公", engineIndex = -1),
+            Candidate("貢", engineIndex = -2),
+        )
+        assertEquals(listOf("公", "貢", "ㄍㄨㄥ"), candidatesFor(composer, hits).map { it.text })
     }
 
     @Test

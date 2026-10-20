@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.util.TypedValue
+import android.view.Choreographer
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
@@ -50,8 +51,9 @@ internal class KeyboardView(context: Context) : View(context) {
         longPressFired = true
         down = null
         stopRepeat()
-        dispatch(action)
         invalidate()
+        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        afterFrame { dispatch(action, haptic = false) }
     }
 
     fun setMode(mode: KeyboardMode) {
@@ -102,13 +104,15 @@ internal class KeyboardView(context: Context) : View(context) {
                 longPressFired = false
                 down = hit(event.x, event.y)
                 val spec = down?.spec
+                invalidate()
                 if (spec?.action == KeyAction.Backspace) {
-                    dispatch(spec.action)
+                    val action = spec.action
+                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    afterFrame { dispatch(action, haptic = false) }
                     postDelayed(repeat, 320L)
                 } else if (spec?.secondary != null) {
                     postDelayed(longPress, 400L)
                 }
-                invalidate()
             }
             MotionEvent.ACTION_MOVE -> {
                 val box = hit(event.x, event.y)
@@ -122,12 +126,19 @@ internal class KeyboardView(context: Context) : View(context) {
                 stopRepeat()
                 val box = down
                 val released = hit(event.x, event.y)
-                if (!longPressFired && box != null && box == released && box.spec.action != KeyAction.Backspace) {
-                    dispatch(box.spec.action)
-                }
+                val action = box?.spec?.action
+                val fire = !longPressFired &&
+                    box != null &&
+                    box == released &&
+                    action != null &&
+                    action != KeyAction.Backspace
                 longPressFired = false
                 down = null
                 invalidate()
+                if (fire && action != null) {
+                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    afterFrame { dispatch(action, haptic = false) }
+                }
             }
             MotionEvent.ACTION_CANCEL -> {
                 stopRepeat()
@@ -139,17 +150,26 @@ internal class KeyboardView(context: Context) : View(context) {
         return true
     }
 
-    private fun dispatch(action: KeyAction) {
+    private fun dispatch(action: KeyAction, haptic: Boolean = true) {
         if (action == KeyAction.Shift) {
             shifted = !shifted
             rebuild()
-        } else {
-            performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            onKey(action)
+            return
         }
+        if (haptic) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        onKey(action)
         if (action is KeyAction.Character && shifted && mode == KeyboardMode.LATIN) {
             shifted = false
             rebuild()
+        }
+    }
+
+    /** Lets the pressed-key frame draw before lookup and the editor update. */
+    private fun afterFrame(block: () -> Unit) {
+        Choreographer.getInstance().postFrameCallback {
+            post {
+                if (isAttachedToWindow) block()
+            }
         }
     }
 

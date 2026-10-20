@@ -34,4 +34,7 @@ internal fun interface CandidateReranker {
  */
 internal interface AsyncCandidateReranker : CandidateReranker {
     fun rerankAsync(request: RerankRequest, onResult: (RerankTrace) -> Unit)
+
+    /** True when this keystroke will run the model and needs cursor context. */
+    fun willScore(candidateCount: Int): Boolean
 }

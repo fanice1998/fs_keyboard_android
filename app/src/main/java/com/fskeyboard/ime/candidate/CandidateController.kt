@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Choreographer
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import com.fskeyboard.ime.R
@@ -37,6 +38,7 @@ internal class CandidateController(
     private var composing = false
     private val composer = ZhuyinComposer()
     private var generation = 0L
+    private var composingWrite = 0L
     private var closed = false
 
     fun start() {
@@ -87,6 +89,7 @@ internal class CandidateController(
         composer.clear()
         composing = false
         presented = emptyList()
+        composingWrite += 1
         val ic = connection()
         ic?.commitText(candidate.text, 1)
         ic?.finishComposingText()
@@ -125,7 +128,7 @@ internal class CandidateController(
     private fun refresh(): EngineSnapshot {
         val queries = composer.queries()
         val hits = if (queries != null && lexicon.isReady) {
-            lexicon.lookup(queries.joinToString(" "))
+            lexicon.lookup(queries.joinToString(" "), composer.exact)
         } else {
             emptyList()
         }
@@ -169,6 +172,7 @@ internal class CandidateController(
             if (composer.isEmpty) {
                 composing = false
                 presented = emptyList()
+                composingWrite += 1
                 val ic = connection()
                 ic?.setComposingText("", 1)
                 ic?.finishComposingText()
@@ -201,6 +205,7 @@ internal class CandidateController(
         composer.clear()
         composing = false
         presented = emptyList()
+        composingWrite += 1
         connection()?.commitText(text, 1)
         connection()?.finishComposingText()
         publish(EngineSnapshot())
@@ -217,15 +222,25 @@ internal class CandidateController(
     }
 
     private fun apply(snapshot: EngineSnapshot) {
-        val ic = connection()
         val inline = snapshot.composingPreview.ifEmpty { snapshot.preedit }
-        if (inline.isNotEmpty()) {
-            ic?.setComposingText(inline, 1)
-        } else {
-            ic?.setComposingText("", 1)
-            ic?.finishComposingText()
-        }
+        val ticket = ++composingWrite
         publish(snapshot)
+        afterFrame {
+            if (closed || ticket != composingWrite) return@afterFrame
+            val ic = connection() ?: return@afterFrame
+            if (inline.isNotEmpty()) {
+                ic.setComposingText(inline, 1)
+            } else {
+                ic.setComposingText("", 1)
+                ic.finishComposingText()
+            }
+        }
+    }
+
+    private fun afterFrame(block: () -> Unit) {
+        Choreographer.getInstance().postFrameCallback {
+            post { block() }
+        }
     }
 
     private fun commit(text: String) {
@@ -234,6 +249,7 @@ internal class CandidateController(
 
     private fun cancelComposition() {
         composer.clear()
+        composingWrite += 1
         val ic = connection()
         ic?.setComposingText("", 1)
         ic?.finishComposingText()
@@ -255,7 +271,7 @@ internal class CandidateController(
             Log.i(TAG, "latency lookup=${snapshot.decodeMillis}ms candidates=${snapshot.candidates.size}")
         }
         onUi(ui(snapshot, presented))
-        if (snapshot != null && mode == KeyboardMode.ZHUYIN && snapshot.candidates.size >= 2) {
+        if (snapshot != null && mode == KeyboardMode.ZHUYIN && pipeline.willScore(snapshot.candidates.size)) {
             val contextBefore = contextBefore()
             pipeline.presentAsync(snapshot, contextBefore) { trace ->
                 post {

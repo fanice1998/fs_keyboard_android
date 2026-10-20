@@ -4,7 +4,7 @@ import android.content.Context
 import com.fskeyboard.ime.candidate.Candidate
 
 /**
- * Exact zhuyin lookup. The keyboard asks this interface and does not call librime.
+ * Zhuyin lookup. The keyboard asks this interface and does not call librime.
  */
 internal interface ZhuyinLexicon {
     val status: EngineStatus
@@ -14,6 +14,10 @@ internal interface ZhuyinLexicon {
     fun start(context: Context, onReady: () -> Unit)
     fun close()
 
-    /** [code] is syllable readings joined by a space. Each hit uses a negative index. */
-    fun lookup(code: String): List<Candidate>
+    /**
+     * [code] is syllable readings joined by a space.
+     * [exact] keeps one tone. Otherwise every tone of those syllables is eligible.
+     * Each hit uses a negative index.
+     */
+    fun lookup(code: String, exact: Boolean): List<Candidate>
 }

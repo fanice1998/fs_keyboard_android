@@ -97,6 +97,11 @@ internal class NeuralCandidateReranker(
         ).candidates
     }
 
+    override fun willScore(candidateCount: Int): Boolean {
+        if (closed.get() || !enabled() || !model.available) return false
+        return candidateCount >= 2
+    }
+
     override fun rerankAsync(request: RerankRequest, onResult: (RerankTrace) -> Unit) {
         ready(request)?.let {
             onResult(it)

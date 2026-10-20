@@ -57,6 +57,8 @@ internal class OnnxCandidateRanker(
 
     override fun rerank(request: RerankRequest): List<Candidate> = neural.rerank(request)
 
+    override fun willScore(candidateCount: Int): Boolean = neural.willScore(candidateCount)
+
     override fun rerankAsync(request: RerankRequest, onResult: (RerankTrace) -> Unit) {
         neural.rerankAsync(request, onResult)
     }

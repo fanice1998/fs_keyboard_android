@@ -33,13 +33,14 @@ internal object CompositionCandidates {
 }
 
 /**
- * Hanzi appear only after every syllable has a tone.
- * Until then the bar keeps the raw bopomofo and does not guess another reading.
+ * Shows the lexicon hits for the current reading.
+ * An unfinished tone uses the tone-insensitive hits. A chosen tone uses the exact list.
+ * The raw bopomofo stays at the end so it can still be committed.
  */
 internal fun candidatesFor(composer: ZhuyinComposer, hits: List<Candidate>): List<Candidate> {
     val text = composer.text
     if (text.isEmpty()) return emptyList()
-    val queries = composer.queries() ?: return listOf(Candidate(text = text, engineIndex = -1))
+    val queries = composer.queries() ?: return emptyList()
     return CompositionCandidates.supplement(text, queries, hits)
 }
 
