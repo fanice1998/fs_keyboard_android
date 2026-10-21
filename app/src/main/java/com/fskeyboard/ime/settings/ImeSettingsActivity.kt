@@ -69,6 +69,12 @@ class ImeSettingsActivity : Activity() {
         fullWidth.setOnCheckedChangeListener { _, checked ->
             keyboardPreferences.setFullWidthSymbols(checked)
         }
+        val latinTopNumber = findViewById<Switch>(R.id.latin_top_number_row_switch)
+        latinTopNumber.isChecked = keyboardPreferences.latinTopNumberRow()
+        latinTopNumber.setOnCheckedChangeListener { _, checked ->
+            keyboardPreferences.setLatinTopNumberRow(checked)
+            previewKeyboard.latinTopNumberRow = checked
+        }
         heightValue = findViewById(R.id.keyboard_height_value)
         heightSeek = findViewById(R.id.keyboard_height)
         heightSeek.min = KeyboardHeight.MIN_ROW_DP

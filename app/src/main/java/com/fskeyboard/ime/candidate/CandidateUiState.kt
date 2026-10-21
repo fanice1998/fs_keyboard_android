@@ -12,6 +12,7 @@ internal data class ImeUiState(
     /** The letter keyboard the symbol pages return to. */
     val base: KeyboardMode = KeyboardMode.ZHUYIN,
     val candidates: CandidateUiState = CandidateUiState(),
+    val hasUnconfirmedText: Boolean = false,
 )
 
 /** Symbol pages keep the row clear. Zhuyin and Latin both show what was just looked up. */

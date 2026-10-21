@@ -13,6 +13,9 @@ internal enum class KeyboardMode {
 
     val isLetters: Boolean
         get() = this == ZHUYIN || this == LATIN
+
+    val isSymbols: Boolean
+        get() = this == SYMBOLS || this == SYMBOLS_MORE
 }
 
 internal sealed interface KeyAction {

@@ -8,7 +8,8 @@ class KeyboardHeightTest {
     @Test
     fun defaultSitsInsideTheAdjustableRange() {
         assertTrue(KeyboardHeight.DEFAULT_ROW_DP in KeyboardHeight.MIN_ROW_DP..KeyboardHeight.MAX_ROW_DP)
-        assertEquals(100, KeyboardHeight.percentOfDefault(KeyboardHeight.DEFAULT_ROW_DP))
+        assertEquals(91, KeyboardHeight.percentOfDefault(KeyboardHeight.DEFAULT_ROW_DP))
+        assertEquals(100, KeyboardHeight.percentOfDefault(KeyboardHeight.STANDARD_ROW_DP))
     }
 
     @Test

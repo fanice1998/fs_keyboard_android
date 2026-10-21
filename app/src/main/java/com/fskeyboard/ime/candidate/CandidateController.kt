@@ -62,6 +62,8 @@ internal class CandidateController(
     private var closed = false
     private var lastLookupMillis = 0L
     private var cursorSession: CursorSession? = null
+    private var selStart = -1
+    private var selEnd = -1
 
     private val hasComposition: Boolean
         get() = !composition.isEmpty
@@ -85,6 +87,9 @@ internal class CandidateController(
     }
 
     fun onStartInput(restarting: Boolean) {
+        val info = editorInfo()
+        selStart = info?.initialSelStart ?: -1
+        selEnd = info?.initialSelEnd ?: -1
         if (!restarting) {
             recent.setLength(0)
         }
@@ -104,6 +109,8 @@ internal class CandidateController(
         candidatesStart: Int,
         candidatesEnd: Int,
     ) {
+        selStart = newSelStart
+        selEnd = newSelEnd
         if (candidatesStart == -1 && candidatesEnd == -1) {
             var changed = false
             if (english.isNotEmpty()) {
@@ -125,6 +132,8 @@ internal class CandidateController(
         endCursor()
         commitEnglishLiteral()
         cancelComposition()
+        selStart = -1
+        selEnd = -1
     }
 
     /** Space can glide the caret only when it is not marking 平聲 or finishing an English word. */
@@ -222,7 +231,11 @@ internal class CandidateController(
     /** Leaving zhuyin commits what was typed, the way Enter does. */
     private fun setMode(next: KeyboardMode) {
         if (next == mode) return
-        if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
+        val switchingBetweenLatinAndSymbols = (mode == KeyboardMode.LATIN && next.isSymbols) ||
+            (mode.isSymbols && next == KeyboardMode.LATIN)
+        if (!switchingBetweenLatinAndSymbols && english.isNotEmpty()) {
+            finishEnglish(trailing = "", takePrediction = false)
+        }
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
             finishComposition(convertAll())
         }
@@ -287,7 +300,7 @@ internal class CandidateController(
 
     private fun onSpace() {
         if (english.isNotEmpty()) {
-            finishEnglish(trailing = " ", takePrediction = true)
+            finishEnglish(trailing = " ", takePrediction = false)
             return
         }
         when (KeyPolicy.space(mode, composing = hasComposition)) {
@@ -313,22 +326,41 @@ internal class CandidateController(
             }
             return
         }
-        if (mode != KeyboardMode.ZHUYIN || !hasComposition) {
-            connection()?.deleteSurroundingText(1, 0)
-            if (recent.isNotEmpty()) recent.setLength(recent.length - 1)
+        if (mode == KeyboardMode.ZHUYIN && hasComposition) {
+            composition.backspace()
+            apply(refresh())
             return
         }
-        composition.backspace()
-        apply(refresh())
+
+        val ic = connection() ?: return
+        val selected = try {
+            ic.getSelectedText(0)
+        } catch (_: Exception) {
+            null
+        }
+        val hasSelection = !selected.isNullOrEmpty() || (selStart >= 0 && selEnd >= 0 && selStart != selEnd)
+        if (hasSelection) {
+            ic.commitText("", 1)
+            selStart = -1
+            selEnd = -1
+            recent.setLength(0)
+            return
+        }
+
+        ic.deleteSurroundingText(1, 0)
+        if (recent.isNotEmpty()) recent.setLength(recent.length - 1)
     }
 
     private fun onEnter() {
-        if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = true)
+        if (english.isNotEmpty()) {
+            finishEnglish(trailing = "", takePrediction = true)
+            return
+        }
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
             finishComposition(convertAll())
-        } else {
-            performEnter()
+            return
         }
+        performEnter()
     }
 
     /** The first step uses the candidate on screen, so Enter matches what the bar shows. */
@@ -396,7 +428,7 @@ internal class CandidateController(
     }
 
     private fun onCharacter(value: Char) {
-        if (mode == KeyboardMode.LATIN && continuesEnglish(value)) {
+        if ((mode == KeyboardMode.LATIN || (mode.isSymbols && base == KeyboardMode.LATIN)) && continuesEnglish(value)) {
             english.append(value)
             showEnglish()
             return
@@ -555,7 +587,7 @@ internal class CandidateController(
         val ticket = ++generation
         val shown = when {
             snapshot != null && mode == KeyboardMode.ZHUYIN -> pipeline.preview(snapshot)
-            snapshot != null && mode == KeyboardMode.LATIN -> snapshot.candidates
+            snapshot != null && (mode == KeyboardMode.LATIN || (mode.isSymbols && base == KeyboardMode.LATIN)) -> snapshot.candidates
             mode == KeyboardMode.ZHUYIN && snapshot == null -> presented
             else -> emptyList()
         }
@@ -599,6 +631,7 @@ internal class CandidateController(
 
     private fun ui(candidates: List<Candidate>): ImeUiState {
         val visible = shownCandidates(mode, candidates)
+        val hasUnconfirmed = (mode == KeyboardMode.ZHUYIN && hasComposition) || english.isNotEmpty()
         return ImeUiState(
             mode = mode,
             base = base,
@@ -606,6 +639,7 @@ internal class CandidateController(
                 candidates = visible,
                 message = if (visible.isEmpty()) statusMessage() else "",
             ),
+            hasUnconfirmedText = hasUnconfirmed,
         )
     }
 

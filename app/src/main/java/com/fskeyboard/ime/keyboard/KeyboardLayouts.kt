@@ -12,9 +12,10 @@ internal object KeyboardLayouts {
         fullWidth: Boolean = true,
         capsLock: Boolean = false,
         enter: EnterChoice = EnterChoice(),
+        latinTopNumberRow: Boolean = true,
     ): List<KeyRow> = when (mode) {
         KeyboardMode.ZHUYIN -> zhuyin(enter)
-        KeyboardMode.LATIN -> latin(shifted, capsLock, enter)
+        KeyboardMode.LATIN -> latin(shifted, capsLock, enter, latinTopNumberRow)
         KeyboardMode.SYMBOLS -> symbols(base, more = false, fullWidth, enter)
         KeyboardMode.SYMBOLS_MORE -> symbols(base, more = true, fullWidth, enter)
     }
@@ -68,10 +69,27 @@ internal object KeyboardLayouts {
         )
     }
 
-    private fun latin(shifted: Boolean, capsLock: Boolean, enter: EnterChoice): List<KeyRow> {
+    private fun latin(
+        shifted: Boolean,
+        capsLock: Boolean,
+        enter: EnterChoice,
+        topNumberRow: Boolean = true,
+    ): List<KeyRow> {
         val upper = shifted || capsLock
+        val topRow = if (topNumberRow) {
+            "qwertyuiop".mapIndexed { index, letter ->
+                val shown = if (upper) letter.uppercaseChar() else letter
+                KeySpec(
+                    label = shown.toString(),
+                    action = KeyAction.Character(shown),
+                    secondary = KeyAction.Character("1234567890"[index]),
+                )
+            }
+        } else {
+            letters("qwertyuiop", upper)
+        }
         return listOf(
-            KeyRow(letters("qwertyuiop", upper)),
+            KeyRow(topRow),
             KeyRow(letters("asdfghjkl", upper), leading = 0.5f, trailing = 0.5f),
             KeyRow(listOf(shift(upper, capsLock)) + letters("zxcvbnm", upper) + deleteKey()),
             KeyRow(

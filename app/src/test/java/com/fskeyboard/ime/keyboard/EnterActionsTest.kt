@@ -69,4 +69,18 @@ class EnterActionsTest {
         assertEquals("完成", single.label)
         assertEquals(EditorInfo.IME_ACTION_DONE, single.actionId)
     }
+
+    @Test
+    fun unconfirmedTextUsesConfirmationEnterChoice() {
+        val searchChoice = EnterActions.choose(EditorInfo.IME_ACTION_SEARCH, false, null, 0, false)
+        assertEquals("搜尋", searchChoice.label)
+
+        fun enterChoice(hasUnconfirmed: Boolean, info: EditorInfo?): EnterChoice {
+            return if (hasUnconfirmed) EnterChoice(label = "確認") else EnterActions.choose(info)
+        }
+
+        val info = EditorInfo().apply { imeOptions = EditorInfo.IME_ACTION_SEARCH }
+        assertEquals("確認", enterChoice(hasUnconfirmed = true, info).label)
+        assertEquals("搜尋", enterChoice(hasUnconfirmed = false, info).label)
+    }
 }

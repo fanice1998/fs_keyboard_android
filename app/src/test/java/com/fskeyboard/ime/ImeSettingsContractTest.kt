@@ -26,7 +26,9 @@ class ImeSettingsContractTest {
         val layout = readProjectFile("src/main/res/layout/activity_ime_settings.xml")
         assertTrue(activity.contains("SettingsSafeArea.padding"))
         assertTrue(activity.contains("titleBottomInWindow"))
+        assertTrue(activity.contains("latin_top_number_row_switch"))
         assertTrue(layout.contains("@+id/settings_root"))
         assertTrue(layout.contains("@+id/keyboard_height_preview"))
+        assertTrue(layout.contains("@+id/latin_top_number_row_switch"))
     }
 }

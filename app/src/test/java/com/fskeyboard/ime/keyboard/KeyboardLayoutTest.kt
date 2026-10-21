@@ -33,6 +33,22 @@ class KeyboardLayoutTest {
     }
 
     @Test
+    fun latinTopNumberRowConfiguresSecondaryNumbersWhenEnabled() {
+        val enabled = KeyboardLayouts.rows(KeyboardMode.LATIN, latinTopNumberRow = true)
+        val topEnabled = enabled[0].keys
+        assertEquals("qwertyuiop", topEnabled.joinToString("") { it.label })
+        assertEquals(
+            "1234567890",
+            topEnabled.map { (it.secondary as? KeyAction.Character)?.value?.toString() ?: "" }.joinToString(""),
+        )
+
+        val disabled = KeyboardLayouts.rows(KeyboardMode.LATIN, latinTopNumberRow = false)
+        val topDisabled = disabled[0].keys
+        assertEquals("qwertyuiop", topDisabled.joinToString("") { it.label })
+        assertTrue(topDisabled.all { it.secondary == null })
+    }
+
+    @Test
     fun zhuyinUsesTheStandardPositions() {
         val rows = KeyboardLayouts.rows(KeyboardMode.ZHUYIN)
         val letterRows = rows.take(4).map { row ->

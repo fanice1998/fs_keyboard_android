@@ -82,6 +82,13 @@ class EnglishLexiconTest {
         // Invalid words are rejected
         assertFalse(lexicon.learn("a")) // too short
         assertFalse(lexicon.learn("bad_word!")) // invalid characters
+
+        // Alphanumeric words (e.g. "abc123") are allowed and learned
+        assertTrue(lexicon.learn("abc123"))
+        assertEquals(listOf("abc123"), lexicon.complete("abc1", limit = 5).words)
+
+        // Pure numbers without letters are rejected
+        assertFalse(lexicon.learn("12345"))
     }
 
     @Test

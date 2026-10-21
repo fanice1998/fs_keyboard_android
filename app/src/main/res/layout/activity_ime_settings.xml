@@ -31,7 +31,7 @@
             android:layout_marginTop="8dp"
             android:min="36"
             android:max="64"
-            android:progress="46"
+            android:progress="42"
             android:contentDescription="@string/keyboard_height_label" />
 
         <TextView
@@ -71,6 +71,23 @@
             android:paddingTop="12dp"
             android:paddingBottom="24dp"
             android:text="@string/full_width_summary"
+            android:textSize="15sp" />
+
+        <Switch
+            android:id="@+id/latin_top_number_row_switch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:text="@string/latin_top_number_row_switch"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/latin_top_number_row_summary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="12dp"
+            android:paddingBottom="24dp"
+            android:text="@string/latin_top_number_row_summary"
             android:textSize="15sp" />
 
         <Switch

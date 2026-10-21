@@ -30,8 +30,16 @@ internal class KeyboardPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_FULL_WIDTH, enabled).apply()
     }
 
+    /** Whether the Latin keyboard top row has secondary number keys. */
+    fun latinTopNumberRow(): Boolean = prefs.getBoolean(KEY_LATIN_TOP_NUMBER_ROW, true)
+
+    fun setLatinTopNumberRow(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_LATIN_TOP_NUMBER_ROW, enabled).apply()
+    }
+
     companion object {
         const val KEY_ROW_DP = "keyboard_row_height_dp"
         const val KEY_FULL_WIDTH = "zhuyin_full_width_symbols"
+        const val KEY_LATIN_TOP_NUMBER_ROW = "latin_top_number_row"
     }
 }

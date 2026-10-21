@@ -8,7 +8,7 @@
     <string name="status_failed">詞庫載入失敗：%1$s</string>
     <string name="ime_settings_title">FsKeyboard 設定</string>
     <string name="keyboard_height_label">鍵盤高度</string>
-    <string name="keyboard_height_value">目前 %1$d%%，預設是 100%%</string>
+    <string name="keyboard_height_value">目前 %1$d%%，預設是 91%%</string>
     <string name="keyboard_height_preview">預覽</string>
     <string name="keyboard_height_summary">拖動時預覽會跟著變高。放開後會記住，關閉鍵盤、重開應用或重新開機都不會還原。</string>
     <string name="rerank_switch">神經重排</string>
@@ -17,6 +17,8 @@
     <string name="rerank_model_missing">尚未放置 model.onnx。放進 assets/rerank/ 後重新安裝，或推到 files/rerank/。鍵盤啟動時載入一次。</string>
     <string name="full_width_switch">中文鍵盤使用全形符號</string>
     <string name="full_width_summary">開啟時，從注音鍵盤打開的符號頁是全形中文標點，例如「，。？！」。關閉後改成跟英文鍵盤一樣的半形符號。</string>
+    <string name="latin_top_number_row_switch">開啟英文鍵盤頂層數字鍵</string>
+    <string name="latin_top_number_row_summary">開啟時，英文鍵盤頂排按鍵（Q～P）會提供數字快捷鍵，長按可直接輸入對應的 1～0 數字。關閉後恢復為純英文字母按鍵。</string>
     <string name="key_latency_label">按鍵延遲</string>
     <string name="key_latency_value">最近 %1$d 次按鍵\n一般（p50）%2$.1f ms\n偏慢（p95）%3$.1f ms\n很慢（p99）%4$.1f ms\n最慢 %5$.1f ms</string>
     <string name="key_latency_empty">還沒有資料。先用鍵盤打幾個字，再回來看。</string>

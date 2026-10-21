@@ -101,7 +101,7 @@ internal class EnglishLexicon {
             for (ch in word) {
                 if (ch.isLetter()) {
                     hasLetter = true
-                } else if (ch != '\'' && ch != '-') {
+                } else if (!ch.isDigit() && ch != '\'' && ch != '-') {
                     return false
                 }
             }

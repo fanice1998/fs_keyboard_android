@@ -22,6 +22,7 @@ import com.fskeyboard.ime.candidate.CandidatePanelView
 import com.fskeyboard.ime.candidate.ImeUiState
 import com.fskeyboard.ime.engine.RustZhuyinLexicon
 import com.fskeyboard.ime.keyboard.EnterActions
+import com.fskeyboard.ime.keyboard.EnterChoice
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardView
 import com.fskeyboard.ime.latency.FrameLatencyProbe
@@ -129,6 +130,7 @@ class FsKeyboardService : InputMethodService() {
             val preferences = KeyboardPreferences(this@FsKeyboardService)
             rowHeightDp = preferences.rowHeightDp()
             fullWidthSymbols = preferences.fullWidthSymbols()
+            latinTopNumberRow = preferences.latinTopNumberRow()
             onTyped = latencyProbe::keyHandled
             trackpadAllowed = { controller.canMoveCursor() }
             onTrackpadStart = { controller.beginCursor() }
@@ -387,6 +389,7 @@ class FsKeyboardService : InputMethodService() {
         val preferences = KeyboardPreferences(this)
         keyboard?.rowHeightDp = preferences.rowHeightDp()
         keyboard?.fullWidthSymbols = preferences.fullWidthSymbols()
+        keyboard?.latinTopNumberRow = preferences.latinTopNumberRow()
         keyboard?.enterChoice = EnterActions.choose(info)
         controller.onStartInput(restarting)
         window?.window?.decorView?.requestApplyInsets()
@@ -434,6 +437,12 @@ class FsKeyboardService : InputMethodService() {
         pending = state
         traced("ime.render") {
             keyboard?.setMode(state.mode, state.base)
+            val enterChoice = if (state.hasUnconfirmedText) {
+                EnterChoice(label = "確認")
+            } else {
+                EnterActions.choose(currentInputEditorInfo)
+            }
+            keyboard?.enterChoice = enterChoice
             candidateBar?.render(state.candidates)
             when {
                 state.candidates.candidates.isEmpty() -> showPanel(false)
