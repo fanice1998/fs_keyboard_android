@@ -400,6 +400,34 @@ class FsKeyboardService : InputMethodService() {
         super.onFinishInput()
     }
 
+    override fun onUpdateSelection(
+        oldSelStart: Int,
+        oldSelEnd: Int,
+        newSelStart: Int,
+        newSelEnd: Int,
+        candidatesStart: Int,
+        candidatesEnd: Int,
+    ) {
+        super.onUpdateSelection(
+            oldSelStart,
+            oldSelEnd,
+            newSelStart,
+            newSelEnd,
+            candidatesStart,
+            candidatesEnd,
+        )
+        if (::controller.isInitialized) {
+            controller.onUpdateSelection(
+                oldSelStart,
+                oldSelEnd,
+                newSelStart,
+                newSelEnd,
+                candidatesStart,
+                candidatesEnd,
+            )
+        }
+    }
+
     override fun onEvaluateFullscreenMode(): Boolean = false
 
     private fun render(state: ImeUiState) {

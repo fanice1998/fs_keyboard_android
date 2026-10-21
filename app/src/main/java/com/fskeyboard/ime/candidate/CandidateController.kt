@@ -77,9 +77,34 @@ internal class CandidateController(
     fun onStartInput(restarting: Boolean) {
         if (!restarting) {
             recent.setLength(0)
-            english.setLength(0)
-            cancelComposition()
-            publish()
+        }
+        english.setLength(0)
+        cancelComposition()
+        publish()
+    }
+
+    fun onUpdateSelection(
+        oldSelStart: Int,
+        oldSelEnd: Int,
+        newSelStart: Int,
+        newSelEnd: Int,
+        candidatesStart: Int,
+        candidatesEnd: Int,
+    ) {
+        if (candidatesStart == -1 && candidatesEnd == -1) {
+            var changed = false
+            if (english.isNotEmpty()) {
+                english.setLength(0)
+                changed = true
+            }
+            if (hasComposition) {
+                composition.clear()
+                changed = true
+            }
+            if (changed) {
+                presented = emptyList()
+                publish(EngineSnapshot())
+            }
         }
     }
 
@@ -401,8 +426,18 @@ internal class CandidateController(
      */
     private fun finishEnglish(trailing: String, takePrediction: Boolean) {
         if (english.isEmpty()) return
-        val word = EnglishSuggest.commit(english.toString(), presented.firstOrNull()?.text, takePrediction)
+        val currentTyped = english.toString()
         english.setLength(0)
+
+        val before = connection()?.getTextBeforeCursor(currentTyped.length, 0)?.toString().orEmpty()
+        if (before != currentTyped && !before.endsWith(currentTyped)) {
+            clearComposing()
+            presented = emptyList()
+            publish(EngineSnapshot())
+            return
+        }
+
+        val word = EnglishSuggest.commit(currentTyped, presented.firstOrNull()?.text, takePrediction)
         acceptCommitted(word + trailing)
     }
 
