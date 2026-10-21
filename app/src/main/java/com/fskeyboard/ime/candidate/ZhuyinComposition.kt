@@ -67,7 +67,9 @@ internal class ZhuyinComposition {
                 out.append(pending.text)
                 break
             }
-            rememberPhrase(phrases, candidate.reading, candidate.text)
+            if (candidate.reading.count { it == ' ' } >= 1) {
+                rememberPhrase(phrases, candidate.reading, candidate.text)
+            }
             out.append(candidate.text)
             pending.take(candidate.span.coerceAtLeast(1))
             pick = null
@@ -100,9 +102,9 @@ internal class ZhuyinComposition {
         return phrases
     }
 
-    /** A lexicon phrase covers at least two syllables. A single character is not stored on its own. */
+    /** A chosen phrase or character with a reading is learned. */
     private fun rememberPhrase(phrases: MutableList<Pair<String, String>>, reading: String, text: String) {
-        if (text.isEmpty() || reading.count { it == ' ' } < 1) return
+        if (text.isEmpty() || reading.isEmpty()) return
         val pair = reading to text
         if (pair !in phrases) phrases += pair
     }

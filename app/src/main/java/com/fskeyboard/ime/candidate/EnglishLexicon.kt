@@ -12,9 +12,10 @@ internal data class EnglishHits(
  */
 internal class EnglishLexicon {
     private val words = ArrayList<String>()
+    private val userWords = LinkedHashMap<String, Int>()
 
     val size: Int
-        get() = words.size
+        get() = words.size + userWords.size
 
     fun load(lines: Iterable<String>) {
         val parsed = ArrayList<Pair<String, Int>>()
@@ -32,17 +33,80 @@ internal class EnglishLexicon {
         words.addAll(parsed.map { it.first })
     }
 
+    fun loadUser(lines: Iterable<String>) {
+        for (line in lines) {
+            val trimmed = line.trim()
+            if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
+            val tab = trimmed.indexOf('\t')
+            val word = (if (tab > 0) trimmed.substring(0, tab) else trimmed).lowercase()
+            val count = if (tab > 0) trimmed.substring(tab + 1).trim().toIntOrNull() ?: 1 else 1
+            if (isValidWord(word) && count > 0) {
+                userWords[word] = (userWords[word] ?: 0) + count
+            }
+        }
+    }
+
+    /**
+     * Records [word] into the dynamic user dictionary.
+     * Returns true if the word was valid and recorded.
+     */
+    fun learn(word: String): Boolean {
+        val key = word.trim().lowercase()
+        if (!isValidWord(key)) return false
+        val next = (userWords[key] ?: 0) + 1
+        userWords[key] = next.coerceAtMost(MAX_COUNT)
+        return true
+    }
+
+    fun userEntries(): List<Pair<String, Int>> =
+        userWords.entries
+            .sortedByDescending { it.value }
+            .map { it.key to it.value }
+
     /** [prefix] is lowercase. [exact] is set even when the word itself is rarer than [limit] hits. */
     fun complete(prefix: String, limit: Int): EnglishHits {
         if (prefix.isEmpty() || limit <= 0) return EnglishHits(exact = false, words = emptyList())
         var exact = false
         val found = ArrayList<String>(limit)
+        val seen = HashSet<String>()
+
+        val userMatches = userWords.entries
+            .filter { it.key.startsWith(prefix) }
+            .sortedByDescending { it.value }
+
+        for ((word, _) in userMatches) {
+            if (word == prefix) exact = true
+            if (seen.add(word) && found.size < limit) {
+                found.add(word)
+            }
+        }
+
         for (word in words) {
             if (!word.startsWith(prefix)) continue
             if (word == prefix) exact = true
-            if (found.size < limit) found.add(word)
+            if (seen.add(word) && found.size < limit) {
+                found.add(word)
+            }
+            if (found.size >= limit && exact) break
         }
         return EnglishHits(exact, found)
+    }
+
+    companion object {
+        const val MAX_COUNT = 100_000
+
+        fun isValidWord(word: String): Boolean {
+            if (word.length < 2 || word.length > 40) return false
+            var hasLetter = false
+            for (ch in word) {
+                if (ch.isLetter()) {
+                    hasLetter = true
+                } else if (ch != '\'' && ch != '-') {
+                    return false
+                }
+            }
+            return hasLetter
+        }
     }
 }
 

@@ -22,6 +22,10 @@ const ABBREVIATION_PENALTY: f32 = 2.0;
 const USER_SCORE: f32 = -1.0;
 /// Added each time the user chooses a phrase they already taught. Stops at [USER_SCORE_CAP].
 const LEARN_BOOST: f32 = 0.15;
+/// Added each time the user chooses a single character they already taught.
+const SINGLE_LEARN_BOOST: f32 = 0.2;
+/// Fallback initial score for a single character missing from the static store.
+const SINGLE_USER_SCORE_DEFAULT: f32 = -4.0;
 /// Chosen phrases stop climbing here, so a favourite cannot bury every other word.
 const USER_SCORE_CAP: f32 = 1.0;
 /// How many times one phrase may be written again. Matches the climb from [USER_SCORE] to the cap.
@@ -334,6 +338,7 @@ impl Lexicon {
         if text.is_empty() {
             return false;
         }
+        let is_single = !key.contains(' ');
         let found = self.learned_by_reading.get(key.as_str()).and_then(|ids| {
             ids.iter().find_map(|&id| {
                 let index = (id as usize).checked_sub(self.store.len())?;
@@ -347,17 +352,31 @@ impl Lexicon {
                 return false;
             }
             item.repeats += 1;
-            item.score = (item.score + LEARN_BOOST).min(USER_SCORE_CAP);
+            let boost = if is_single { SINGLE_LEARN_BOOST } else { LEARN_BOOST };
+            item.score = (item.score + boost).min(USER_SCORE_CAP);
             return true;
         }
         let id = (self.store.len() + self.learned.len()) as u32;
         let word = self.store.word(text);
+        let score = if is_single {
+            let store_score = self.store.by_reading(key.as_str()).find_map(|id| {
+                let entry = self.store.entry(id);
+                if entry.text == text && (entry.tones == tones || tones_cover(tones, entry.tones)) {
+                    Some(entry.score)
+                } else {
+                    None
+                }
+            });
+            store_score.map_or(SINGLE_USER_SCORE_DEFAULT, |s| (s + SINGLE_LEARN_BOOST).min(USER_SCORE_CAP))
+        } else {
+            USER_SCORE
+        };
         self.learned.push(Learned {
             text: text.into(),
             reading: key.as_str().into(),
             tones,
             word,
-            score: USER_SCORE,
+            score,
             repeats: 0,
         });
         self.learned_by_reading.entry(key.as_str().into()).or_default().push(id);
@@ -1094,6 +1113,24 @@ name: sample
         assert_eq!(texts(&lexicon.candidates_after("ㄅㄚ", "說了。"))[0], "八");
         lexicon.set_bigram_weight(0.0);
         assert_eq!(sentence(&lexicon, "ㄕㄨㄛ ㄌㄜ˙ ㄅㄚ"), "說了八");
+    }
+
+    #[test]
+    fn single_character_learning_is_gentle_for_rare_characters() {
+        let table = "\
+# comment
+ㄅㄚ\t八\t-3.0
+ㄅㄚ\t巴\t-3.1
+ㄅㄚ\t疤\t-6.0
+";
+        let mut lexicon = build(table, "", "");
+        assert_eq!(texts(&lexicon.candidates("ㄅㄚ"))[0], "八");
+        // Learning rare character 疤 once boosts it by SINGLE_LEARN_BOOST (-6.0 + 0.2 = -5.8)
+        // so it does NOT instantly leap over common characters 八 (-3.0) and 巴 (-3.1).
+        assert!(lexicon.learn("ㄅㄚ", "疤"));
+        let candidates = texts(&lexicon.candidates("ㄅㄚ"));
+        assert_eq!(candidates[0], "八");
+        assert_eq!(candidates[1], "巴");
     }
 
     #[test]

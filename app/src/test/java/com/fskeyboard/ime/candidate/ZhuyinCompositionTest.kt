@@ -134,10 +134,19 @@ class ZhuyinCompositionTest {
     }
 
     @Test
+    fun oneChosenSingleCharacterIsLearnedOnItsOwn() {
+        val composition = typed("ㄍㄨㄥ")
+        val done = composition.choose(
+            Candidate(text = "工", engineIndex = -1, span = 1, reading = "ㄍㄨㄥ"),
+        )!!
+        assertEquals(listOf("ㄍㄨㄥ" to "工"), done.learned)
+    }
+
+    @Test
     fun aWordWithoutAReadingIsNotLearned() {
         val composition = typed("ㄍㄨㄥㄅㄚ")
         composition.choose(Candidate(text = "公", engineIndex = -1, reading = "ㄍㄨㄥ"))
         val done = composition.choose(word("ㄅㄚ", span = 1))!!
-        assertTrue(done.learned.isEmpty())
+        assertEquals(listOf("ㄍㄨㄥ" to "公"), done.learned)
     }
 }

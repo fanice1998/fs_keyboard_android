@@ -2,6 +2,7 @@ package com.fskeyboard.ime.candidate
 
 import com.fskeyboard.ime.keyboard.KeyboardMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -63,6 +64,43 @@ class EnglishLexiconTest {
         assertEquals("depl", EnglishSuggest.commit("depl", "deploy", takePrediction = false))
         assertEquals("depl", EnglishSuggest.commit("depl", null, takePrediction = true))
         assertEquals("", EnglishSuggest.commit("", "deploy", takePrediction = false))
+    }
+
+    @Test
+    fun dynamicLearningAddsNewWordsAndBoostsPredictions() {
+        val lexicon = EnglishLexicon()
+        lexicon.load(listOf("application\t100", "apple\t50"))
+        // Before learning, "antigravity" is unknown
+        val beforeHits = lexicon.complete("anti", limit = 5)
+        assertTrue(beforeHits.words.isEmpty())
+
+        // Learn "antigravity"
+        assertTrue(lexicon.learn("antigravity"))
+        val afterHits = lexicon.complete("anti", limit = 5)
+        assertEquals(listOf("antigravity"), afterHits.words)
+
+        // Invalid words are rejected
+        assertFalse(lexicon.learn("a")) // too short
+        assertFalse(lexicon.learn("bad_word!")) // invalid characters
+    }
+
+    @Test
+    fun userLearnedWordsRankAheadOfDefaultDictionaryWords() {
+        val lexicon = EnglishLexicon()
+        lexicon.load(listOf("banana\t100", "band\t50"))
+        lexicon.learn("band")
+        lexicon.learn("band")
+        val hits = lexicon.complete("ban", limit = 5)
+        // "band" learned by user ranks ahead of "banana"
+        assertEquals("band", hits.words.first())
+    }
+
+    @Test
+    fun loadUserRestoresDynamicWords() {
+        val lexicon = EnglishLexicon()
+        lexicon.loadUser(listOf("gemini\t10", "claude\t5"))
+        val hits = lexicon.complete("gem", limit = 5)
+        assertEquals(listOf("gemini"), hits.words)
     }
 
     @Test

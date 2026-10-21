@@ -3,6 +3,7 @@ package com.fskeyboard.ime.candidate
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
 import android.util.Log
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
@@ -23,6 +24,8 @@ import com.fskeyboard.ime.rerank.RerankLimits
 import com.fskeyboard.ime.rerank.RerankTrace
 import com.fskeyboard.ime.rerank.acceptRerankUpdate
 import com.fskeyboard.ime.traced
+import java.io.File
+import java.util.concurrent.Executors
 
 internal class CandidateController(
     private val context: Context,
@@ -48,6 +51,12 @@ internal class CandidateController(
     /** Letters of the English word under the caret. Empty unless the Latin keyboard is composing. */
     private val english = StringBuilder()
     private val englishLexicon = EnglishLexicon()
+    private val emailSuggest = EmailSuggest()
+    private val englishWorker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "fskeyboard-english").apply { isDaemon = true }
+    }
+    private val userEnglishFile by lazy { File(context.filesDir, USER_ENGLISH_FILE) }
+    private val emailHistoryFile by lazy { File(context.filesDir, EMAIL_DOMAINS_FILE) }
     private var englishLoaded = false
     private var generation = 0L
     private var closed = false
@@ -72,6 +81,7 @@ internal class CandidateController(
         generation += 1
         endCursor()
         lexicon.close()
+        englishWorker.shutdown()
     }
 
     fun onStartInput(restarting: Boolean) {
@@ -80,6 +90,9 @@ internal class CandidateController(
         }
         english.setLength(0)
         cancelComposition()
+        if (emailSuggest.isEmailField(editorInfo())) {
+            setMode(KeyboardMode.LATIN)
+        }
         publish()
     }
 
@@ -174,12 +187,27 @@ internal class CandidateController(
      */
     fun onCandidate(candidate: Candidate) {
         if (mode == KeyboardMode.LATIN && english.isNotEmpty()) {
+            val isEmail = isEmailContext()
+            val text = candidate.text
+            val trailing = if (isEmail) "" else " "
             english.setLength(0)
-            acceptCommitted(candidate.text + " ")
+            acceptCommitted(text + trailing)
+            if (isEmail) {
+                emailSuggest.recordChoice(text, beforeUsername())
+                saveEmailHistory()
+            } else {
+                learnEnglish(text)
+            }
             return
         }
         if (mode != KeyboardMode.ZHUYIN || !hasComposition) {
-            commit(candidate.text)
+            val isEmail = isEmailContext()
+            val text = candidate.text
+            commit(text)
+            if (isEmail) {
+                emailSuggest.recordChoice(text, beforeUsername())
+                saveEmailHistory()
+            }
             dismissSuggestions()
             return
         }
@@ -374,6 +402,9 @@ internal class CandidateController(
             return
         }
         if (english.isNotEmpty()) finishEnglish(trailing = value.toString(), takePrediction = false) else commit(value.toString())
+        if (mode == KeyboardMode.LATIN && value == '@' && isEmailContext()) {
+            showEmailDomainsAfterAt()
+        }
     }
 
     /** A letter always extends the word. An apostrophe, hyphen, or digit does only after one has started. */
@@ -390,6 +421,16 @@ internal class CandidateController(
             context.assets.open(ENGLISH_ASSET).bufferedReader().use { reader ->
                 englishLexicon.load(reader.readLines())
             }
+            if (userEnglishFile.isFile) {
+                userEnglishFile.bufferedReader().use { reader ->
+                    englishLexicon.loadUser(reader.readLines())
+                }
+            }
+            if (emailHistoryFile.isFile) {
+                emailHistoryFile.bufferedReader().use { reader ->
+                    emailSuggest.loadHistory(reader.readLines())
+                }
+            }
         } catch (_: Exception) {
             // The letters still go into the field. The bar just has no completions.
         }
@@ -398,18 +439,32 @@ internal class CandidateController(
     private fun showEnglish() {
         loadEnglish()
         val typed = english.toString()
+        val before = connection()?.getTextBeforeCursor(64, 0)?.toString().orEmpty()
         val start = System.nanoTime()
-        val hits = englishLexicon.complete(typed.lowercase(), ENGLISH_CANDIDATES)
-        lastLookupMillis = (System.nanoTime() - start) / 1_000_000L
-        val texts = EnglishSuggest.candidates(typed, hits, ENGLISH_CANDIDATES)
-        val candidates = texts.mapIndexed { index, text ->
-            Candidate(
-                text = text,
-                engineIndex = -(index + 1),
-                source = CandidateSource.SUGGESTION,
-                span = 0,
-            )
+        val candidates: List<Candidate>
+        if (isEmailContext()) {
+            val suggestions = emailSuggest.candidates(typed, before, ENGLISH_CANDIDATES)
+            candidates = suggestions.mapIndexed { index, text ->
+                Candidate(
+                    text = text,
+                    engineIndex = -(index + 1),
+                    source = CandidateSource.SUGGESTION,
+                    span = 0,
+                )
+            }
+        } else {
+            val hits = englishLexicon.complete(typed.lowercase(), ENGLISH_CANDIDATES)
+            val texts = EnglishSuggest.candidates(typed, hits, ENGLISH_CANDIDATES)
+            candidates = texts.mapIndexed { index, text ->
+                Candidate(
+                    text = text,
+                    engineIndex = -(index + 1),
+                    source = CandidateSource.SUGGESTION,
+                    span = 0,
+                )
+            }
         }
+        lastLookupMillis = (System.nanoTime() - start) / 1_000_000L
         apply(
             EngineSnapshot(
                 preedit = typed,
@@ -418,6 +473,23 @@ internal class CandidateController(
                 decodeMillis = lastLookupMillis,
             ),
         )
+    }
+
+    private fun showEmailDomainsAfterAt() {
+        val before = connection()?.getTextBeforeCursor(64, 0)?.toString().orEmpty()
+        val domains = emailSuggest.candidates("", before, ENGLISH_CANDIDATES)
+        val candidates = domains.mapIndexed { index, text ->
+            Candidate(
+                text = text,
+                engineIndex = -(index + 1),
+                source = CandidateSource.SUGGESTION,
+                span = 0,
+            )
+        }
+        if (candidates.isNotEmpty()) {
+            presented = candidates
+            publish(EngineSnapshot(candidates = candidates))
+        }
     }
 
     /**
@@ -437,8 +509,20 @@ internal class CandidateController(
             return
         }
 
-        val word = EnglishSuggest.commit(currentTyped, presented.firstOrNull()?.text, takePrediction)
-        acceptCommitted(word + trailing)
+        val isEmail = isEmailContext()
+        val word = if (isEmail) {
+            if (takePrediction && presented.isNotEmpty()) presented.first().text else currentTyped
+        } else {
+            EnglishSuggest.commit(currentTyped, presented.firstOrNull()?.text, takePrediction)
+        }
+        val trailingChar = if (isEmail && trailing == " ") "" else trailing
+        acceptCommitted(word + trailingChar)
+        if (isEmail) {
+            emailSuggest.recordChoice(word, beforeUsername())
+            saveEmailHistory()
+        } else {
+            learnEnglish(word)
+        }
     }
 
     /** Writes the underlined letters as they stand. Used when the field is closing. */
@@ -558,6 +642,54 @@ internal class CandidateController(
         }
     }
 
+    private fun isEmailContext(): Boolean {
+        val before = connection()?.getTextBeforeCursor(64, 0)?.toString().orEmpty()
+        return emailSuggest.hasEmailContext(before, editorInfo())
+    }
+
+    private fun beforeUsername(): String {
+        val before = connection()?.getTextBeforeCursor(64, 0)?.toString().orEmpty()
+        val at = before.lastIndexOf('@')
+        if (at <= 0) return ""
+        val sub = before.substring(0, at)
+        return sub.substringAfterLast(' ', sub).substringAfterLast('\n', sub)
+    }
+
+    private fun learnEnglish(word: String) {
+        if (isPasswordField(editorInfo())) return
+        if (!englishLexicon.learn(word)) return
+        englishWorker.execute {
+            try {
+                userEnglishFile.parentFile?.mkdirs()
+                userEnglishFile.appendText("${word.lowercase()}\t1\n")
+            } catch (e: Exception) {
+                Log.e(TAG, "failed to append english word", e)
+            }
+        }
+    }
+
+    private fun saveEmailHistory() {
+        englishWorker.execute {
+            try {
+                emailHistoryFile.parentFile?.mkdirs()
+                val lines = emailSuggest.serializeHistory()
+                emailHistoryFile.writeText(lines.joinToString("") { "$it\n" })
+            } catch (e: Exception) {
+                Log.e(TAG, "failed to save email history", e)
+            }
+        }
+    }
+
+    private fun isPasswordField(info: EditorInfo?): Boolean {
+        if (info == null) return false
+        val clazz = info.inputType and InputType.TYPE_MASK_CLASS
+        if (clazz != InputType.TYPE_CLASS_TEXT) return false
+        val variation = info.inputType and InputType.TYPE_MASK_VARIATION
+        return variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
+    }
+
     private companion object {
         const val TAG = "FsKeyboard"
         const val RECENT_CHARS = 32
@@ -565,6 +697,8 @@ internal class CandidateController(
         const val MAX_EXTRACT = 20_000
         const val ENGLISH_CANDIDATES = 8
         const val ENGLISH_ASSET = "lexicon/english.tsv"
+        const val USER_ENGLISH_FILE = "lexicon/user_english.tsv"
+        const val EMAIL_DOMAINS_FILE = "lexicon/email_domains.tsv"
     }
 
     private class CursorSession(val text: String, val startOffset: Int, var cursor: Int)

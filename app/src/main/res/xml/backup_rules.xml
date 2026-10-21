@@ -6,5 +6,7 @@
 -->
 <full-backup-content>
     <include domain="file" path="lexicon/user.tsv" />
+    <include domain="file" path="lexicon/user_english.tsv" />
+    <include domain="file" path="lexicon/email_domains.tsv" />
     <include domain="sharedpref" path="fskeyboard.xml" />
 </full-backup-content>
