@@ -224,9 +224,7 @@ internal class KeyboardView(context: Context) : View(context) {
                 if (!tracking && box != null && box == released && box.spec.action != KeyAction.Backspace) {
                     fire(box.spec.action, event.eventTime)
                 }
-                if (keyPreview.isShowing) {
-                    postDelayed(dismissPopup, 75L)
-                }
+                postDelayed(dismissPopup, 80L)
             }
             MotionEvent.ACTION_CANCEL -> release(dismissImmediately = true)
         }
