@@ -174,7 +174,8 @@ internal class CandidateController(
     }
 
     fun onKey(action: KeyAction) {
-        val typingEnglish = mode == KeyboardMode.LATIN &&
+        val composeEnglish = EnglishInputPolicy.shouldCompose(editorInfo())
+        val typingEnglish = mode == KeyboardMode.LATIN && composeEnglish &&
             (english.isNotEmpty() || (action is KeyAction.Character && action.value.isLetter()))
         if (action !is KeyAction.Bopomofo && !typingEnglish) dismissSuggestions()
         when (action) {
@@ -428,7 +429,11 @@ internal class CandidateController(
     }
 
     private fun onCharacter(value: Char) {
-        if ((mode == KeyboardMode.LATIN || (mode.isSymbols && base == KeyboardMode.LATIN)) && continuesEnglish(value)) {
+        val composeEnglish = EnglishInputPolicy.shouldCompose(editorInfo())
+        if ((mode == KeyboardMode.LATIN || (mode.isSymbols && base == KeyboardMode.LATIN)) &&
+            composeEnglish &&
+            continuesEnglish(value)
+        ) {
             english.append(value)
             showEnglish()
             return
@@ -690,7 +695,7 @@ internal class CandidateController(
     }
 
     private fun learnEnglish(word: String) {
-        if (isPasswordField(editorInfo())) return
+        if (!EnglishInputPolicy.shouldCompose(editorInfo())) return
         if (!englishLexicon.learn(word)) return
         englishWorker.execute {
             try {
@@ -712,16 +717,6 @@ internal class CandidateController(
                 Log.e(TAG, "failed to save email history", e)
             }
         }
-    }
-
-    private fun isPasswordField(info: EditorInfo?): Boolean {
-        if (info == null) return false
-        val clazz = info.inputType and InputType.TYPE_MASK_CLASS
-        if (clazz != InputType.TYPE_CLASS_TEXT) return false
-        val variation = info.inputType and InputType.TYPE_MASK_VARIATION
-        return variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
-            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
-            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
     }
 
     private companion object {

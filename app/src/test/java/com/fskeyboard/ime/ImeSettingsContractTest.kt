@@ -24,11 +24,18 @@ class ImeSettingsContractTest {
     fun settingsPageClearsTheTitleAndPreviewsHeight() {
         val activity = readProjectFile("src/main/java/com/fskeyboard/ime/settings/ImeSettingsActivity.kt")
         val layout = readProjectFile("src/main/res/layout/activity_ime_settings.xml")
+        val strings = readProjectFile("src/main/res/values/strings.xml")
         assertTrue(activity.contains("SettingsSafeArea.padding"))
         assertTrue(activity.contains("titleBottomInWindow"))
         assertTrue(activity.contains("latin_top_number_row_switch"))
+        assertTrue(activity.contains("key_popup_switch"))
+        assertTrue(activity.contains("vibration_switch"))
         assertTrue(layout.contains("@+id/settings_root"))
         assertTrue(layout.contains("@+id/keyboard_height_preview"))
         assertTrue(layout.contains("@+id/latin_top_number_row_switch"))
+        assertTrue(layout.contains("@+id/key_popup_switch"))
+        assertTrue(layout.contains("@+id/vibration_switch"))
+        assertTrue(strings.contains("name=\"key_popup_switch\""))
+        assertTrue(strings.contains("name=\"vibration_switch\""))
     }
 }

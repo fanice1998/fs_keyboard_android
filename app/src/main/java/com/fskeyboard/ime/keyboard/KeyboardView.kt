@@ -65,6 +65,26 @@ internal class KeyboardView(context: Context) : View(context) {
             rebuild()
         }
 
+    /** Whether key presses produce haptic vibration feedback. */
+    var vibrationEnabled: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            isHapticFeedbackEnabled = value
+        }
+
+    /** Whether pressing a character key shows a floating preview popup. */
+    var keyPopupEnabled: Boolean = true
+
+    private val keyPreview = KeyPreviewPopup(context)
+    private val dismissPopup = Runnable {
+        keyPreview.dismiss()
+    }
+
+    init {
+        isHapticFeedbackEnabled = vibrationEnabled
+    }
+
     private var mode = KeyboardMode.ZHUYIN
     private var base = KeyboardMode.ZHUYIN
     private val shiftLock = ShiftLock()
@@ -104,7 +124,7 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private val longPress = Runnable {
         val action = down?.spec?.secondary ?: return@Runnable
-        release()
+        release(dismissImmediately = true)
         buzz()
         fire(action)
     }
@@ -191,7 +211,7 @@ internal class KeyboardView(context: Context) : View(context) {
                 val box = down ?: return true
                 val index = event.findPointerIndex(downPointer)
                 if (index >= 0 && hit(event.getX(index), event.getY(index)) != box) {
-                    release()
+                    release(dismissImmediately = true)
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
@@ -200,17 +220,21 @@ internal class KeyboardView(context: Context) : View(context) {
                 val box = down
                 val released = hit(event.getX(index), event.getY(index))
                 val tracking = trackpad
-                release()
+                release(dismissImmediately = false)
                 if (!tracking && box != null && box == released && box.spec.action != KeyAction.Backspace) {
                     fire(box.spec.action, event.eventTime)
                 }
+                if (keyPreview.isShowing) {
+                    postDelayed(dismissPopup, 75L)
+                }
             }
-            MotionEvent.ACTION_CANCEL -> release()
+            MotionEvent.ACTION_CANCEL -> release(dismissImmediately = true)
         }
         return true
     }
 
     private fun press(pointer: Int, x: Float, y: Float, eventTime: Long) {
+        removeCallbacks(dismissPopup)
         down = hit(x, y)
         downPointer = pointer
         downX = x
@@ -219,7 +243,12 @@ internal class KeyboardView(context: Context) : View(context) {
         invalidate()
         // Feedback on touch, not on release. The key itself still fires on release.
         // The vibration waits until this frame is submitted so it does not hold the highlight back.
-        if (spec != null) buzz()
+        if (spec != null && vibrationEnabled) buzz()
+        if (keyPopupEnabled && shouldShowKeyPreview(spec) && down != null) {
+            keyPreview.show(this, spec!!.label, down!!.rect, isNightMode())
+        } else {
+            keyPreview.dismiss()
+        }
         if (spec?.action == KeyAction.Space && trackpadAllowed()) {
             spaceCursor = SpaceCursor(slop = dp(10).toFloat(), xPerStep = dp(8).toFloat(), yPerStep = dp(22).toFloat())
             spaceCursor?.down(x, y)
@@ -261,6 +290,8 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private fun showTrackpad() {
         removeCallbacks(holdTrackpad)
+        removeCallbacks(dismissPopup)
+        keyPreview.dismiss()
         down = null
         trackpad = true
         onTrackpadActive(true)
@@ -270,15 +301,15 @@ internal class KeyboardView(context: Context) : View(context) {
     /** Commits the key still under a finger. Backspace already fired on its down. A trackpad does not. */
     private fun commitHeld(eventTime: Long) {
         if (trackpad) {
-            release()
+            release(dismissImmediately = true)
             return
         }
         val action = down?.spec?.action ?: return
-        release()
+        release(dismissImmediately = true)
         if (action != KeyAction.Backspace) fire(action, eventTime)
     }
 
-    private fun release() {
+    private fun release(dismissImmediately: Boolean = false) {
         stopRepeat()
         removeCallbacks(holdTrackpad)
         val wasTracking = trackpad
@@ -288,10 +319,15 @@ internal class KeyboardView(context: Context) : View(context) {
         downPointer = NO_POINTER
         invalidate()
         if (wasTracking) onTrackpadActive(false)
+        if (dismissImmediately) {
+            removeCallbacks(dismissPopup)
+            keyPreview.dismiss()
+        }
     }
 
     /** One tick per move that actually crossed a character or a line. */
     private fun tick() {
+        if (!vibrationEnabled) return
         val effect = if (Build.VERSION.SDK_INT >= 27) {
             HapticFeedbackConstants.TEXT_HANDLE_MOVE
         } else {
@@ -306,6 +342,7 @@ internal class KeyboardView(context: Context) : View(context) {
      * so running it inside the touch handler holds the highlight back.
      */
     private fun buzz() {
+        if (!vibrationEnabled) return
         val observer = viewTreeObserver
         if (!observer.isAlive) {
             performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -313,7 +350,7 @@ internal class KeyboardView(context: Context) : View(context) {
         }
         if (Build.VERSION.SDK_INT >= 29) {
             observer.registerFrameCommitCallback {
-                performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                if (vibrationEnabled) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
             }
             return
         }
@@ -321,7 +358,7 @@ internal class KeyboardView(context: Context) : View(context) {
             override fun onDraw() {
                 post {
                     if (observer.isAlive) observer.removeOnDrawListener(this)
-                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    if (vibrationEnabled) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
                 }
             }
         })
@@ -344,12 +381,13 @@ internal class KeyboardView(context: Context) : View(context) {
             rebuild()
             return
         }
-        if (haptic) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        if (haptic && vibrationEnabled) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         traced("ime.dispatch") { onKey(action) }
         if (action is KeyAction.Character && shiftLock.onCharacter()) rebuild()
     }
 
     private fun rebuild() {
+        dismissPopupImmediately()
         rows = KeyboardLayouts.rows(
             mode,
             shifted = shiftLock.uppercase,
@@ -364,6 +402,23 @@ internal class KeyboardView(context: Context) : View(context) {
             layoutKeys(width, height)
         }
         invalidate()
+    }
+
+    fun dismissPopupImmediately() {
+        removeCallbacks(dismissPopup)
+        keyPreview.dismiss()
+    }
+
+    override fun onDetachedFromWindow() {
+        dismissPopupImmediately()
+        super.onDetachedFromWindow()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility != VISIBLE) {
+            dismissPopupImmediately()
+        }
     }
 
     private fun layoutKeys(width: Int, height: Int) {

@@ -75,6 +75,18 @@ class ImeSettingsActivity : Activity() {
             keyboardPreferences.setLatinTopNumberRow(checked)
             previewKeyboard.latinTopNumberRow = checked
         }
+        val keyPopup = findViewById<Switch>(R.id.key_popup_switch)
+        keyPopup.isChecked = keyboardPreferences.keyPopupEnabled()
+        keyPopup.setOnCheckedChangeListener { _, checked ->
+            keyboardPreferences.setKeyPopupEnabled(checked)
+            previewKeyboard.keyPopupEnabled = checked
+        }
+        val vibration = findViewById<Switch>(R.id.vibration_switch)
+        vibration.isChecked = keyboardPreferences.vibrationEnabled()
+        vibration.setOnCheckedChangeListener { _, checked ->
+            keyboardPreferences.setVibrationEnabled(checked)
+            previewKeyboard.vibrationEnabled = checked
+        }
         heightValue = findViewById(R.id.keyboard_height_value)
         heightSeek = findViewById(R.id.keyboard_height)
         heightSeek.min = KeyboardHeight.MIN_ROW_DP

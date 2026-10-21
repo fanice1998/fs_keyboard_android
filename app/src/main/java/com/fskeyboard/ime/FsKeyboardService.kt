@@ -92,6 +92,7 @@ class FsKeyboardService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        keyboard?.dismissPopupImmediately()
         if (framesWatched) {
             runCatching { window?.window?.removeOnFrameMetricsAvailableListener(latencyProbe) }
             framesWatched = false
@@ -131,6 +132,8 @@ class FsKeyboardService : InputMethodService() {
             rowHeightDp = preferences.rowHeightDp()
             fullWidthSymbols = preferences.fullWidthSymbols()
             latinTopNumberRow = preferences.latinTopNumberRow()
+            vibrationEnabled = preferences.vibrationEnabled()
+            keyPopupEnabled = preferences.keyPopupEnabled()
             onTyped = latencyProbe::keyHandled
             trackpadAllowed = { controller.canMoveCursor() }
             onTrackpadStart = { controller.beginCursor() }
@@ -390,6 +393,8 @@ class FsKeyboardService : InputMethodService() {
         keyboard?.rowHeightDp = preferences.rowHeightDp()
         keyboard?.fullWidthSymbols = preferences.fullWidthSymbols()
         keyboard?.latinTopNumberRow = preferences.latinTopNumberRow()
+        keyboard?.vibrationEnabled = preferences.vibrationEnabled()
+        keyboard?.keyPopupEnabled = preferences.keyPopupEnabled()
         keyboard?.enterChoice = EnterActions.choose(info)
         controller.onStartInput(restarting)
         window?.window?.decorView?.requestApplyInsets()
@@ -397,6 +402,7 @@ class FsKeyboardService : InputMethodService() {
     }
 
     override fun onFinishInput() {
+        keyboard?.dismissPopupImmediately()
         if (::controller.isInitialized) {
             controller.onFinishInput()
         }

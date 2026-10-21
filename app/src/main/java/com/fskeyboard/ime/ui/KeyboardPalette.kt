@@ -45,3 +45,7 @@ internal fun View.isNightMode(): Boolean {
 
 internal fun View.dp(value: Int): Int =
     (value * resources.displayMetrics.density).toInt()
+
+internal fun android.content.Context.dp(value: Int): Int =
+    (value * resources.displayMetrics.density).toInt()
+

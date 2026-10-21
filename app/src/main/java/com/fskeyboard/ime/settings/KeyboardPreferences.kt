@@ -37,9 +37,25 @@ internal class KeyboardPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_LATIN_TOP_NUMBER_ROW, enabled).apply()
     }
 
+    /** Whether key presses produce haptic vibration feedback. */
+    fun vibrationEnabled(): Boolean = prefs.getBoolean(KEY_VIBRATION, true)
+
+    fun setVibrationEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_VIBRATION, enabled).apply()
+    }
+
+    /** Whether pressing a character key shows a floating preview popup. */
+    fun keyPopupEnabled(): Boolean = prefs.getBoolean(KEY_POPUP, true)
+
+    fun setKeyPopupEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_POPUP, enabled).apply()
+    }
+
     companion object {
         const val KEY_ROW_DP = "keyboard_row_height_dp"
         const val KEY_FULL_WIDTH = "zhuyin_full_width_symbols"
         const val KEY_LATIN_TOP_NUMBER_ROW = "latin_top_number_row"
+        const val KEY_VIBRATION = "keyboard_vibration_enabled"
+        const val KEY_POPUP = "keyboard_key_popup_enabled"
     }
 }
