@@ -76,38 +76,29 @@ internal object KeyboardLayouts {
         topNumberRow: Boolean = true,
     ): List<KeyRow> {
         val upper = shifted || capsLock
-        val topRow = if (topNumberRow) {
-            "qwertyuiop".mapIndexed { index, letter ->
-                val shown = if (upper) letter.uppercaseChar() else letter
-                KeySpec(
-                    label = shown.toString(),
-                    action = KeyAction.Character(shown),
-                    secondary = KeyAction.Character("1234567890"[index]),
-                )
-            }
-        } else {
-            letters("qwertyuiop", upper)
+        val rows = ArrayList<KeyRow>(5)
+        if (topNumberRow) {
+            rows += KeyRow(symbolKeys(split("1234567890")))
         }
-        return listOf(
-            KeyRow(topRow),
-            KeyRow(letters("asdfghjkl", upper), leading = 0.5f, trailing = 0.5f),
-            KeyRow(listOf(shift(upper, capsLock)) + letters("zxcvbnm", upper) + deleteKey()),
-            KeyRow(
-                listOf(
-                    iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.35f),
-                    iconKey(
-                        icon = KeyIcon.GLOBE,
-                        action = KeyAction.SetMode(KeyboardMode.ZHUYIN),
-                        weight = 1.15f,
-                        secondary = KeyAction.NextInputMethod,
-                    ),
-                    KeySpec(",", KeyAction.Character(',')),
-                    space(),
-                    KeySpec(".", KeyAction.Character('.')),
-                    enterKey(enter, 1.7f),
+        rows += KeyRow(letters("qwertyuiop", upper))
+        rows += KeyRow(letters("asdfghjkl", upper), leading = 0.5f, trailing = 0.5f)
+        rows += KeyRow(listOf(shift(upper, capsLock)) + letters("zxcvbnm", upper) + deleteKey())
+        rows += KeyRow(
+            listOf(
+                iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.35f),
+                iconKey(
+                    icon = KeyIcon.GLOBE,
+                    action = KeyAction.SetMode(KeyboardMode.ZHUYIN),
+                    weight = 1.15f,
+                    secondary = KeyAction.NextInputMethod,
                 ),
+                KeySpec(",", KeyAction.Character(',')),
+                space(),
+                KeySpec(".", KeyAction.Character('.')),
+                enterKey(enter, 1.7f),
             ),
         )
+        return rows
     }
 
     /**

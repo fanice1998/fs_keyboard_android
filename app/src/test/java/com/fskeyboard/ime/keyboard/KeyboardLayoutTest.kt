@@ -33,19 +33,23 @@ class KeyboardLayoutTest {
     }
 
     @Test
-    fun latinTopNumberRowConfiguresSecondaryNumbersWhenEnabled() {
+    fun latinTopNumberRowAddsDedicatedNumberRowWhenEnabled() {
         val enabled = KeyboardLayouts.rows(KeyboardMode.LATIN, latinTopNumberRow = true)
-        val topEnabled = enabled[0].keys
-        assertEquals("qwertyuiop", topEnabled.joinToString("") { it.label })
-        assertEquals(
-            "1234567890",
-            topEnabled.map { (it.secondary as? KeyAction.Character)?.value?.toString() ?: "" }.joinToString(""),
-        )
+        assertEquals(5, enabled.size)
+        val numberRow = enabled[0].keys
+        assertEquals("1234567890", numberRow.joinToString("") { it.label })
+        for (i in 0..9) {
+            assertEquals(KeyAction.Character("1234567890"[i]), numberRow[i].action)
+        }
+        val topLetterRow = enabled[1].keys
+        assertEquals("qwertyuiop", topLetterRow.joinToString("") { it.label })
+        assertTrue(topLetterRow.all { it.secondary == null })
 
         val disabled = KeyboardLayouts.rows(KeyboardMode.LATIN, latinTopNumberRow = false)
-        val topDisabled = disabled[0].keys
-        assertEquals("qwertyuiop", topDisabled.joinToString("") { it.label })
-        assertTrue(topDisabled.all { it.secondary == null })
+        assertEquals(4, disabled.size)
+        val disabledTopRow = disabled[0].keys
+        assertEquals("qwertyuiop", disabledTopRow.joinToString("") { it.label })
+        assertTrue(disabledTopRow.all { it.secondary == null })
     }
 
     @Test
