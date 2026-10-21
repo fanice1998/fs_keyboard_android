@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
 }
@@ -12,16 +14,52 @@ android {
         applicationId = "com.fskeyboard.ime"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = (findProperty("versionCode") as? String)?.toIntOrNull() ?: 1
+        versionName = (findProperty("versionName") as? String) ?: "0.1.0"
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val envKeystoreFile = System.getenv("KEYSTORE_FILE")
+            val envKeystorePassword = System.getenv("KEYSTORE_PASSWORD")
+            val envKeyAlias = System.getenv("KEY_ALIAS")
+            val envKeyPassword = System.getenv("KEY_PASSWORD")
+
+            val propFile = rootProject.file("keystore.properties")
+            val properties = Properties()
+            if (propFile.exists()) {
+                propFile.inputStream().use { properties.load(it) }
+            }
+
+            val storeFilePath = envKeystoreFile ?: properties.getProperty("storeFile")
+            val storePass = envKeystorePassword ?: properties.getProperty("storePassword")
+            val alias = envKeyAlias ?: properties.getProperty("keyAlias")
+            val keyPass = envKeyPassword ?: properties.getProperty("keyPassword")
+
+            if (!storeFilePath.isNullOrEmpty() && file(storeFilePath).exists()) {
+                storeFile = file(storeFilePath)
+                storePassword = storePass
+                keyAlias = alias
+                keyPassword = keyPass
+            } else {
+                // Fallback to debug keystore so builds without release keys won't fail
+                val debugConfig = getByName("debug")
+                storeFile = debugConfig.storeFile
+                storePassword = debugConfig.storePassword
+                keyAlias = debugConfig.keyAlias
+                keyPassword = debugConfig.keyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

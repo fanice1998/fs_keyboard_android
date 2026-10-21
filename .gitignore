@@ -23,3 +23,9 @@ third_party/librime/jniLibs/**
 # Text corpora for the bigram model; tools/fetch-corpus.sh downloads them.
 /data/corpus/
 /engine/corpus_tools/target/
+
+# Keystore & Signing
+*.jks
+*.keystore
+keystore.properties
+
