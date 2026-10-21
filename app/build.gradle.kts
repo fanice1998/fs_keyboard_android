@@ -10,56 +10,57 @@ android {
     namespace = "com.fskeyboard.ime"
     compileSdk = 36
 
+    val commitCount = providers.exec {
+        commandLine("git", "rev-list", "--count", "HEAD")
+        workingDir = rootProject.layout.projectDirectory.asFile
+        isIgnoreExitValue = true
+    }.standardOutput.asText.map { text ->
+        text.trim().toIntOrNull()?.takeIf { it > 0 } ?: 1
+    }.get()
+
     defaultConfig {
         applicationId = "com.fskeyboard.ime"
         minSdk = 26
         targetSdk = 36
-        versionCode = (findProperty("versionCode") as? String)?.toIntOrNull() ?: 1
-        versionName = (findProperty("versionName") as? String) ?: "0.1.0"
+        // -PversionCode overrides the commit count. A shallow clone reports too small a number.
+        versionCode = (findProperty("versionCode") as? String)?.toIntOrNull() ?: commitCount
+        versionName = (findProperty("versionName") as? String) ?: "0.1.$commitCount"
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 
+    val releaseKeystore = loadReleaseKeystore()
+
     signingConfigs {
-        create("release") {
-            val envKeystoreFile = System.getenv("KEYSTORE_FILE")
-            val envKeystorePassword = System.getenv("KEYSTORE_PASSWORD")
-            val envKeyAlias = System.getenv("KEY_ALIAS")
-            val envKeyPassword = System.getenv("KEY_PASSWORD")
-
-            val propFile = rootProject.file("keystore.properties")
-            val properties = Properties()
-            if (propFile.exists()) {
-                propFile.inputStream().use { properties.load(it) }
-            }
-
-            val storeFilePath = envKeystoreFile ?: properties.getProperty("storeFile")
-            val storePass = envKeystorePassword ?: properties.getProperty("storePassword")
-            val alias = envKeyAlias ?: properties.getProperty("keyAlias")
-            val keyPass = envKeyPassword ?: properties.getProperty("keyPassword")
-
-            if (!storeFilePath.isNullOrEmpty() && file(storeFilePath).exists()) {
-                storeFile = file(storeFilePath)
-                storePassword = storePass
-                keyAlias = alias
-                keyPassword = keyPass
-            } else {
-                // Fallback to debug keystore so builds without release keys won't fail
-                val debugConfig = getByName("debug")
-                storeFile = debugConfig.storeFile
-                storePassword = debugConfig.storePassword
-                keyAlias = debugConfig.keyAlias
-                keyPassword = debugConfig.keyPassword
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = releaseKeystore.store
+                storePassword = releaseKeystore.storePassword
+                keyAlias = releaseKeystore.alias
+                keyPassword = releaseKeystore.keyPassword
             }
         }
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("release")
+            if (releaseKeystore != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -107,3 +108,31 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.0")
     testImplementation("junit:junit:4.13.2")
 }
+
+/** Release key material from the environment or keystore.properties. Absent means the release APK stays unsigned. */
+private fun loadReleaseKeystore(): ReleaseKeystore? {
+    val properties = Properties()
+    val propFile = rootProject.file("keystore.properties")
+    if (propFile.isFile) {
+        propFile.inputStream().use { properties.load(it) }
+    }
+    fun setting(env: String, property: String): String? {
+        return System.getenv(env)?.takeIf { it.isNotEmpty() } ?: properties.getProperty(property)?.takeIf { it.isNotEmpty() }
+    }
+    val storePath = setting("KEYSTORE_FILE", "storeFile") ?: return null
+    val store = rootProject.file(storePath)
+    if (!store.isFile) return null
+    return ReleaseKeystore(
+        store = store,
+        storePassword = setting("KEYSTORE_PASSWORD", "storePassword"),
+        alias = setting("KEY_ALIAS", "keyAlias"),
+        keyPassword = setting("KEY_PASSWORD", "keyPassword"),
+    )
+}
+
+private data class ReleaseKeystore(
+    val store: java.io.File,
+    val storePassword: String?,
+    val alias: String?,
+    val keyPassword: String?,
+)

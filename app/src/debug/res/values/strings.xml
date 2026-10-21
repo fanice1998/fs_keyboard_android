@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FsKeyboard Debug</string>
+    <string name="ime_name">FsKeyboard 注音 Debug</string>
+    <string name="ime_settings_title">FsKeyboard Debug 設定</string>
+</resources>

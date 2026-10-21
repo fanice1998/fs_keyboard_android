@@ -1,7 +1,8 @@
 # Debug APK and unit tests.
 # The runner builds the Rust zhuyin lexicon. libfs_lexicon.so is not in git.
 # gradle.properties keeps rime.enabled=false, and this job does not pass it.
-# model.onnx is still absent. The APK is unsigned debug.
+# model.onnx is still absent. The APK is signed with the committed debug keystore.
+# Full git history keeps versionCode equal to the commit count.
 name: android
 
 on:
@@ -22,6 +23,8 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-java@v6
         with:

@@ -27,5 +27,6 @@ third_party/librime/jniLibs/**
 # Keystore & Signing
 *.jks
 *.keystore
+!app/debug.keystore
 keystore.properties
 
