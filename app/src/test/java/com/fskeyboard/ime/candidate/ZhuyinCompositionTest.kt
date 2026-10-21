@@ -94,7 +94,43 @@ class ZhuyinCompositionTest {
         composition.choose(lexical("真的", "ㄓㄣ ㄉㄜ˙"))
         val done = composition.choose(lexical("假的", "ㄐㄧㄚˇ ㄉㄜ˙"))!!
         assertEquals("真的假的", done.text)
-        assertEquals(listOf("ㄓㄣ ㄉㄜ˙ ㄐㄧㄚˇ ㄉㄜ˙" to "真的假的"), done.learned)
+        assertEquals(
+            listOf(
+                "ㄓㄣ ㄉㄜ˙" to "真的",
+                "ㄐㄧㄚˇ ㄉㄜ˙" to "假的",
+                "ㄓㄣ ㄉㄜ˙ ㄐㄧㄚˇ ㄉㄜ˙" to "真的假的",
+            ),
+            done.learned,
+        )
+    }
+
+    @Test
+    fun enterLearnsThePhraseItConfirms() {
+        val composition = typed("ㄎㄚˇㄎㄡˋ")
+        val done = composition.convertAll(
+            first = Candidate(text = "卡口", engineIndex = -1, span = 2, reading = "ㄎㄚˇ ㄎㄡˋ"),
+        ) { emptyList() }
+        assertEquals("卡口", done.text)
+        assertEquals(listOf("ㄎㄚˇ ㄎㄡˋ" to "卡口"), done.learned)
+    }
+
+    @Test
+    fun enterOnOneCharacterIsNotStoredAsAPhrase() {
+        val composition = typed("ㄍㄨㄥ")
+        val done = composition.convertAll(
+            first = Candidate(text = "公", engineIndex = -1, span = 1, reading = "ㄍㄨㄥ"),
+        ) { emptyList() }
+        assertEquals("公", done.text)
+        assertTrue(done.learned.isEmpty())
+    }
+
+    @Test
+    fun oneChosenPhraseIsLearnedOnItsOwn() {
+        val composition = typed("ㄎㄚˇㄎㄡˋ")
+        val done = composition.choose(
+            Candidate(text = "卡口", engineIndex = -1, span = 2, reading = "ㄎㄚˇ ㄎㄡˋ"),
+        )!!
+        assertEquals(listOf("ㄎㄚˇ ㄎㄡˋ" to "卡口"), done.learned)
     }
 
     @Test

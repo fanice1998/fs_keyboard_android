@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12 and newer. Cloud backup and a phone-to-phone transfer both keep
+  the learned phrases and the keyboard preferences.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="file" path="lexicon/user.tsv" />
+        <include domain="sharedpref" path="fskeyboard.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="file" path="lexicon/user.tsv" />
+        <include domain="sharedpref" path="fskeyboard.xml" />
+    </device-transfer>
+</data-extraction-rules>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Devices on Android 11 and older. An include list replaces the default set,
+  so keyboard preferences are named here too. The copied ONNX model and any
+  Rime files under files/ are rebuilt from assets and stay out.
+-->
+<full-backup-content>
+    <include domain="file" path="lexicon/user.tsv" />
+    <include domain="sharedpref" path="fskeyboard.xml" />
+</full-backup-content>

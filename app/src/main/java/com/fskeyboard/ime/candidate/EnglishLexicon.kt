@@ -46,7 +46,7 @@ internal class EnglishLexicon {
     }
 }
 
-/** What the candidate bar shows, and which word a space key commits (the first one). */
+/** What the candidate bar shows. Space and Enter commit the first prediction. */
 internal object EnglishSuggest {
     fun candidates(typed: String, hits: EnglishHits, limit: Int): List<String> {
         if (typed.isEmpty() || limit <= 0) return emptyList()
@@ -76,5 +76,14 @@ internal object EnglishSuggest {
             return word.replaceFirstChar { if (it.isLowerCase()) it.uppercaseChar() else it }
         }
         return word
+    }
+
+    /**
+     * Space and Enter take [prediction] when there is one.
+     * Every other key keeps [typed], the letters actually pressed.
+     */
+    fun commit(typed: String, prediction: String?, takePrediction: Boolean): String {
+        if (!takePrediction) return typed
+        return prediction?.takeIf { it.isNotEmpty() } ?: typed
     }
 }

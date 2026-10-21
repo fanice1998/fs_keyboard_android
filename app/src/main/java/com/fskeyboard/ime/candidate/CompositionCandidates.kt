@@ -34,7 +34,7 @@ internal object CompositionCandidates {
 }
 
 /**
- * Shows the lexicon hits for the front of the composition, longest phrase first.
+ * Shows the lexicon hits for the front of the composition.
  * The raw bopomofo stays at the end so it can still be committed.
  */
 internal fun candidatesFor(composer: ZhuyinComposer, hits: List<Candidate>): List<Candidate> {

@@ -58,6 +58,14 @@ class EnglishLexiconTest {
     }
 
     @Test
+    fun spaceAndEnterTakeThePredictionAndOtherKeysKeepTheLetters() {
+        assertEquals("deploy", EnglishSuggest.commit("depl", "deploy", takePrediction = true))
+        assertEquals("depl", EnglishSuggest.commit("depl", "deploy", takePrediction = false))
+        assertEquals("depl", EnglishSuggest.commit("depl", null, takePrediction = true))
+        assertEquals("", EnglishSuggest.commit("", "deploy", takePrediction = false))
+    }
+
+    @Test
     fun englishPredictionsStayOnTheCandidateBar() {
         val word = Candidate("deploy", engineIndex = -1)
         assertEquals(listOf(word), shownCandidates(KeyboardMode.LATIN, listOf(word)))

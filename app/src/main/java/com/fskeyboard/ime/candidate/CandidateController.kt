@@ -169,7 +169,7 @@ internal class CandidateController(
     /** Leaving zhuyin commits what was typed, the way Enter does. */
     private fun setMode(next: KeyboardMode) {
         if (next == mode) return
-        if (english.isNotEmpty()) acceptEnglish(trailing = "")
+        if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
             finishComposition(convertAll())
         }
@@ -222,7 +222,7 @@ internal class CandidateController(
 
     private fun onPunctuation(text: String) {
         if (english.isNotEmpty()) {
-            acceptEnglish(trailing = text)
+            finishEnglish(trailing = text, takePrediction = false)
             return
         }
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
@@ -234,7 +234,7 @@ internal class CandidateController(
 
     private fun onSpace() {
         if (english.isNotEmpty()) {
-            acceptEnglish(trailing = " ")
+            finishEnglish(trailing = " ", takePrediction = true)
             return
         }
         when (KeyPolicy.space(mode, composing = hasComposition)) {
@@ -270,7 +270,7 @@ internal class CandidateController(
     }
 
     private fun onEnter() {
-        if (english.isNotEmpty()) acceptEnglish(trailing = "")
+        if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = true)
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
             finishComposition(convertAll())
         } else {
@@ -348,7 +348,7 @@ internal class CandidateController(
             showEnglish()
             return
         }
-        if (english.isNotEmpty()) acceptEnglish(trailing = value.toString()) else commit(value.toString())
+        if (english.isNotEmpty()) finishEnglish(trailing = value.toString(), takePrediction = false) else commit(value.toString())
     }
 
     /** A letter always extends the word. An apostrophe, hyphen, or digit does only after one has started. */
@@ -395,19 +395,20 @@ internal class CandidateController(
         )
     }
 
-    /** Replaces the underlined stem with the first candidate, then [trailing]. */
-    private fun acceptEnglish(trailing: String) {
-        val word = presented.firstOrNull()?.text ?: english.toString()
+    /**
+     * Ends the underlined word. Space and Enter pass [takePrediction]; punctuation,
+     * switching keyboards, and leaving the field keep the letters that were typed.
+     */
+    private fun finishEnglish(trailing: String, takePrediction: Boolean) {
+        if (english.isEmpty()) return
+        val word = EnglishSuggest.commit(english.toString(), presented.firstOrNull()?.text, takePrediction)
         english.setLength(0)
         acceptCommitted(word + trailing)
     }
 
     /** Writes the underlined letters as they stand. Used when the field is closing. */
     private fun commitEnglishLiteral() {
-        if (english.isEmpty()) return
-        val word = english.toString()
-        english.setLength(0)
-        acceptCommitted(word)
+        finishEnglish(trailing = "", takePrediction = false)
     }
 
     private fun acceptCommitted(text: String) {

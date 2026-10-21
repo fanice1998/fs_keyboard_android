@@ -58,7 +58,7 @@ internal class ZhuyinComposition {
      * and empties the composition. [first] is the candidate already on screen, if any.
      */
     fun convertAll(first: Candidate?, candidates: (ZhuyinComposer) -> List<Candidate>): Commit {
-        val learned = learned()
+        val phrases = learned().toMutableList()
         val out = StringBuilder(chosenText)
         var pick = first
         while (!pending.isEmpty) {
@@ -67,12 +67,13 @@ internal class ZhuyinComposition {
                 out.append(pending.text)
                 break
             }
+            rememberPhrase(phrases, candidate.reading, candidate.text)
             out.append(candidate.text)
             pending.take(candidate.span.coerceAtLeast(1))
             pick = null
         }
         clear()
-        return Commit(out.toString(), learned)
+        return Commit(out.toString(), phrases)
     }
 
     fun clear() {
@@ -80,14 +81,30 @@ internal class ZhuyinComposition {
         chosen.clear()
     }
 
-    /** Each two words chosen one after the other, while both came from the lexicon and fit a phrase. */
+    /**
+     * Phrases the user actually chose: a candidate that already covered two or more
+     * syllables, and each two chosen words placed one after the other.
+     */
     private fun learned(): List<Pair<String, String>> {
-        return chosen.zipWithNext().mapNotNull { (left, right) ->
-            if (left.reading.isEmpty() || right.reading.isEmpty()) return@mapNotNull null
-            val reading = "${left.reading} ${right.reading}"
-            if (reading.split(' ').size > MAX_LEARNED_SYLLABLES) return@mapNotNull null
-            reading to left.text + right.text
+        val phrases = ArrayList<Pair<String, String>>()
+        for (choice in chosen) {
+            rememberPhrase(phrases, choice.reading, choice.text)
         }
+        for ((left, right) in chosen.zipWithNext()) {
+            if (left.reading.isEmpty() || right.reading.isEmpty()) continue
+            val reading = "${left.reading} ${right.reading}"
+            if (reading.split(' ').size > MAX_LEARNED_SYLLABLES) continue
+            val pair = reading to left.text + right.text
+            if (pair !in phrases) phrases += pair
+        }
+        return phrases
+    }
+
+    /** A lexicon phrase covers at least two syllables. A single character is not stored on its own. */
+    private fun rememberPhrase(phrases: MutableList<Pair<String, String>>, reading: String, text: String) {
+        if (text.isEmpty() || reading.count { it == ' ' } < 1) return
+        val pair = reading to text
+        if (pair !in phrases) phrases += pair
     }
 
     private data class Choice(val text: String, val reading: String, val syllables: List<ZhuyinSyllable>)

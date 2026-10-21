@@ -11,8 +11,6 @@ const MAX_SPAN: usize = 8;
 /// Tones are packed three bits per syllable, so longer readings are skipped.
 const MAX_SYLLABLES: usize = 10;
 const CANDIDATE_LIMIT: usize = 60;
-/// Phrases are capped per length so single characters still reach the list.
-const PHRASE_LIMIT: usize = 20;
 /// Score for a row that only the supplementary dictionary has. Below every phrase-table row.
 const SUPPLEMENT_SCORE: f32 = -9.0;
 /// Score for a syllable that no word covers. It keeps its zhuyin in a conversion.
@@ -22,6 +20,21 @@ const UNKNOWN_SCORE: f32 = -20.0;
 const ABBREVIATION_PENALTY: f32 = 2.0;
 /// Score of a phrase the user put together from chosen words. Above nearly every table row.
 const USER_SCORE: f32 = -1.0;
+/// Added each time the user chooses a phrase they already taught. Stops at [USER_SCORE_CAP].
+const LEARN_BOOST: f32 = 0.15;
+/// Chosen phrases stop climbing here, so a favourite cannot bury every other word.
+const USER_SCORE_CAP: f32 = 1.0;
+/// How many times one phrase may be written again. Matches the climb from [USER_SCORE] to the cap.
+const MAX_LEARN_BOOSTS: u32 = 14;
+/// Whole-reading candidates kept on a multi-syllable query, including the best sentence.
+const WHOLE_LIMIT: usize = 6;
+/// Multi-character words kept after the whole-reading row. These are the front words.
+const WORD_LIMIT: usize = 4;
+/// First-syllable characters kept after those words.
+const CHAR_LIMIT: usize = 24;
+/// A learned word found from a shorter syllable loses less than a dictionary abbreviation,
+/// so ㄎㄚˇ ㄎㄡˋ stays reachable from ㄎㄚ ㄎ and ㄎ ㄎ.
+const LEARNED_ABBREV_PENALTY: f32 = 0.35;
 /// A span with more initial+medial syllables than this is read only as typed.
 const MAX_SPLITS: usize = 3;
 /// With a bigram model, splits kept per position, each ending in a different word.
@@ -81,6 +94,9 @@ struct Learned {
     reading: Box<str>,
     tones: u32,
     word: Option<u32>,
+    score: f32,
+    /// Successful boosts after the first time this phrase was stored.
+    repeats: u32,
 }
 
 /// One candidate. [span] is how many typed syllables, from the front, it uses.
@@ -90,6 +106,22 @@ pub struct Hit<'a> {
     pub span: usize,
     pub text: Cow<'a, str>,
     pub reading: String,
+}
+
+/// A hit kept with the score that put it in this order.
+struct Listed<'a> {
+    span: usize,
+    text: Cow<'a, str>,
+    reading: String,
+    score: f32,
+}
+
+fn push_listed<'a>(out: &mut Vec<Hit<'a>>, seen: &mut HashSet<String>, item: &Listed<'a>) -> bool {
+    if !seen.insert(item.text.to_string()) {
+        return false;
+    }
+    out.push(Hit { span: item.span, text: item.text.clone(), reading: item.reading.clone() });
+    true
 }
 
 /// One typed syllable: toneless body, wanted tone (None while it has none), and as typed.
@@ -107,8 +139,10 @@ struct Token<'q> {
 }
 
 impl Lexicon {
-    /// Candidates for [code]: the best conversion of the whole input first, when it
-    /// takes more than one word, then the front of the input, longest phrase first.
+    /// Candidates for [code]. One syllable stays in frequency order.
+    /// Several syllables lead with the best reading of all of them, then the best
+    /// character and the best shorter word for the front, then up to [WHOLE_LIMIT]
+    /// whole readings, up to [WORD_LIMIT] more words, then the first syllable's characters.
     ///
     /// [code] is syllables joined by a space. A syllable ends with its tone mark,
     /// no mark is the level tone, and `*` means the tone is not chosen yet. A syllable
@@ -122,32 +156,129 @@ impl Lexicon {
     pub fn candidates_after(&self, code: &str, before: &str) -> Vec<Hit<'_>> {
         let query = parse_code(code);
         let previous = self.context_word(before);
-        let mut out = Vec::new();
-        let sentence = if query.len() > 1 { self.best_path(&query, previous) } else { Vec::new() };
-        if sentence.len() > 1 {
-            out.push(Hit {
-                span: query.len(),
-                text: Cow::Owned(sentence.iter().map(|hit| hit.text.as_ref()).collect()),
-                reading: sentence.iter().map(|hit| hit.reading.as_str()).collect::<Vec<_>>().join(" "),
-            });
+        if query.len() <= 1 {
+            return self.syllable_candidates(&query, previous);
         }
-        let sentence_text = out.first().map(|hit| hit.text.to_string());
+        self.mixed_candidates(&query, previous)
+    }
+
+    /// One syllable, or nothing typed: frequency order, characters included, capped at
+    /// [CANDIDATE_LIMIT]. Enter still confirms whatever is first.
+    fn syllable_candidates(&self, query: &[Syllable], previous: Option<u32>) -> Vec<Hit<'_>> {
+        let mut out = Vec::new();
         let mut seen: HashSet<&str> = HashSet::new();
         for span in (1..=query.len().min(MAX_SPAN)).rev() {
-            let limit = if span > 1 { PHRASE_LIMIT } else { CANDIDATE_LIMIT };
-            let mut taken = 0;
-            for (id, _) in self.in_context(self.ranked_span(&query[..span], limit), previous) {
-                if out.len() >= CANDIDATE_LIMIT || taken >= limit {
+            for (id, _) in self.in_context(self.ranked_span(&query[..span], CANDIDATE_LIMIT), previous) {
+                if out.len() >= CANDIDATE_LIMIT {
                     break;
                 }
                 let entry = self.entry(id);
-                let text = entry.text;
-                if sentence_text.as_deref() == Some(text) || !seen.insert(text) {
+                if !seen.insert(entry.text) {
                     continue;
                 }
-                out.push(Hit { span, text: Cow::Borrowed(text), reading: reading_of(&entry) });
-                taken += 1;
+                out.push(Hit { span, text: Cow::Borrowed(entry.text), reading: reading_of(&entry) });
             }
+        }
+        out
+    }
+
+    /// Several syllables. The first hit is still the best reading of every syllable,
+    /// because Enter commits that chip. The next hits are the front character and the
+    /// front word, so a long phrase cannot push them off the row. Then the rest of the
+    /// whole readings, then words, then characters.
+    fn mixed_candidates(&self, query: &[Syllable], previous: Option<u32>) -> Vec<Hit<'_>> {
+        let n = query.len();
+        let whole_span = n.min(MAX_SPAN);
+        let wholes = self.listed(&query[..whole_span], whole_span, WHOLE_LIMIT + WORD_LIMIT, previous);
+        let chars = self.listed(query, 1, CHAR_LIMIT, previous);
+        let mut words = Vec::new();
+        for span in 2..whole_span {
+            words.extend(self.listed(&query[..span], span, WORD_LIMIT, previous));
+        }
+        words.sort_by(|left, right| right.score.total_cmp(&left.score));
+
+        let sentence = self.best_path(query, previous);
+        let mut out = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut whole_count = 0usize;
+        if sentence.len() > 1 {
+            let text: String = sentence.iter().map(|hit| hit.text.as_ref()).collect();
+            let reading = sentence.iter().map(|hit| hit.reading.as_str()).collect::<Vec<_>>().join(" ");
+            if seen.insert(text.clone()) {
+                out.push(Hit { span: n, text: Cow::Owned(text), reading });
+                whole_count += 1;
+            }
+        } else if let Some(best) = wholes.first() {
+            if push_listed(&mut out, &mut seen, best) {
+                whole_count += 1;
+            }
+        }
+        if let Some(character) = chars.first() {
+            push_listed(&mut out, &mut seen, character);
+        }
+        let mut word_count = 0usize;
+        if let Some(word) = words.iter().find(|item| !seen.contains(item.text.as_ref())) {
+            if push_listed(&mut out, &mut seen, word) {
+                word_count += 1;
+            }
+        }
+        for item in &wholes {
+            if whole_count >= WHOLE_LIMIT {
+                break;
+            }
+            if push_listed(&mut out, &mut seen, item) {
+                whole_count += 1;
+            }
+        }
+        for item in &words {
+            if word_count >= WORD_LIMIT {
+                break;
+            }
+            if push_listed(&mut out, &mut seen, item) {
+                word_count += 1;
+            }
+        }
+        // Two syllables have no shorter word. The next whole readings fill the word quota.
+        if whole_span < 3 {
+            for item in &wholes {
+                if word_count >= WORD_LIMIT {
+                    break;
+                }
+                if push_listed(&mut out, &mut seen, item) {
+                    word_count += 1;
+                }
+            }
+        }
+        for item in &chars {
+            if out.len() >= CANDIDATE_LIMIT {
+                break;
+            }
+            push_listed(&mut out, &mut seen, item);
+        }
+        out
+    }
+
+    /// Up to [limit] dictionary hits for the first [span] syllables, best score first.
+    fn listed(&self, query: &[Syllable], span: usize, limit: usize, previous: Option<u32>) -> Vec<Listed<'_>> {
+        let mut out = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+        if query.is_empty() || span == 0 || span > query.len() {
+            return out;
+        }
+        for (id, score) in self.in_context(self.ranked_span(&query[..span], limit), previous) {
+            if out.len() >= limit {
+                break;
+            }
+            let entry = self.entry(id);
+            if !seen.insert(entry.text) {
+                continue;
+            }
+            out.push(Listed {
+                span,
+                text: Cow::Borrowed(entry.text),
+                reading: reading_of(&entry),
+                score,
+            });
         }
         out
     }
@@ -193,7 +324,9 @@ impl Lexicon {
 
     /// Remembers [text] under [reading], given the way [Lexicon::candidates] reports
     /// readings, at [USER_SCORE], above the same word already in the table.
-    /// Returns false when it was already learned.
+    /// Choosing it again raises that score by [LEARN_BOOST], up to [USER_SCORE_CAP].
+    /// Returns false when the phrase cannot be stored or its score is already capped,
+    /// so the caller can append one `user.tsv` line per successful call.
     pub fn learn(&mut self, reading: &str, text: &str) -> bool {
         let Some((key, tones)) = split_reading(reading) else {
             return false;
@@ -201,18 +334,32 @@ impl Lexicon {
         if text.is_empty() {
             return false;
         }
-        let known = self.learned_by_reading.get(key.as_str()).is_some_and(|ids| {
-            ids.iter().any(|&id| {
-                let entry = self.entry(id);
-                entry.text == text && (entry.tones == tones || tones_cover(tones, entry.tones))
+        let found = self.learned_by_reading.get(key.as_str()).and_then(|ids| {
+            ids.iter().find_map(|&id| {
+                let index = (id as usize).checked_sub(self.store.len())?;
+                let item = self.learned.get(index)?;
+                (item.text.as_ref() == text && (item.tones == tones || tones_cover(tones, item.tones))).then_some(index)
             })
         });
-        if known {
-            return false;
+        if let Some(index) = found {
+            let item = &mut self.learned[index];
+            if item.repeats >= MAX_LEARN_BOOSTS || item.score >= USER_SCORE_CAP {
+                return false;
+            }
+            item.repeats += 1;
+            item.score = (item.score + LEARN_BOOST).min(USER_SCORE_CAP);
+            return true;
         }
         let id = (self.store.len() + self.learned.len()) as u32;
         let word = self.store.word(text);
-        self.learned.push(Learned { text: text.into(), reading: key.as_str().into(), tones, word });
+        self.learned.push(Learned {
+            text: text.into(),
+            reading: key.as_str().into(),
+            tones,
+            word,
+            score: USER_SCORE,
+            repeats: 0,
+        });
         self.learned_by_reading.entry(key.as_str().into()).or_default().push(id);
         self.learned_by_initials.entry(initials_of(&key).into_boxed_str()).or_default().push(id);
         for syllable in key.split(' ') {
@@ -332,40 +479,59 @@ impl Lexicon {
 
     /// Up to [limit] entries for [tokens], best adjusted score first. Exact readings
     /// score as stored; readings found only by an abbreviated syllable lose
-    /// [ABBREVIATION_PENALTY].
+    /// [ABBREVIATION_PENALTY]. A learned phrase loses only [LEARNED_ABBREV_PENALTY],
+    /// so choosing ㄎㄚˇ ㄎㄡˋ still surfaces from ㄎㄚ ㄎ and ㄎ ㄎ.
     fn ranked(&self, tokens: &[Token<'_>], limit: usize) -> Vec<(u32, f32)> {
         let key = tokens.iter().map(|token| token.body).collect::<Vec<_>>().join(" ");
         let mut out = Vec::new();
-        for id in self.by_reading(&key) {
-            if out.len() >= limit {
+        if let Some(ids) = self.learned_by_reading.get(key.as_str()) {
+            for &id in ids {
+                let entry = self.entry(id);
+                if tones_match(&entry, tokens) {
+                    out.push((id, entry.score));
+                }
+            }
+        }
+        let mut stored = 0usize;
+        for id in self.store.by_reading(&key) {
+            if stored >= limit {
                 break;
             }
             let entry = self.entry(id);
             if tones_match(&entry, tokens) {
                 out.push((id, entry.score));
+                stored += 1;
             }
         }
         let abbreviated = tokens
             .iter()
             .any(|token| token.tone.is_none() && self.open.contains(token.body));
         if abbreviated {
-            let mut taken = 0;
-            for id in self.by_initials(&initials_of(&key)) {
+            let initials = initials_of(&key);
+            if let Some(ids) = self.learned_by_initials.get(initials.as_str()) {
+                for &id in ids {
+                    let entry = self.entry(id);
+                    if entry.reading == key || !starts_match(entry.reading, tokens) || !tones_match(&entry, tokens) {
+                        continue;
+                    }
+                    out.push((id, entry.score - LEARNED_ABBREV_PENALTY));
+                }
+            }
+            let mut taken = 0usize;
+            for id in self.store.by_initials(&initials) {
                 if taken >= limit {
                     break;
                 }
                 let entry = self.entry(id);
-                if entry.reading == key || !starts_match(entry.reading, tokens) {
+                if entry.reading == key || !starts_match(entry.reading, tokens) || !tones_match(&entry, tokens) {
                     continue;
                 }
-                if tones_match(&entry, tokens) {
-                    out.push((id, entry.score - ABBREVIATION_PENALTY));
-                    taken += 1;
-                }
+                out.push((id, entry.score - ABBREVIATION_PENALTY));
+                taken += 1;
             }
-            out.sort_by(|left, right| right.1.total_cmp(&left.1));
-            out.truncate(limit);
         }
+        out.sort_by(|left, right| right.1.total_cmp(&left.1));
+        out.truncate(limit);
         out
     }
 
@@ -378,22 +544,11 @@ impl Lexicon {
                     text: &learned.text,
                     reading: &learned.reading,
                     tones: learned.tones,
-                    score: USER_SCORE,
+                    score: learned.score,
                     word: learned.word,
                 }
             }
         }
-    }
-
-    /// Learned entries first: they all score [USER_SCORE], above every compiled one.
-    fn by_reading<'a>(&'a self, key: &str) -> impl Iterator<Item = u32> + 'a {
-        let learned = self.learned_by_reading.get(key).into_iter().flatten().copied();
-        learned.chain(self.store.by_reading(key))
-    }
-
-    fn by_initials<'a>(&'a self, key: &str) -> impl Iterator<Item = u32> + 'a {
-        let learned = self.learned_by_initials.get(key).into_iter().flatten().copied();
-        learned.chain(self.store.by_initials(key))
     }
 
     /// `span<TAB>text<TAB>reading` lines, one per candidate.
@@ -895,7 +1050,7 @@ name: sample
         let mut lexicon = build(lexicon_text, "", "");
         assert_eq!(sentence(&lexicon, "ㄓㄣ* ㄉㄜ* ㄐㄧㄚ* ㄉㄜ*"), "真的家的");
         assert!(lexicon.learn("ㄓㄣ ㄉㄜ˙ ㄐㄧㄚˇ ㄉㄜ˙", "真的假的"));
-        assert!(!lexicon.learn("ㄓㄣ ㄉㄜ˙ ㄐㄧㄚˇ ㄉㄜ˙", "真的假的"));
+        assert!(lexicon.learn("ㄓㄣ ㄉㄜ˙ ㄐㄧㄚˇ ㄉㄜ˙", "真的假的"));
         assert_eq!(texts(&lexicon.candidates("ㄓㄣ* ㄉㄜ* ㄐㄧㄚ* ㄉㄜ*"))[0], "真的假的");
         assert_eq!(texts(&lexicon.candidates("ㄓ* ㄉ* ㄐ* ㄉ*"))[0], "真的假的");
 
@@ -945,9 +1100,18 @@ name: sample
     fn learning_an_existing_row_raises_it() {
         let mut lexicon = build(SAMPLE, "", "");
         assert!(lexicon.learn("ㄍㄨㄥ", "工"));
-        assert!(!lexicon.learn("ㄍㄨㄥ", "工"));
+        assert!(lexicon.learn("ㄍㄨㄥ", "工"));
         assert_eq!(texts(&lexicon.candidates("ㄍㄨㄥ")), vec!["工", "公"]);
         assert_eq!(lexicon.len(), 9);
+        let mut boosts = 0;
+        for _ in 0..30 {
+            if lexicon.learn("ㄍㄨㄥ", "工") {
+                boosts += 1;
+            }
+        }
+        assert!(boosts < 30);
+        assert_eq!(lexicon.len(), 9);
+        assert_eq!(texts(&lexicon.candidates("ㄍㄨㄥ"))[0], "工");
     }
 
     #[test]
@@ -985,7 +1149,9 @@ name: sample
         assert_eq!(pair(&lexicon.candidates("ㄋㄧˇ ㄏㄠˇ")[0]), (2, "你好".to_string()));
         let today = lexicon.candidates("ㄐㄧㄣ* ㄊㄧㄢ* ㄊㄧㄢ* ㄑㄧ*");
         assert_eq!(pair(&today[0]), (4, "今天天氣".to_string()));
-        assert_eq!(today[1].span, 2);
+        assert_eq!(today[1].span, 1);
+        assert!(today.iter().filter(|hit| hit.span == 4).count() <= 6);
+        assert!(today.iter().filter(|hit| hit.span > 1 && hit.span < 4).count() <= 4);
         assert!(today.iter().any(|hit| hit.text == "今天"));
         assert!(today.len() <= CANDIDATE_LIMIT);
         assert!(today.iter().any(|hit| hit.span == 1 && hit.text == "今"));
@@ -996,6 +1162,56 @@ name: sample
         let lexicon = project();
         assert_eq!(sentence(&lexicon, "ㄨㄛˇ ㄇㄣ˙ ㄐㄧㄣ ㄊㄧㄢ ㄑㄩˋ ㄎㄢˋ ㄉㄧㄢˋ ㄧㄥˇ"), "我們今天去看電影");
         assert_eq!(sentence(&lexicon, "ㄋㄧˇ ㄎㄢ* ㄎㄢ*"), "你看看");
+    }
+
+    #[test]
+    fn several_syllables_keep_a_front_choice_beside_a_few_whole_readings() {
+        let mut lines = String::new();
+        for (text, score) in [
+            ("功課本", "-2.0"),
+            ("公共本", "-2.1"),
+            ("工人本", "-2.2"),
+            ("公文本", "-2.3"),
+            ("公園本", "-2.4"),
+            ("公式本", "-2.5"),
+            ("工程本", "-2.6"),
+        ] {
+            lines.push_str(&format!("ㄍㄨㄥ ㄎㄜˋ ㄅㄣˇ\t{text}\t{score}\n"));
+        }
+        for (text, score) in [("功課", "-3.0"), ("工科", "-3.1"), ("公課", "-3.2"), ("工課", "-3.3"), ("公科", "-3.4")] {
+            lines.push_str(&format!("ㄍㄨㄥ ㄎㄜˋ\t{text}\t{score}\n"));
+        }
+        for (text, score) in [("公", "-3.0"), ("工", "-3.1"), ("功", "-3.2"), ("攻", "-3.3"), ("宮", "-3.4")] {
+            lines.push_str(&format!("ㄍㄨㄥ\t{text}\t{score}\n"));
+        }
+        let lexicon = build(&lines, "", "");
+        let hits = lexicon.candidates("ㄍㄨㄥ* ㄎㄜ* ㄅㄣ*");
+        assert_eq!(pair(&hits[0]), (3, "功課本".to_string()));
+        assert_eq!(pair(&hits[1]), (1, "公".to_string()));
+        assert_eq!(pair(&hits[2]), (2, "功課".to_string()));
+        assert_eq!(hits.iter().filter(|hit| hit.span == 3).count(), 6);
+        assert_eq!(hits.iter().filter(|hit| hit.span == 2).count(), 4);
+        assert!(hits.iter().any(|hit| hit.span == 1 && hit.text == "工"));
+        assert!(hits.iter().all(|hit| hit.text != "工程本"));
+        assert!(hits.iter().all(|hit| hit.text != "公科"));
+    }
+
+    #[test]
+    fn a_toned_choice_is_found_without_tones_and_rises_when_chosen_again() {
+        let mut lexicon = build("ㄚ\t啊\t-5.0\n", "", "");
+        assert!(lexicon.learn("ㄎㄚˇ ㄎㄡˋ", "卡口"));
+        assert!(lexicon.learn("ㄎㄚˇ ㄎㄡˋ", "開口"));
+        assert_eq!(texts(&lexicon.candidates("ㄎㄚ* ㄎㄡ*"))[0], "卡口");
+        assert!(lexicon.learn("ㄎㄚˇ ㄎㄡˋ", "開口"));
+        assert_eq!(texts(&lexicon.candidates("ㄎㄚ* ㄎㄡ*"))[0], "開口");
+        for query in ["ㄎㄚ* ㄎㄡ*", "ㄎㄚ* ㄎ*", "ㄎ* ㄎ*"] {
+            let found = texts(&lexicon.candidates(query));
+            assert!(found.iter().any(|text| text == "卡口"), "{query} -> {found:?}");
+            assert!(found.iter().any(|text| text == "開口"), "{query} -> {found:?}");
+        }
+        let replayed = build("ㄚ\t啊\t-5.0\n", "", "ㄎㄚˇ ㄎㄡˋ\t卡口\nㄎㄚˇ ㄎㄡˋ\t開口\nㄎㄚˇ ㄎㄡˋ\t開口\n");
+        assert_eq!(texts(&replayed.candidates("ㄎㄚ* ㄎㄡ*"))[0], "開口");
+        assert_eq!(replayed.len(), 3);
     }
 
     #[test]
