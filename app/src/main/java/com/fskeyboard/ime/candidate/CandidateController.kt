@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.util.Log
+import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
@@ -13,10 +14,13 @@ import com.fskeyboard.ime.engine.EngineSnapshot
 import com.fskeyboard.ime.engine.EngineStatus
 import com.fskeyboard.ime.engine.KeyPolicy
 import com.fskeyboard.ime.engine.ZhuyinLexicon
+import com.fskeyboard.ime.keyboard.ComputerKey
+import com.fskeyboard.ime.keyboard.ComputerModifiers
 import com.fskeyboard.ime.keyboard.CursorMotion
 import com.fskeyboard.ime.keyboard.EnterActions
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardMode
+import com.fskeyboard.ime.keyboard.computerKeyCode
 import com.fskeyboard.ime.keyboard.ZhuyinComposer
 import com.fskeyboard.ime.rerank.CandidatePipeline
 import com.fskeyboard.ime.rerank.RerankFallback
@@ -38,6 +42,10 @@ internal class CandidateController(
         Handler(Looper.getMainLooper()).post(runnable)
     },
 ) {
+    /** Ctrl, Alt, and Meta chosen from an English swipe, until the next key. */
+    var onComputerModifiers: (Set<ComputerKey>) -> Unit = {}
+
+    private val modifiers = ComputerModifiers()
     private var mode = KeyboardMode.ZHUYIN
 
     /** The letter keyboard the symbol pages return to. */
@@ -95,6 +103,7 @@ internal class CandidateController(
         }
         english.setLength(0)
         cancelComposition()
+        clearModifiers()
         if (emailSuggest.isEmailField(editorInfo())) {
             setMode(KeyboardMode.LATIN)
         }
@@ -174,6 +183,11 @@ internal class CandidateController(
     }
 
     fun onKey(action: KeyAction) {
+        if (action is KeyAction.Computer) {
+            onComputer(action.key)
+            return
+        }
+        if (modifiers.isActive() && sendModified(action)) return
         val composeEnglish = EnglishInputPolicy.shouldCompose(editorInfo())
         val typingEnglish = mode == KeyboardMode.LATIN && composeEnglish &&
             (english.isNotEmpty() || (action is KeyAction.Character && action.value.isLetter()))
@@ -188,7 +202,61 @@ internal class CandidateController(
             is KeyAction.Character -> onCharacter(action.value)
             is KeyAction.Bopomofo -> onBopomofo(action)
             is KeyAction.Punctuation -> onPunctuation(action.text)
+            is KeyAction.Computer -> Unit
         }
+    }
+
+    /** A modifier waits. Any other computer key is sent, with the waiting modifiers, then those clear. */
+    private fun onComputer(key: ComputerKey) {
+        if (key.modifier) {
+            modifiers.toggle(key)
+            onComputerModifiers(modifiers.active())
+            return
+        }
+        dismissSuggestions()
+        if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
+        if (mode == KeyboardMode.ZHUYIN && hasComposition) finishComposition(convertAll())
+        sendKeyEvent(key.keyCode, modifiers.metaState())
+        clearModifiers()
+    }
+
+    /**
+     * The next letter, space, enter, or backspace after Ctrl, Alt, or Meta.
+     * Returns false when this key has no key code, so the normal path still runs.
+     */
+    private fun sendModified(action: KeyAction): Boolean {
+        val shift = action is KeyAction.Character && action.value.isLetter() && action.value.isUpperCase()
+        val keyCode = when (action) {
+            is KeyAction.Character -> computerKeyCode(action.value)
+            KeyAction.Space -> KeyEvent.KEYCODE_SPACE
+            KeyAction.Enter -> KeyEvent.KEYCODE_ENTER
+            KeyAction.Backspace -> KeyEvent.KEYCODE_DEL
+            else -> null
+        }
+        if (keyCode == null) {
+            clearModifiers()
+            return false
+        }
+        dismissSuggestions()
+        if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
+        if (mode == KeyboardMode.ZHUYIN && hasComposition) finishComposition(convertAll())
+        sendKeyEvent(keyCode, modifiers.metaState(shift))
+        clearModifiers()
+        return true
+    }
+
+    private fun clearModifiers() {
+        if (!modifiers.isActive()) return
+        modifiers.clear()
+        onComputerModifiers(emptySet())
+    }
+
+    private fun sendKeyEvent(keyCode: Int, meta: Int) {
+        val ic = connection() ?: return
+        ic.finishComposingText()
+        val time = System.currentTimeMillis()
+        ic.sendKeyEvent(KeyEvent(time, time, KeyEvent.ACTION_DOWN, keyCode, 0, meta))
+        ic.sendKeyEvent(KeyEvent(time, time, KeyEvent.ACTION_UP, keyCode, 0, meta))
     }
 
     /**
@@ -237,6 +305,7 @@ internal class CandidateController(
         if (!switchingBetweenLatinAndSymbols && english.isNotEmpty()) {
             finishEnglish(trailing = "", takePrediction = false)
         }
+        clearModifiers()
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
             finishComposition(convertAll())
         }

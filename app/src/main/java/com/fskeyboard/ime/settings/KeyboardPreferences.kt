@@ -37,6 +37,13 @@ internal class KeyboardPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_LATIN_TOP_NUMBER_ROW, enabled).apply()
     }
 
+    /** Whether an upward swipe on an English letter sends Esc, Ctrl, Alt, and the other computer keys. */
+    fun computerKeys(): Boolean = prefs.getBoolean(KEY_COMPUTER_KEYS, false)
+
+    fun setComputerKeys(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_COMPUTER_KEYS, enabled).apply()
+    }
+
     /** Whether key presses produce haptic vibration feedback. */
     fun vibrationEnabled(): Boolean = prefs.getBoolean(KEY_VIBRATION, true)
 
@@ -55,6 +62,7 @@ internal class KeyboardPreferences(context: Context) {
         const val KEY_ROW_DP = "keyboard_row_height_dp"
         const val KEY_FULL_WIDTH = "zhuyin_full_width_symbols"
         const val KEY_LATIN_TOP_NUMBER_ROW = "latin_top_number_row"
+        const val KEY_COMPUTER_KEYS = "latin_computer_keys"
         const val KEY_VIBRATION = "keyboard_vibration_enabled"
         const val KEY_PREVIEW = "key_preview_enabled"
     }

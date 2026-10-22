@@ -133,6 +133,7 @@ class FsKeyboardService : InputMethodService() {
             rowHeightDp = preferences.rowHeightDp()
             fullWidthSymbols = preferences.fullWidthSymbols()
             latinTopNumberRow = preferences.latinTopNumberRow()
+            computerKeys = preferences.computerKeys()
             vibrationEnabled = preferences.vibrationEnabled()
             keyPreviewEnabled = preferences.keyPreviewEnabled()
             onTyped = latencyProbe::keyHandled
@@ -151,6 +152,9 @@ class FsKeyboardService : InputMethodService() {
                 }
             }
             enterChoice = EnterActions.choose(currentInputEditorInfo)
+        }
+        controller.onComputerModifiers = { armed ->
+            keyboard?.armedComputerKeys = armed
         }
         val spacer = View(this)
         val initial = KeyboardInsets.resolve(
@@ -394,6 +398,7 @@ class FsKeyboardService : InputMethodService() {
         keyboard?.rowHeightDp = preferences.rowHeightDp()
         keyboard?.fullWidthSymbols = preferences.fullWidthSymbols()
         keyboard?.latinTopNumberRow = preferences.latinTopNumberRow()
+        keyboard?.computerKeys = preferences.computerKeys()
         keyboard?.vibrationEnabled = preferences.vibrationEnabled()
         keyboard?.keyPreviewEnabled = preferences.keyPreviewEnabled()
         keyboard?.enterChoice = EnterActions.choose(info)

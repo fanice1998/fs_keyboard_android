@@ -45,6 +45,9 @@ internal sealed interface KeyAction {
 
     /** Long-press on the language key: move to the next system keyboard. */
     data object NextInputMethod : KeyAction
+
+    /** A computer key from an upward swipe on an English letter. */
+    data class Computer(val key: ComputerKey) : KeyAction
 }
 
 internal enum class KeyRole {
@@ -63,6 +66,8 @@ internal data class KeySpec(
     val highlighted: Boolean = false,
     val icon: KeyIcon? = null,
     val secondary: KeyAction? = null,
+    /** Reached by swiping this key upward. Null keeps a normal tap. */
+    val swipeUp: KeyAction? = null,
 )
 
 internal data class KeyRow(

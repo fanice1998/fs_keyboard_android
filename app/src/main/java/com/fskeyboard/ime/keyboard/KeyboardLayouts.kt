@@ -13,9 +13,10 @@ internal object KeyboardLayouts {
         capsLock: Boolean = false,
         enter: EnterChoice = EnterChoice(),
         latinTopNumberRow: Boolean = true,
+        computerKeys: Boolean = false,
     ): List<KeyRow> = when (mode) {
         KeyboardMode.ZHUYIN -> zhuyin(enter)
-        KeyboardMode.LATIN -> latin(shifted, capsLock, enter, latinTopNumberRow)
+        KeyboardMode.LATIN -> latin(shifted, capsLock, enter, latinTopNumberRow, computerKeys)
         KeyboardMode.SYMBOLS -> symbols(base, more = false, fullWidth, enter)
         KeyboardMode.SYMBOLS_MORE -> symbols(base, more = true, fullWidth, enter)
     }
@@ -74,15 +75,16 @@ internal object KeyboardLayouts {
         capsLock: Boolean,
         enter: EnterChoice,
         topNumberRow: Boolean = true,
+        computerKeys: Boolean = false,
     ): List<KeyRow> {
         val upper = shifted || capsLock
         val rows = ArrayList<KeyRow>(5)
         if (topNumberRow) {
             rows += KeyRow(symbolKeys(split("1234567890")))
         }
-        rows += KeyRow(letters("qwertyuiop", upper))
-        rows += KeyRow(letters("asdfghjkl", upper), leading = 0.5f, trailing = 0.5f)
-        rows += KeyRow(listOf(shift(upper, capsLock)) + letters("zxcvbnm", upper) + deleteKey())
+        rows += KeyRow(letters("qwertyuiop", upper, computerKeys))
+        rows += KeyRow(letters("asdfghjkl", upper, computerKeys), leading = 0.5f, trailing = 0.5f)
+        rows += KeyRow(listOf(shift(upper, capsLock)) + letters("zxcvbnm", upper, computerKeys) + deleteKey())
         rows += KeyRow(
             listOf(
                 iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.35f),
@@ -156,10 +158,15 @@ internal object KeyboardLayouts {
         KeySpec(label, action)
     }
 
-    private fun letters(value: String, shifted: Boolean = false): List<KeySpec> {
+    private fun letters(
+        value: String,
+        shifted: Boolean = false,
+        computerKeys: Boolean = false,
+    ): List<KeySpec> {
         return value.map { letter ->
             val shown = if (shifted) letter.uppercaseChar() else letter
-            KeySpec(shown.toString(), KeyAction.Character(shown))
+            val swipe = if (computerKeys) COMPUTER_SWIPE[letter]?.let { KeyAction.Computer(it) } else null
+            KeySpec(shown.toString(), KeyAction.Character(shown), swipeUp = swipe)
         }
     }
 
@@ -212,3 +219,21 @@ internal object KeyboardLayouts {
 
     private fun space() = KeySpec("空格", KeyAction.Space, weight = 4f, role = KeyRole.SPACE)
 }
+
+/** Up-swipe on that English letter. The center of the key stays the letter. */
+private val COMPUTER_SWIPE = mapOf(
+    'q' to ComputerKey.ESC,
+    'w' to ComputerKey.TAB,
+    'e' to ComputerKey.CTRL,
+    'r' to ComputerKey.ALT,
+    't' to ComputerKey.UP,
+    'y' to ComputerKey.DOWN,
+    'u' to ComputerKey.LEFT,
+    'i' to ComputerKey.RIGHT,
+    'o' to ComputerKey.HOME,
+    'p' to ComputerKey.END,
+    'a' to ComputerKey.PAGE_UP,
+    's' to ComputerKey.PAGE_DOWN,
+    'd' to ComputerKey.FORWARD_DELETE,
+    'f' to ComputerKey.META,
+)

@@ -51,4 +51,19 @@ class ImeSettingsContractTest {
         assertTrue(preferences.contains("key_preview_enabled"))
         assertTrue(preferences.contains("getBoolean(KEY_PREVIEW, true)"))
     }
+
+    @Test
+    fun settingsPageOffersComputerKeysOnTheEnglishKeyboard() {
+        val layout = readProjectFile("src/main/res/layout/activity_ime_settings.xml")
+        val strings = readProjectFile("src/main/res/values/strings.xml")
+        val activity = readProjectFile("src/main/java/com/fskeyboard/ime/settings/ImeSettingsActivity.kt")
+        val service = readProjectFile("src/main/java/com/fskeyboard/ime/FsKeyboardService.kt")
+        val preferences = readProjectFile("src/main/java/com/fskeyboard/ime/settings/KeyboardPreferences.kt")
+        assertTrue(layout.contains("@+id/latin_computer_keys_switch"))
+        assertTrue(strings.contains("name=\"latin_computer_keys_switch\""))
+        assertTrue(activity.contains("setComputerKeys"))
+        assertTrue(service.contains("computerKeys"))
+        assertTrue(preferences.contains("latin_computer_keys"))
+        assertTrue(preferences.contains("getBoolean(KEY_COMPUTER_KEYS, false)"))
+    }
 }

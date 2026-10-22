@@ -74,6 +74,12 @@ class ImeSettingsActivity : Activity() {
             keyboardPreferences.setLatinTopNumberRow(checked)
             previewKeyboard.latinTopNumberRow = checked
         }
+        val computerKeys = findViewById<Switch>(R.id.latin_computer_keys_switch)
+        computerKeys.isChecked = keyboardPreferences.computerKeys()
+        computerKeys.setOnCheckedChangeListener { _, checked ->
+            keyboardPreferences.setComputerKeys(checked)
+            previewKeyboard.computerKeys = checked
+        }
         val vibration = findViewById<Switch>(R.id.vibration_switch)
         vibration.isChecked = keyboardPreferences.vibrationEnabled()
         vibration.setOnCheckedChangeListener { _, checked ->
@@ -171,6 +177,7 @@ class ImeSettingsActivity : Activity() {
         val keyboard = KeyboardView(this).apply {
             rowHeightDp = rowDp
             latinTopNumberRow = keyboardPreferences.latinTopNumberRow()
+            computerKeys = keyboardPreferences.computerKeys()
             fullWidthSymbols = keyboardPreferences.fullWidthSymbols()
             vibrationEnabled = keyboardPreferences.vibrationEnabled()
             keyPreviewEnabled = keyboardPreferences.keyPreviewEnabled()

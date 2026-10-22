@@ -65,6 +65,22 @@ internal class KeyboardView(context: Context) : View(context) {
             rebuild()
         }
 
+    /** Whether an upward swipe on an English letter sends a computer key. */
+    var computerKeys: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            rebuild()
+        }
+
+    /** Ctrl, Alt, or Meta waiting for the next key. Their labels stay highlighted. */
+    var armedComputerKeys: Set<ComputerKey> = emptySet()
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
+
     /** Whether key presses produce haptic vibration feedback. */
     var vibrationEnabled: Boolean = true
         set(value) {
@@ -104,6 +120,8 @@ internal class KeyboardView(context: Context) : View(context) {
     private var previewLinger = false
     private var previewFramePosted = false
     private var spaceCursor: SpaceCursor? = null
+    private var swipe: KeySwipe? = null
+    private var swipeArmed = false
     private var trackpad = false
     private var zhuyinAreas: List<KeyArea> = emptyList()
     private var gap = 0f
@@ -193,17 +211,20 @@ internal class KeyboardView(context: Context) : View(context) {
                     box.spec.label.length > 1 -> sp(15f)
                     else -> sp(20f)
                 }
-                val baseline = draw.centerY() - (label.ascent() + label.descent()) / 2f
+                val drop = if (box.spec.swipeUp != null) dp(4).toFloat() else 0f
+                val baseline = draw.centerY() - (label.ascent() + label.descent()) / 2f + drop
                 canvas.drawText(box.spec.label, draw.centerX(), baseline, label)
 
                 val secondary = box.spec.secondary
                 if (secondary is KeyAction.Character) {
+                    secondaryLabel.textAlign = Paint.Align.RIGHT
                     secondaryLabel.color = palette.hint
                     secondaryLabel.textSize = sp(10f)
                     val secX = draw.right - dp(4)
                     val secY = draw.top - secondaryLabel.ascent() + dp(2)
                     canvas.drawText(secondary.value.toString(), secX, secY, secondaryLabel)
                 }
+                drawSwipeLabel(canvas, box, draw, palette)
             }
         }
     }
@@ -220,6 +241,7 @@ internal class KeyboardView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_MOVE -> {
                 if (moveSpace(event)) return true
+                if (moveSwipe(event)) return true
                 val box = down ?: return true
                 val index = event.findPointerIndex(downPointer)
                 if (index >= 0 && hit(event.getX(index), event.getY(index)) != box) {
@@ -233,10 +255,20 @@ internal class KeyboardView(context: Context) : View(context) {
                 val box = down
                 val released = hit(event.getX(index), event.getY(index))
                 val tracking = trackpad
-                val linger = !tracking && box != null && box == released && KeyPreview.visible(box.spec)
+                swipe?.let { gesture ->
+                    swipeArmed = gesture.move(
+                        event.getX(index) - downX,
+                        event.getY(index) - downY,
+                    )
+                }
+                val swipeAction = if (swipeArmed) box?.spec?.swipeUp else null
+                val linger = swipeAction != null ||
+                    (!tracking && box != null && box == released && KeyPreview.visible(box.spec))
                 release(lingerPreview = linger)
-                if (!tracking && box != null && box == released && box.spec.action != KeyAction.Backspace) {
-                    fire(box.spec.action, event.eventTime)
+                when {
+                    swipeAction != null -> fire(swipeAction, event.eventTime)
+                    !tracking && box != null && box == released && box.spec.action != KeyAction.Backspace ->
+                        fire(box.spec.action, event.eventTime)
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -259,6 +291,8 @@ internal class KeyboardView(context: Context) : View(context) {
         // so a window call does not hold the highlight back.
         if (spec != null && vibrationEnabled) buzz()
         armPreview(down)
+        swipe = if (spec?.swipeUp != null) KeySwipe(slop = dp(22).toFloat()) else null
+        swipeArmed = false
         if (spec?.action == KeyAction.Space && trackpadAllowed()) {
             spaceCursor = SpaceCursor(slop = dp(10).toFloat(), xPerStep = dp(8).toFloat(), yPerStep = dp(22).toFloat())
             spaceCursor?.down(x, y)
@@ -302,9 +336,43 @@ internal class KeyboardView(context: Context) : View(context) {
         removeCallbacks(holdTrackpad)
         down = null
         trackpad = true
+        swipe = null
+        swipeArmed = false
         endPreview(linger = false)
         onTrackpadActive(true)
         invalidate()
+    }
+
+    /**
+     * True while this finger is choosing the upward computer key.
+     * Leaving the key before the swipe is recognized still cancels, the same as any other key.
+     */
+    private fun moveSwipe(event: MotionEvent): Boolean {
+        val gesture = swipe ?: return false
+        val index = event.findPointerIndex(downPointer)
+        if (index < 0) return false
+        val armed = gesture.move(event.getX(index) - downX, event.getY(index) - downY)
+        if (armed != swipeArmed) {
+            swipeArmed = armed
+            val box = down
+            if (box != null) {
+                if (armed) showComputerPreview(box) else armPreview(box)
+            }
+            invalidate()
+        }
+        if (armed) return true
+        val box = down ?: return true
+        if (hit(event.getX(index), event.getY(index)) != box) release()
+        return true
+    }
+
+    private fun showComputerPreview(box: KeyBox) {
+        val action = box.spec.swipeUp as? KeyAction.Computer ?: return
+        if (!keyPreviewEnabled || !isAttachedToWindow) return
+        previewLinger = false
+        previewBox = null
+        keyPreview.cancelDismiss()
+        keyPreview.show(action.key.label, box.rect, width)
     }
 
     /** Commits the key still under a finger. Backspace already fired on its down. A trackpad does not. */
@@ -314,8 +382,9 @@ internal class KeyboardView(context: Context) : View(context) {
             return
         }
         val spec = down?.spec ?: return
-        release(lingerPreview = KeyPreview.visible(spec))
-        if (spec.action != KeyAction.Backspace) fire(spec.action, eventTime)
+        val action = if (swipeArmed) spec.swipeUp ?: spec.action else spec.action
+        release(lingerPreview = swipeArmed || KeyPreview.visible(spec))
+        if (action != KeyAction.Backspace) fire(action, eventTime)
     }
 
     private fun release(lingerPreview: Boolean = false) {
@@ -323,6 +392,8 @@ internal class KeyboardView(context: Context) : View(context) {
         removeCallbacks(holdTrackpad)
         val wasTracking = trackpad
         spaceCursor = null
+        swipe = null
+        swipeArmed = false
         trackpad = false
         down = null
         downPointer = NO_POINTER
@@ -466,6 +537,7 @@ internal class KeyboardView(context: Context) : View(context) {
             capsLock = shiftLock.mode == ShiftMode.LOCKED,
             enter = enterChoice,
             latinTopNumberRow = latinTopNumberRow,
+            computerKeys = computerKeys,
         )
         requestLayout()
         if (width > 0 && height > 0) {
@@ -498,6 +570,34 @@ internal class KeyboardView(context: Context) : View(context) {
             val action = box.spec.action as? KeyAction.Bopomofo ?: return@mapNotNull null
             KeyArea(action.label, box.rect.centerX(), box.rect.centerY(), box.rect.width(), box.rect.height())
         }
+    }
+
+    private fun drawSwipeLabel(canvas: Canvas, box: KeyBox, draw: RectF, palette: KeyboardPalette) {
+        val swipe = box.spec.swipeUp as? KeyAction.Computer ?: return
+        val text = swipe.key.label
+        val armed = swipe.key in armedComputerKeys || (swipeArmed && box == down)
+        secondaryLabel.textAlign = Paint.Align.CENTER
+        secondaryLabel.textSize = sp(if (text.length >= 4) 8f else 9f)
+        secondaryLabel.color = if (armed) palette.text else palette.hint
+        val textWidth = secondaryLabel.measureText(text)
+        val centerX = draw.centerX()
+        val top = draw.top + dp(1).toFloat()
+        val chipHeight = sp(12f)
+        if (armed) {
+            val pad = dp(3).toFloat()
+            fill.color = palette.accent
+            canvas.drawRoundRect(
+                centerX - textWidth / 2f - pad,
+                top,
+                centerX + textWidth / 2f + pad,
+                top + chipHeight,
+                dp(3).toFloat(),
+                dp(3).toFloat(),
+                fill,
+            )
+        }
+        val baseline = top + chipHeight / 2f - (secondaryLabel.ascent() + secondaryLabel.descent()) / 2f
+        canvas.drawText(text, centerX, baseline, secondaryLabel)
     }
 
     private fun inset(rect: RectF): RectF {
