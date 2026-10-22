@@ -155,6 +155,9 @@ internal class KeyboardView(context: Context) : View(context) {
     private var swipe: KeySwipe? = null
     private var swipeDirection: SwipeDirection? = null
     private var backspaceSent = false
+
+    /** The action the hold timer is already sending, so key-up does not send it once more. */
+    private var repeating: KeyAction? = null
     private val modifierHolds = ArrayList<Pair<Int, ComputerKey>>()
     private var trackpad = false
     private var zhuyinAreas: List<KeyArea> = emptyList()
@@ -172,11 +175,12 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private val repeat = object : Runnable {
         override fun run() {
-            val spec = down?.spec ?: return
-            if (spec.action != KeyAction.Backspace || swipeDirection != null) return
-            backspaceSent = true
-            dispatch(spec.action)
-            postDelayed(this, 45L)
+            val action = currentRepeat() ?: return
+            repeating = action
+            if (action == KeyAction.Backspace) backspaceSent = true
+            dispatch(action)
+            val interval = KeyRepeat.interval(action) ?: return
+            postDelayed(this, interval)
         }
     }
 
@@ -336,10 +340,9 @@ internal class KeyboardView(context: Context) : View(context) {
                 val unlocked = tapped && unlockLockedModifiers(box.spec)
                 val action = when {
                     box == null || tracking || unlocked -> null
-                    direction != null -> box.spec.swipeAction(direction)
+                    direction != null -> fresh(box.spec.swipeAction(direction))
                     box != released -> null
-                    box.spec.action == KeyAction.Backspace && backspaceSent -> null
-                    else -> box.spec.action
+                    else -> fresh(box.spec.action)
                 }
                 val linger = action != null && box != null &&
                     (direction != null || (box == released && KeyPreview.visible(box.spec)))
@@ -372,6 +375,7 @@ internal class KeyboardView(context: Context) : View(context) {
         swipe = if (hasSwipes) KeySwipe(slop = dp(22).toFloat()) else null
         swipeDirection = null
         backspaceSent = false
+        repeating = null
         when {
             spec?.action == KeyAction.Space && trackpadAllowed() -> {
                 spaceCursor = SpaceCursor(slop = dp(10).toFloat())
@@ -381,9 +385,9 @@ internal class KeyboardView(context: Context) : View(context) {
             spec?.action == KeyAction.Backspace && !hasSwipes -> {
                 backspaceSent = true
                 fire(spec.action, eventTime)
-                postDelayed(repeat, 320L)
+                postDelayed(repeat, KeyRepeat.DELAY_MS)
             }
-            spec?.action == KeyAction.Backspace -> postDelayed(repeat, 320L)
+            spec?.action == KeyAction.Backspace -> postDelayed(repeat, KeyRepeat.DELAY_MS)
             spec?.holdKey != null || spec?.secondary != null -> postDelayed(longPress, 400L)
         }
     }
@@ -436,15 +440,17 @@ internal class KeyboardView(context: Context) : View(context) {
         val direction = gesture.move(event.getX(index) - downX, event.getY(index) - downY)
         if (direction != swipeDirection) {
             swipeDirection = direction
+            repeating = null
             releaseHold(downPointer)
             if (direction != null) {
                 removeCallbacks(longPress)
                 removeCallbacks(repeat)
                 scheduleHoldSwipe(direction)
+                scheduleArrowRepeat(direction)
             } else {
                 removeCallbacks(holdSwipe)
                 val spec = down?.spec
-                if (spec?.action == KeyAction.Backspace) postDelayed(repeat, 320L)
+                if (spec?.action == KeyAction.Backspace) postDelayed(repeat, KeyRepeat.DELAY_MS)
                 if (spec?.holdKey != null || spec?.secondary != null) {
                     removeCallbacks(longPress)
                     postDelayed(longPress, 400L)
@@ -454,6 +460,29 @@ internal class KeyboardView(context: Context) : View(context) {
             invalidate()
         }
         return true
+    }
+
+    /** An arrow starts repeating once the finger has stayed in that direction. */
+    private fun scheduleArrowRepeat(direction: SwipeDirection) {
+        val action = down?.spec?.swipeAction(direction) ?: return
+        if (action !is KeyAction.Computer || !action.key.isArrow) return
+        postDelayed(repeat, KeyRepeat.DELAY_MS)
+    }
+
+    /** Backspace with no direction, or the arrow whose direction the finger is holding. */
+    private fun currentRepeat(): KeyAction? {
+        val spec = down?.spec ?: return null
+        val direction = swipeDirection
+        val action = if (direction == null) spec.action else spec.swipeAction(direction)
+        if (action == null || KeyRepeat.interval(action) == null) return null
+        if (direction != null && action == KeyAction.Backspace) return null
+        return action
+    }
+
+    /** Drops a key the hold timer already delivered, so release does not send it again. */
+    private fun fresh(action: KeyAction?): KeyAction? {
+        if (action == null || KeyRepeat.alreadyDelivered(action, repeating, backspaceSent)) return null
+        return action
     }
 
     private fun scheduleHoldSwipe(direction: SwipeDirection) {
@@ -489,7 +518,7 @@ internal class KeyboardView(context: Context) : View(context) {
 
     /**
      * Commits the key still under a finger so a second finger can type.
-     * A modifier that is already held stays down. Backspace that already repeated is not sent again.
+     * A modifier that is already held stays down. A key the hold timer already sent is not sent again.
      */
     private fun commitHeld(eventTime: Long) {
         if (trackpad) {
@@ -514,9 +543,8 @@ internal class KeyboardView(context: Context) : View(context) {
         val unlocked = direction == null && unlockLockedModifiers(spec)
         val action = when {
             unlocked -> null
-            direction != null -> spec.swipeAction(direction)
-            spec.action == KeyAction.Backspace && backspaceSent -> null
-            else -> spec.action
+            direction != null -> fresh(spec.swipeAction(direction))
+            else -> fresh(spec.action)
         }
         val linger = action != null && (direction != null || KeyPreview.visible(spec))
         release(lingerPreview = linger)

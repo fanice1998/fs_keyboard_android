@@ -47,6 +47,7 @@ internal class CandidateController(
     },
     private val letterMode: () -> KeyboardMode = { KeyboardMode.ZHUYIN },
     private val clipboard: () -> ClipOffer? = { readClipboard(context) },
+    continuations: WordContinuations? = null,
 ) {
     /** Ctrl, Alt, and Meta chosen from an English swipe, until the next key. */
     var onComputerModifiers: (Set<ComputerKey>) -> Unit = {}
@@ -73,6 +74,7 @@ internal class CandidateController(
     private var englishCaret = 0
     private val englishLexicon = EnglishLexicon()
     private val symbolFrequency = SymbolFrequency()
+    private var wordContinuations: WordContinuations? = continuations
     private val emailSuggest = EmailSuggest()
     private val englishWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "fskeyboard-english").apply { isDaemon = true }
@@ -122,6 +124,7 @@ internal class CandidateController(
         applySavedLetterMode()
         loadEnglish()
         loadSymbolFrequency()
+        loadWordContinuations()
         publish()
         lexicon.start(context) {
             if (!closed) {
@@ -156,7 +159,7 @@ internal class CandidateController(
             applySavedLetterMode()
         }
         publish()
-        refreshSymbolSuggestions()
+        refreshIdleSuggestions()
     }
 
     fun onUpdateSelection(
@@ -188,7 +191,7 @@ internal class CandidateController(
                 publish(EngineSnapshot())
             }
             if (cursorSession == null && !hasComposition && english.isEmpty() && newSelStart == newSelEnd) {
-                refreshSymbolSuggestions()
+                refreshIdleSuggestions()
             }
         }
     }
@@ -432,12 +435,8 @@ internal class CandidateController(
                 emailSuggest.recordChoice(text, beforeUsername())
                 saveEmailHistory()
             }
-            if (isSymbol(text)) {
-                learnSymbol(textBeforeCursor(), text)
-                refreshSymbolSuggestions()
-            } else {
-                dismissSuggestions()
-            }
+            if (isSymbol(text)) learnSymbol(textBeforeCursor(), text)
+            refreshIdleSuggestions()
             return
         }
         val finished = composition.choose(candidate)
@@ -523,7 +522,7 @@ internal class CandidateController(
         }
         commit(text)
         if (isSymbol(text)) learnSymbol(textBeforeCursor(), text)
-        refreshSymbolSuggestions()
+        refreshIdleSuggestions()
     }
 
     private fun onSpace() {
@@ -539,7 +538,7 @@ internal class CandidateController(
             }
             KeyPolicy.Space.CommitSpace -> {
                 commit(" ")
-                refreshSymbolSuggestions()
+                refreshIdleSuggestions()
             }
         }
     }
@@ -614,29 +613,43 @@ internal class CandidateController(
         ic?.finishComposingText()
         remember(done.text)
         lexicon.learn(done.learned)
-        refreshSymbolSuggestions()
+        refreshIdleSuggestions()
     }
 
     /**
-     * Symbols learned after the word touching the caret.
-     * A space or no text before the caret clears them. Composition and the English word
-     * keep their own candidates.
+     * Next words after the Han text at the caret, then symbols learned after that word.
+     * A space, no text, or a selection leaves the row empty. Composition and the English
+     * word keep their own candidates.
      */
-    private fun refreshSymbolSuggestions() {
+    private fun refreshIdleSuggestions() {
         if (closed || hasComposition || english.isNotEmpty() || !mode.isLetters) return
+        if (cursorSession != null || composingGlide) return
         if (selStart >= 0 && selEnd >= 0 && selStart != selEnd) return
-        val symbols = symbolFrequency.predict(textBeforeCursor())
-        val candidates = symbols.mapIndexed { index, text ->
-            Candidate(
-                text = text,
-                engineIndex = -(index + 1),
-                source = CandidateSource.SUGGESTION,
-                span = 0,
-            )
+        val before = textBeforeCursor()
+        val words = wordContinuations?.following(before).orEmpty()
+        val symbols = symbolFrequency.predict(before)
+        val candidates = ArrayList<Candidate>(words.size + symbols.size)
+        var index = 0
+        for (text in words) {
+            index += 1
+            candidates.add(idleSuggestion(text, index))
+        }
+        for (text in symbols) {
+            index += 1
+            candidates.add(idleSuggestion(text, index))
         }
         if (candidates == presented) return
         presented = candidates
         publish(EngineSnapshot(candidates = candidates))
+    }
+
+    private fun idleSuggestion(text: String, index: Int): Candidate {
+        return Candidate(
+            text = text,
+            engineIndex = -index,
+            source = CandidateSource.SUGGESTION,
+            span = 0,
+        )
     }
 
     /** The field text before the caret, or the characters this keyboard just committed. */
@@ -672,6 +685,25 @@ internal class CandidateController(
         }
     }
 
+    /** Reads lexicon.bin off the main thread. A missing file leaves the row without next words. */
+    private fun loadWordContinuations() {
+        if (wordContinuations != null) return
+        englishWorker.execute {
+            val loaded = try {
+                context.assets.open(LEXICON_BIN).use { input ->
+                    WordContinuations.open(input.readBytes())
+                }
+            } catch (_: Exception) {
+                null
+            }
+            post {
+                if (closed || loaded == null) return@post
+                wordContinuations = loaded
+                refreshIdleSuggestions()
+            }
+        }
+    }
+
     /** Drops symbol suggestions once the user does something else. */
     private fun dismissSuggestions() {
         if (hasComposition || presented.isEmpty()) return
@@ -694,7 +726,7 @@ internal class CandidateController(
         }
         if (choice.newline) {
             commit("\n")
-            refreshSymbolSuggestions()
+            refreshIdleSuggestions()
         }
     }
 
@@ -985,7 +1017,7 @@ internal class CandidateController(
             learnEnglish(word)
         }
         if (isSymbol(trailingChar)) learnSymbol(textBeforeCursor(), trailingChar)
-        refreshSymbolSuggestions()
+        refreshIdleSuggestions()
     }
 
     /** Writes the underlined letters as they stand. Used when the field is closing. */
@@ -1038,7 +1070,9 @@ internal class CandidateController(
             }
         }
         onUi(ui(presented))
-        if (snapshot != null && mode == KeyboardMode.ZHUYIN && pipeline.willScore(snapshot.candidates.size)) {
+        if (snapshot != null && snapshot.isComposing && mode == KeyboardMode.ZHUYIN &&
+            pipeline.willScore(snapshot.candidates.size)
+        ) {
             val contextBefore = contextBefore()
             pipeline.presentAsync(snapshot, contextBefore) { trace ->
                 post {
@@ -1178,6 +1212,7 @@ internal class CandidateController(
         const val ENGLISH_ASSET = "lexicon/english.tsv"
         const val USER_ENGLISH_FILE = "lexicon/user_english.tsv"
         const val SYMBOL_FILE = "lexicon/symbol_freq.tsv"
+        const val LEXICON_BIN = "lexicon/lexicon.bin"
         const val EMAIL_DOMAINS_FILE = "lexicon/email_domains.tsv"
     }
 

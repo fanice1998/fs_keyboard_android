@@ -79,6 +79,10 @@ internal enum class ComputerKey(
             FN -> KeyEvent.META_FUNCTION_ON
             else -> 0
         }
+
+    /** Direction keys repeat while the finger stays in that swipe. */
+    val isArrow: Boolean
+        get() = this == UP || this == DOWN || this == LEFT || this == RIGHT
 }
 
 /** Key code for a typed Latin letter or digit. Punctuation has none. */

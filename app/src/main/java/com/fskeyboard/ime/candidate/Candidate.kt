@@ -4,7 +4,10 @@ internal enum class CandidateSource {
     RIME,
     SYNTHETIC,
 
-    /** Offered from learned symbol frequency, with nothing being composed. It uses no syllables. */
+    /**
+     * Offered with nothing being composed. It uses no syllables.
+     * A Han word is the next word after the caret; anything else is a learned symbol.
+     */
     SUGGESTION,
 
     /**
