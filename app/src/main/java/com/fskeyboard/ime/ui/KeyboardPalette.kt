@@ -12,6 +12,8 @@ internal data class KeyboardPalette(
     val text: Int,
     val hint: Int,
     val accent: Int,
+    /** Raised card for the floating key label. */
+    val keyPreview: Int,
 ) {
     companion object {
         fun of(night: Boolean): KeyboardPalette = if (night) DARK else LIGHT
@@ -24,6 +26,7 @@ internal data class KeyboardPalette(
             text = Color.parseColor("#1C1C1E"),
             hint = Color.parseColor("#6B7280"),
             accent = Color.parseColor("#D6E6FA"),
+            keyPreview = Color.parseColor("#FFFFFF"),
         )
 
         private val DARK = KeyboardPalette(
@@ -34,6 +37,7 @@ internal data class KeyboardPalette(
             text = Color.parseColor("#F2F2F7"),
             hint = Color.parseColor("#A1A1AA"),
             accent = Color.parseColor("#31445F"),
+            keyPreview = Color.parseColor("#636366"),
         )
     }
 }

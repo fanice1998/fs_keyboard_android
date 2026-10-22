@@ -5,7 +5,7 @@ import com.fskeyboard.ime.keyboard.KeyboardHeight
 import com.fskeyboard.ime.rerank.RerankPreferences
 
 /**
- * Keyboard height and symbol width stored in the app's private preferences.
+ * Keyboard height, symbol width, and key feedback stored in the app's private preferences.
  * The values survive process death and reboot, and are cleared only when the app data is removed.
  */
 internal class KeyboardPreferences(context: Context) {
@@ -44,10 +44,18 @@ internal class KeyboardPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_VIBRATION, enabled).apply()
     }
 
+    /** Whether a press floats the key's label above the key. On unless the user turns it off. */
+    fun keyPreviewEnabled(): Boolean = prefs.getBoolean(KEY_PREVIEW, true)
+
+    fun setKeyPreviewEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_PREVIEW, enabled).apply()
+    }
+
     companion object {
         const val KEY_ROW_DP = "keyboard_row_height_dp"
         const val KEY_FULL_WIDTH = "zhuyin_full_width_symbols"
         const val KEY_LATIN_TOP_NUMBER_ROW = "latin_top_number_row"
         const val KEY_VIBRATION = "keyboard_vibration_enabled"
+        const val KEY_PREVIEW = "key_preview_enabled"
     }
 }

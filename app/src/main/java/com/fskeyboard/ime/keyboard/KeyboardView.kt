@@ -73,6 +73,14 @@ internal class KeyboardView(context: Context) : View(context) {
             isHapticFeedbackEnabled = value
         }
 
+    /** Whether a press floats that key's label above the key. */
+    var keyPreviewEnabled: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            if (!value) endPreview(linger = false)
+        }
+
     init {
         isHapticFeedbackEnabled = vibrationEnabled
     }
@@ -91,6 +99,10 @@ internal class KeyboardView(context: Context) : View(context) {
     private var downPointer = NO_POINTER
     private var downX = 0f
     private var downY = 0f
+    private val keyPreview = KeyPreviewPopup(this)
+    private var previewBox: KeyBox? = null
+    private var previewLinger = false
+    private var previewFramePosted = false
     private var spaceCursor: SpaceCursor? = null
     private var trackpad = false
     private var zhuyinAreas: List<KeyArea> = emptyList()
@@ -146,6 +158,13 @@ internal class KeyboardView(context: Context) : View(context) {
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         layoutKeys(w, h)
+        endPreview(linger = false)
+    }
+
+    override fun onDetachedFromWindow() {
+        previewFramePosted = false
+        endPreview(linger = false)
+        super.onDetachedFromWindow()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -214,7 +233,8 @@ internal class KeyboardView(context: Context) : View(context) {
                 val box = down
                 val released = hit(event.getX(index), event.getY(index))
                 val tracking = trackpad
-                release()
+                val linger = !tracking && box != null && box == released && KeyPreview.visible(box.spec)
+                release(lingerPreview = linger)
                 if (!tracking && box != null && box == released && box.spec.action != KeyAction.Backspace) {
                     fire(box.spec.action, event.eventTime)
                 }
@@ -235,8 +255,10 @@ internal class KeyboardView(context: Context) : View(context) {
         val spec = down?.spec
         invalidate()
         // Feedback on touch, not on release. The key itself still fires on release.
-        // The vibration waits until this frame is submitted so it does not hold the highlight back.
+        // The vibration and the floating label wait until this frame is submitted,
+        // so a window call does not hold the highlight back.
         if (spec != null && vibrationEnabled) buzz()
+        armPreview(down)
         if (spec?.action == KeyAction.Space && trackpadAllowed()) {
             spaceCursor = SpaceCursor(slop = dp(10).toFloat(), xPerStep = dp(8).toFloat(), yPerStep = dp(22).toFloat())
             spaceCursor?.down(x, y)
@@ -280,6 +302,7 @@ internal class KeyboardView(context: Context) : View(context) {
         removeCallbacks(holdTrackpad)
         down = null
         trackpad = true
+        endPreview(linger = false)
         onTrackpadActive(true)
         invalidate()
     }
@@ -290,12 +313,12 @@ internal class KeyboardView(context: Context) : View(context) {
             release()
             return
         }
-        val action = down?.spec?.action ?: return
-        release()
-        if (action != KeyAction.Backspace) fire(action, eventTime)
+        val spec = down?.spec ?: return
+        release(lingerPreview = KeyPreview.visible(spec))
+        if (spec.action != KeyAction.Backspace) fire(spec.action, eventTime)
     }
 
-    private fun release() {
+    private fun release(lingerPreview: Boolean = false) {
         stopRepeat()
         removeCallbacks(holdTrackpad)
         val wasTracking = trackpad
@@ -303,8 +326,74 @@ internal class KeyboardView(context: Context) : View(context) {
         trackpad = false
         down = null
         downPointer = NO_POINTER
+        endPreview(lingerPreview && !wasTracking)
         invalidate()
         if (wasTracking) onTrackpadActive(false)
+    }
+
+    /**
+     * Shows the floating label after the pressed-key frame is submitted.
+     * Adding the popup window talks to the window manager and does not return until that call does,
+     * so running it inside the touch handler holds the highlight back.
+     */
+    private fun armPreview(box: KeyBox?) {
+        previewLinger = false
+        val next = box?.takeIf { keyPreviewEnabled && KeyPreview.visible(it.spec) }
+        if (next == null) {
+            previewBox = null
+            keyPreview.hide()
+            return
+        }
+        previewBox = next
+        keyPreview.cancelDismiss()
+        if (previewFramePosted) return
+        val observer = viewTreeObserver
+        if (!observer.isAlive) {
+            presentPreview()
+            return
+        }
+        previewFramePosted = true
+        if (Build.VERSION.SDK_INT >= 29) {
+            observer.registerFrameCommitCallback { presentPreview() }
+            return
+        }
+        observer.addOnDrawListener(object : ViewTreeObserver.OnDrawListener {
+            override fun onDraw() {
+                post {
+                    if (observer.isAlive) observer.removeOnDrawListener(this)
+                    presentPreview()
+                }
+            }
+        })
+    }
+
+    private fun presentPreview() {
+        previewFramePosted = false
+        val box = previewBox ?: return
+        previewBox = null
+        if (!keyPreviewEnabled || !isAttachedToWindow) {
+            previewLinger = false
+            return
+        }
+        keyPreview.show(box.spec.label, box.rect, width)
+        if (previewLinger || down != box) {
+            previewLinger = false
+            keyPreview.hideLater(KeyPreview.LINGER_MS)
+        }
+    }
+
+    private fun endPreview(linger: Boolean) {
+        if (linger && (previewFramePosted || keyPreview.isShowing)) {
+            previewLinger = true
+            if (!previewFramePosted) {
+                previewLinger = false
+                keyPreview.hideLater(KeyPreview.LINGER_MS)
+            }
+            return
+        }
+        previewLinger = false
+        previewBox = null
+        keyPreview.hide()
     }
 
     /** One tick per move that actually crossed a character or a line. */

@@ -134,6 +134,7 @@ class FsKeyboardService : InputMethodService() {
             fullWidthSymbols = preferences.fullWidthSymbols()
             latinTopNumberRow = preferences.latinTopNumberRow()
             vibrationEnabled = preferences.vibrationEnabled()
+            keyPreviewEnabled = preferences.keyPreviewEnabled()
             onTyped = latencyProbe::keyHandled
             trackpadAllowed = { controller.canMoveCursor() }
             onTrackpadStart = { controller.beginCursor() }
@@ -394,6 +395,7 @@ class FsKeyboardService : InputMethodService() {
         keyboard?.fullWidthSymbols = preferences.fullWidthSymbols()
         keyboard?.latinTopNumberRow = preferences.latinTopNumberRow()
         keyboard?.vibrationEnabled = preferences.vibrationEnabled()
+        keyboard?.keyPreviewEnabled = preferences.keyPreviewEnabled()
         keyboard?.enterChoice = EnterActions.choose(info)
         controller.onStartInput(restarting)
         window?.window?.decorView?.requestApplyInsets()
