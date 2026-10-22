@@ -1,6 +1,7 @@
 package com.fskeyboard.ime.candidate
 
 import com.fskeyboard.ime.keyboard.KeyboardMode
+import com.fskeyboard.ime.keyboard.NumberPad
 
 internal data class CandidateUiState(
     val candidates: List<Candidate> = emptyList(),
@@ -13,6 +14,8 @@ internal data class ImeUiState(
     val base: KeyboardMode = KeyboardMode.ZHUYIN,
     val candidates: CandidateUiState = CandidateUiState(),
     val hasUnconfirmedText: Boolean = false,
+    /** Digit-pad extras for [KeyboardMode.NUMBER]. Empty on every other keyboard. */
+    val numberPad: NumberPad = NumberPad.NONE,
 )
 
 /** Symbol pages keep the row clear. Zhuyin and Latin both show what was just looked up. */

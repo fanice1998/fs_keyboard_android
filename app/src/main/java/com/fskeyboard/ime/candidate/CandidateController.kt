@@ -24,6 +24,7 @@ import com.fskeyboard.ime.keyboard.EnterActions
 import com.fskeyboard.ime.keyboard.composingSelection
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardMode
+import com.fskeyboard.ime.keyboard.NumberPad
 import com.fskeyboard.ime.keyboard.computerKeyCode
 import com.fskeyboard.ime.keyboard.ZhuyinComposer
 import com.fskeyboard.ime.rerank.CandidatePipeline
@@ -63,6 +64,9 @@ internal class CandidateController(
 
     /** The letter keyboard the symbol pages return to. */
     private var base = KeyboardMode.ZHUYIN
+
+    /** Set only while [mode] is the digit pad. A key cannot turn this on. */
+    private var numberPad = NumberPad.NONE
     private var presented: List<Candidate> = emptyList()
     private val composition = ZhuyinComposition()
 
@@ -151,12 +155,17 @@ internal class CandidateController(
         cancelComposition()
         clearModifiers()
         refreshClipboard()
+        applySavedLetterMode()
+        numberPad = NumberPad.NONE
         if (emailSuggest.isEmailField(info)) {
             // This field opens in Latin. That must not replace the keyboard the user chose.
             mode = KeyboardMode.LATIN
             base = KeyboardMode.LATIN
         } else {
-            applySavedLetterMode()
+            info?.let { NumberPad.from(it.inputType) }?.let { pad ->
+                mode = KeyboardMode.NUMBER
+                numberPad = pad
+            }
         }
         publish()
         refreshIdleSuggestions()
@@ -447,8 +456,12 @@ internal class CandidateController(
         }
     }
 
-    /** Leaving zhuyin commits what was typed, the way Enter does. */
+    /**
+     * Leaving zhuyin commits what was typed, the way Enter does.
+     * The digit pad is not in this path. A field opens it, and the next field closes it.
+     */
     private fun setMode(next: KeyboardMode) {
+        if (next == KeyboardMode.NUMBER || mode == KeyboardMode.NUMBER) return
         if (next == mode) return
         val switchingBetweenLatinAndSymbols = (mode == KeyboardMode.LATIN && next.isSymbols) ||
             (mode.isSymbols && next == KeyboardMode.LATIN)
@@ -1114,6 +1127,7 @@ internal class CandidateController(
                 message = if (visible.isEmpty()) statusMessage() else "",
             ),
             hasUnconfirmedText = hasUnconfirmed,
+            numberPad = if (mode == KeyboardMode.NUMBER) numberPad else NumberPad.NONE,
         )
     }
 

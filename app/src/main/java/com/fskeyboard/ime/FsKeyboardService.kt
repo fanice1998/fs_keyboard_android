@@ -462,7 +462,7 @@ class FsKeyboardService : InputMethodService() {
     private fun render(state: ImeUiState) {
         pending = state
         traced("ime.render") {
-            keyboard?.setMode(state.mode, state.base)
+            keyboard?.setMode(state.mode, state.base, state.numberPad)
             val enterChoice = if (state.hasUnconfirmedText) {
                 EnterChoice(confirming = true)
             } else {

@@ -15,6 +15,7 @@ internal object KeyboardLayouts {
         latinTopNumberRow: Boolean = true,
         computerKeys: Boolean = false,
         computerMap: ComputerKeyMap = ComputerKeyMap.DEFAULT,
+        numberPad: NumberPad = NumberPad.NONE,
     ): List<KeyRow> = when (mode) {
         KeyboardMode.ZHUYIN -> zhuyin(enter)
         KeyboardMode.LATIN -> latin(
@@ -27,6 +28,7 @@ internal object KeyboardLayouts {
         )
         KeyboardMode.SYMBOLS -> symbols(base, more = false, fullWidth, enter)
         KeyboardMode.SYMBOLS_MORE -> symbols(base, more = true, fullWidth, enter)
+        KeyboardMode.NUMBER -> number(enter, numberPad)
     }
 
     fun letterKeys(mode: KeyboardMode, shifted: Boolean = false): Set<Char> {
@@ -161,6 +163,31 @@ internal object KeyboardLayouts {
                     enterKey(enter, 1.85f),
                 ),
             ),
+        )
+    }
+
+    /**
+     * Digits only. Four columns keep the grid even: delete stays at the top right,
+     * minus and the decimal point take that column when the field asks for them,
+     * and zero sits under 2. Nothing on this pad changes keyboard.
+     */
+    private fun number(enter: EnterChoice, pad: NumberPad): List<KeyRow> {
+        fun digit(value: Char) = KeySpec(value.toString(), KeyAction.Character(value))
+        val delete = deleteKey().copy(weight = 1f)
+        return listOf(
+            KeyRow(listOf(digit('1'), digit('2'), digit('3'), delete)),
+            KeyRow(
+                keys = listOf(digit('4'), digit('5'), digit('6')) +
+                    if (pad.signed) listOf(digit('-')) else emptyList(),
+                trailing = if (pad.signed) 0f else 1f,
+            ),
+            KeyRow(
+                keys = listOf(digit('7'), digit('8'), digit('9')) +
+                    if (pad.decimal) listOf(digit('.')) else emptyList(),
+                trailing = if (pad.decimal) 0f else 1f,
+            ),
+            KeyRow(listOf(digit('0')), leading = 1f, trailing = 2f),
+            KeyRow(listOf(enterKey(enter, 4f))),
         )
     }
 

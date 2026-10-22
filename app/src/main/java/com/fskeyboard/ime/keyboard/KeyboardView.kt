@@ -135,6 +135,7 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private var mode = KeyboardMode.ZHUYIN
     private var base = KeyboardMode.ZHUYIN
+    private var numberPad = NumberPad.NONE
     private val shiftLock = ShiftLock()
     private var rows = KeyboardLayouts.rows(
         mode,
@@ -215,10 +216,12 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     /** [base] is the letter keyboard that the symbol pages return to. */
-    fun setMode(mode: KeyboardMode, base: KeyboardMode = this.base) {
-        if (this.mode == mode && this.base == base) return
+    fun setMode(mode: KeyboardMode, base: KeyboardMode = this.base, numberPad: NumberPad = NumberPad.NONE) {
+        val pad = if (mode == KeyboardMode.NUMBER) numberPad else NumberPad.NONE
+        if (this.mode == mode && this.base == base && this.numberPad == pad) return
         this.mode = mode
         this.base = base
+        this.numberPad = pad
         if (mode == KeyboardMode.ZHUYIN) shiftLock.releaseOnce()
         rebuild()
     }
@@ -754,6 +757,7 @@ internal class KeyboardView(context: Context) : View(context) {
             latinTopNumberRow = latinTopNumberRow,
             computerKeys = computerKeys,
             computerMap = computerMap,
+            numberPad = numberPad,
         )
         requestLayout()
         if (width > 0 && height > 0) {

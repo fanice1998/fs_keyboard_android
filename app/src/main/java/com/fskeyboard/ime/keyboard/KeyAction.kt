@@ -3,12 +3,14 @@ package com.fskeyboard.ime.keyboard
 /**
  * [ZHUYIN] and [LATIN] are letter keyboards. [SYMBOLS] is the 123 page and
  * [SYMBOLS_MORE] the #+= page; both return to the letter keyboard they were opened from.
+ * [NUMBER] is the digit pad. A field opens it from its input class. No key switches to it.
  */
 internal enum class KeyboardMode {
     ZHUYIN,
     LATIN,
     SYMBOLS,
     SYMBOLS_MORE,
+    NUMBER,
     ;
 
     val isLetters: Boolean
