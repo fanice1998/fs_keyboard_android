@@ -1,22 +1,31 @@
 package com.fskeyboard.ime.settings
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.os.Build
 import android.os.Bundle
+import android.view.Gravity
 import android.view.View
 import android.view.ViewTreeObserver
 import android.view.WindowInsets
 import android.widget.Button
+import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.Toast
 import com.fskeyboard.ime.R
 import com.fskeyboard.ime.candidate.Candidate
 import com.fskeyboard.ime.candidate.CandidateBarView
 import com.fskeyboard.ime.candidate.CandidateUiState
+import com.fskeyboard.ime.keyboard.ComputerKey
+import com.fskeyboard.ime.keyboard.ComputerKeyMap
 import com.fskeyboard.ime.keyboard.KeyboardHeight
+import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.keyboard.KeyboardView
+import com.fskeyboard.ime.keyboard.SwipeDirection
+import com.fskeyboard.ime.ui.dp
 import com.fskeyboard.ime.latency.KeyLatency
 import com.fskeyboard.ime.rerank.RerankPreferences
 import com.fskeyboard.ime.rerank.onnx.OnnxModelStore
@@ -26,8 +35,25 @@ class ImeSettingsActivity : Activity() {
     private lateinit var heightSeek: SeekBar
     private lateinit var heightValue: TextView
     private lateinit var previewKeyboard: KeyboardView
+    private lateinit var editorKeyboard: KeyboardView
+    private lateinit var letterLabel: TextView
+    private lateinit var padCenter: TextView
     private lateinit var latencyValue: TextView
     private var settingsRoot: View? = null
+    private var editorMap = ComputerKeyMap.DEFAULT
+    private var editorLetter: Char? = null
+    private val padButtons = linkedMapOf<SwipeDirection, Button>()
+    private val padDirections: List<SwipeDirection?> = listOf(
+        SwipeDirection.UP_LEFT,
+        SwipeDirection.UP,
+        SwipeDirection.UP_RIGHT,
+        SwipeDirection.LEFT,
+        null,
+        SwipeDirection.RIGHT,
+        SwipeDirection.DOWN_LEFT,
+        SwipeDirection.DOWN,
+        SwipeDirection.DOWN_RIGHT,
+    )
 
     private val onLayout = ViewTreeObserver.OnGlobalLayoutListener { applySafeArea() }
 
@@ -73,12 +99,16 @@ class ImeSettingsActivity : Activity() {
         latinTopNumber.setOnCheckedChangeListener { _, checked ->
             keyboardPreferences.setLatinTopNumberRow(checked)
             previewKeyboard.latinTopNumberRow = checked
+            if (::editorKeyboard.isInitialized) editorKeyboard.latinTopNumberRow = checked
         }
+        val computerEditor = findViewById<View>(R.id.computer_key_editor)
         val computerKeys = findViewById<Switch>(R.id.latin_computer_keys_switch)
         computerKeys.isChecked = keyboardPreferences.computerKeys()
+        computerEditor.visibility = if (computerKeys.isChecked) View.VISIBLE else View.GONE
         computerKeys.setOnCheckedChangeListener { _, checked ->
             keyboardPreferences.setComputerKeys(checked)
             previewKeyboard.computerKeys = checked
+            computerEditor.visibility = if (checked) View.VISIBLE else View.GONE
         }
         val vibration = findViewById<Switch>(R.id.vibration_switch)
         vibration.isChecked = keyboardPreferences.vibrationEnabled()
@@ -98,11 +128,13 @@ class ImeSettingsActivity : Activity() {
         heightSeek.max = KeyboardHeight.MAX_ROW_DP
         val saved = keyboardPreferences.rowHeightDp()
         installPreview(saved)
+        installComputerEditor(saved)
         heightSeek.progress = saved
         showHeight(saved)
         heightSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
                 previewKeyboard.rowHeightDp = progress
+                if (::editorKeyboard.isInitialized) editorKeyboard.rowHeightDp = progress
                 showHeight(progress)
                 if (fromUser) keyboardPreferences.setRowHeightDp(progress)
             }
@@ -188,6 +220,158 @@ class ImeSettingsActivity : Activity() {
         stack.addView(keyboard, LinearLayout.LayoutParams(width, height))
         host.addView(stack, LinearLayout.LayoutParams(width, height))
         previewKeyboard = keyboard
+    }
+
+    private fun installComputerEditor(rowDp: Int) {
+        val host = findViewById<LinearLayout>(R.id.computer_key_keyboard)
+        editorMap = keyboardPreferences.computerKeyMap()
+        letterLabel = findViewById(R.id.computer_key_letter)
+        val keyboard = KeyboardView(this).apply {
+            rowHeightDp = rowDp
+            latinTopNumberRow = keyboardPreferences.latinTopNumberRow()
+            vibrationEnabled = false
+            keyPreviewEnabled = false
+            computerMap = editorMap
+            computerKeys = true
+            setMode(KeyboardMode.LATIN)
+        }
+        keyboard.onLetterPick = { letter ->
+            editorLetter = letter
+            keyboard.markedLetter = letter
+            refreshComputerPad()
+        }
+        host.addView(
+            keyboard,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        editorKeyboard = keyboard
+        findViewById<Button>(R.id.computer_key_reset).setOnClickListener {
+            updateComputerMap(ComputerKeyMap.DEFAULT)
+        }
+        buildComputerPad()
+    }
+
+    private fun buildComputerPad() {
+        val pad = findViewById<GridLayout>(R.id.computer_key_pad)
+        pad.removeAllViews()
+        padButtons.clear()
+        padDirections.forEachIndexed { index, direction ->
+            val row = index / 3
+            val column = index % 3
+            val view = if (direction == null) {
+                TextView(this).apply {
+                    gravity = Gravity.CENTER
+                    textSize = 22f
+                    minHeight = dp(64)
+                    padCenter = this
+                }
+            } else {
+                val swipe = direction
+                Button(this).apply {
+                    gravity = Gravity.CENTER
+                    textSize = 13f
+                    minHeight = dp(64)
+                    minimumWidth = 0
+                    minWidth = 0
+                    setAllCaps(false)
+                    transformationMethod = null
+                    setOnClickListener { chooseComputerKey(swipe) }
+                    padButtons[swipe] = this
+                }
+            }
+            val params = GridLayout.LayoutParams(
+                GridLayout.spec(row, 1),
+                GridLayout.spec(column, 1, 1f),
+            )
+            params.width = 0
+            params.height = GridLayout.LayoutParams.WRAP_CONTENT
+            params.setMargins(dp(3), dp(3), dp(3), dp(3))
+            pad.addView(view, params)
+        }
+        refreshComputerPad()
+    }
+
+    private fun refreshComputerPad() {
+        val letter = editorLetter
+        padCenter.text = letter?.uppercaseChar()?.toString() ?: "·"
+        letterLabel.text = if (letter == null) {
+            getString(R.string.computer_key_pick_letter)
+        } else {
+            getString(R.string.computer_key_letter, letter.uppercaseChar().toString())
+        }
+        val swipes = letter?.let { editorMap.swipes(it) }.orEmpty()
+        for ((direction, button) in padButtons) {
+            val label = swipes[direction]?.label ?: "—"
+            button.text = "${direction.arrow}\n$label"
+        }
+    }
+
+    private fun chooseComputerKey(direction: SwipeDirection) {
+        val letter = editorLetter
+        if (letter == null) {
+            Toast.makeText(this, R.string.computer_key_pick_letter, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val keys = ComputerKey.values()
+        val items = ArrayList<String>(keys.size + 1)
+        items += getString(R.string.computer_key_clear)
+        for (key in keys) {
+            val owner = editorMap.owner(key)
+            val mine = owner != null && owner.letter == letter && owner.direction == direction
+            items += if (owner == null || mine) {
+                key.label
+            } else {
+                getString(
+                    R.string.computer_key_used,
+                    key.label,
+                    owner.letter.uppercaseChar().toString(),
+                    owner.direction.arrow,
+                )
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle(
+                getString(
+                    R.string.computer_key_assign_title,
+                    letter.uppercaseChar().toString(),
+                    direction.arrow,
+                ),
+            )
+            .setItems(items.toTypedArray()) { _, which ->
+                if (which == 0) {
+                    updateComputerMap(editorMap.clear(letter, direction))
+                    return@setItems
+                }
+                val key = keys[which - 1]
+                val owner = editorMap.owner(key)
+                val mine = owner != null && owner.letter == letter && owner.direction == direction
+                if (owner != null && !mine) {
+                    Toast.makeText(
+                        this,
+                        getString(
+                            R.string.computer_key_taken,
+                            key.label,
+                            owner.letter.uppercaseChar().toString(),
+                            owner.direction.arrow,
+                        ),
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                    return@setItems
+                }
+                val next = editorMap.assign(letter, direction, key) ?: return@setItems
+                updateComputerMap(next)
+            }
+            .show()
+    }
+
+    private fun updateComputerMap(map: ComputerKeyMap) {
+        editorMap = map
+        keyboardPreferences.setComputerKeyMap(map)
+        editorKeyboard.computerMap = map
+        refreshComputerPad()
     }
 
     private fun applySafeArea() {

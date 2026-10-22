@@ -206,8 +206,17 @@ internal class CandidateController(
         }
     }
 
-    /** A modifier waits. Any other computer key is sent, with the waiting modifiers, then those clear. */
+    /**
+     * A symbol is typed and any waiting modifier is cleared.
+     * A modifier waits. Any other computer key is sent, with the waiting modifiers, then those clear.
+     */
     private fun onComputer(key: ComputerKey) {
+        val symbol = key.symbol
+        if (symbol != null) {
+            clearModifiers()
+            onPunctuation(symbol.toString())
+            return
+        }
         if (key.modifier) {
             modifiers.toggle(key)
             onComputerModifiers(modifiers.active())

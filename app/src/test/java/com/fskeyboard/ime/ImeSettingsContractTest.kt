@@ -65,5 +65,10 @@ class ImeSettingsContractTest {
         assertTrue(service.contains("computerKeys"))
         assertTrue(preferences.contains("latin_computer_keys"))
         assertTrue(preferences.contains("getBoolean(KEY_COMPUTER_KEYS, false)"))
+        assertTrue(layout.contains("@+id/computer_key_editor"))
+        assertTrue(activity.contains("setComputerKeyMap"))
+        assertTrue(service.contains("computerMap"))
+        assertTrue(preferences.contains("latin_computer_key_map"))
+        assertTrue(preferences.contains("prefs.contains(KEY_COMPUTER_KEY_MAP)"))
     }
 }

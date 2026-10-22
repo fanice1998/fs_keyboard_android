@@ -1,6 +1,7 @@
 package com.fskeyboard.ime.settings
 
 import android.content.Context
+import com.fskeyboard.ime.keyboard.ComputerKeyMap
 import com.fskeyboard.ime.keyboard.KeyboardHeight
 import com.fskeyboard.ime.rerank.RerankPreferences
 
@@ -37,11 +38,24 @@ internal class KeyboardPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_LATIN_TOP_NUMBER_ROW, enabled).apply()
     }
 
-    /** Whether an upward swipe on an English letter sends Esc, Ctrl, Alt, and the other computer keys. */
+    /** Whether a swipe on an English letter sends the computer key assigned to that direction. */
     fun computerKeys(): Boolean = prefs.getBoolean(KEY_COMPUTER_KEYS, false)
 
     fun setComputerKeys(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_COMPUTER_KEYS, enabled).apply()
+    }
+
+    /**
+     * Swipe assignments for the English computer keys.
+     * A missing preference keeps the built-in upward map. An empty string is a map the user cleared.
+     */
+    fun computerKeyMap(): ComputerKeyMap {
+        if (!prefs.contains(KEY_COMPUTER_KEY_MAP)) return ComputerKeyMap.DEFAULT
+        return ComputerKeyMap.decode(prefs.getString(KEY_COMPUTER_KEY_MAP, "").orEmpty())
+    }
+
+    fun setComputerKeyMap(map: ComputerKeyMap) {
+        prefs.edit().putString(KEY_COMPUTER_KEY_MAP, map.encode()).apply()
     }
 
     /** Whether key presses produce haptic vibration feedback. */
@@ -63,6 +77,7 @@ internal class KeyboardPreferences(context: Context) {
         const val KEY_FULL_WIDTH = "zhuyin_full_width_symbols"
         const val KEY_LATIN_TOP_NUMBER_ROW = "latin_top_number_row"
         const val KEY_COMPUTER_KEYS = "latin_computer_keys"
+        const val KEY_COMPUTER_KEY_MAP = "latin_computer_key_map"
         const val KEY_VIBRATION = "keyboard_vibration_enabled"
         const val KEY_PREVIEW = "key_preview_enabled"
     }

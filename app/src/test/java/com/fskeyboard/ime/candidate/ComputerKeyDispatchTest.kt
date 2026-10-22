@@ -18,11 +18,16 @@ import java.lang.reflect.Proxy
 class ComputerKeyDispatchTest {
     private class RecordingConnection : InvocationHandler {
         val events = ArrayList<KeyEvent>()
+        val committed = ArrayList<String>()
 
         override fun invoke(proxy: Any?, method: Method, args: Array<out Any>?): Any? {
             return when (method.name) {
                 "sendKeyEvent" -> {
                     events += args?.get(0) as KeyEvent
+                    true
+                }
+                "commitText" -> {
+                    committed += args?.get(0).toString()
                     true
                 }
                 "finishComposingText" -> true
@@ -102,5 +107,41 @@ class ComputerKeyDispatchTest {
         )
         controller.onKey(KeyAction.Computer(ComputerKey.ESC))
         assertEquals(2, handler.events.size)
+    }
+
+    @Test
+    fun aSymbolIsCommittedAndClearsAWaitingModifier() {
+        val handler = RecordingConnection()
+        val connection = Proxy.newProxyInstance(
+            InputConnection::class.java.classLoader,
+            arrayOf(InputConnection::class.java),
+            handler,
+        ) as InputConnection
+        val context = object : android.content.ContextWrapper(null) {}
+        val lexicon = object : ZhuyinLexicon {
+            override val status = com.fskeyboard.ime.engine.EngineStatus.READY
+            override val statusDetail = ""
+            override val isReady = true
+            override fun start(context: Context, onReady: () -> Unit) = Unit
+            override fun close() = Unit
+            override fun lookup(queries: List<String>, before: String) = emptyList<Candidate>()
+            override fun learn(phrases: List<Pair<String, String>>) = Unit
+        }
+        val armed = ArrayList<Set<ComputerKey>>()
+        val controller = CandidateController(
+            context = context,
+            lexicon = lexicon,
+            pipeline = CandidatePipeline(),
+            connection = { connection },
+            editorInfo = { EditorInfo() },
+            onUi = {},
+            post = { it.run() },
+        )
+        controller.onComputerModifiers = { armed += it }
+        controller.onKey(KeyAction.Computer(ComputerKey.CTRL))
+        controller.onKey(KeyAction.Computer(ComputerKey.BANG))
+        assertTrue(handler.events.isEmpty())
+        assertEquals(listOf("!"), handler.committed)
+        assertEquals(listOf(setOf(ComputerKey.CTRL), emptySet()), armed)
     }
 }

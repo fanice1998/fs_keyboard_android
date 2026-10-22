@@ -134,6 +134,7 @@ class FsKeyboardService : InputMethodService() {
             fullWidthSymbols = preferences.fullWidthSymbols()
             latinTopNumberRow = preferences.latinTopNumberRow()
             computerKeys = preferences.computerKeys()
+            computerMap = preferences.computerKeyMap()
             vibrationEnabled = preferences.vibrationEnabled()
             keyPreviewEnabled = preferences.keyPreviewEnabled()
             onTyped = latencyProbe::keyHandled
@@ -399,6 +400,7 @@ class FsKeyboardService : InputMethodService() {
         keyboard?.fullWidthSymbols = preferences.fullWidthSymbols()
         keyboard?.latinTopNumberRow = preferences.latinTopNumberRow()
         keyboard?.computerKeys = preferences.computerKeys()
+        keyboard?.computerMap = preferences.computerKeyMap()
         keyboard?.vibrationEnabled = preferences.vibrationEnabled()
         keyboard?.keyPreviewEnabled = preferences.keyPreviewEnabled()
         keyboard?.enterChoice = EnterActions.choose(info)
