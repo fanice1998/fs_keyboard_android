@@ -1,13 +1,14 @@
 package com.fskeyboard.ime.settings
 
 import android.app.Activity
+import android.graphics.RectF
 import android.os.Build
 import android.os.Bundle
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewTreeObserver
 import android.view.WindowInsets
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Switch
@@ -16,11 +17,13 @@ import com.fskeyboard.ime.R
 import com.fskeyboard.ime.candidate.Candidate
 import com.fskeyboard.ime.candidate.CandidateBarView
 import com.fskeyboard.ime.candidate.CandidateUiState
+import com.fskeyboard.ime.keyboard.KeyPreviewOverlayView
 import com.fskeyboard.ime.keyboard.KeyboardHeight
 import com.fskeyboard.ime.keyboard.KeyboardView
 import com.fskeyboard.ime.latency.KeyLatency
 import com.fskeyboard.ime.rerank.RerankPreferences
 import com.fskeyboard.ime.rerank.onnx.OnnxModelStore
+import com.fskeyboard.ime.ui.isNightMode
 
 class ImeSettingsActivity : Activity() {
     private lateinit var keyboardPreferences: KeyboardPreferences
@@ -155,12 +158,16 @@ class ImeSettingsActivity : Activity() {
 
     private fun installPreview(rowDp: Int) {
         val host = findViewById<LinearLayout>(R.id.keyboard_height_preview)
-        val stack = object : LinearLayout(this) {
-            override fun onInterceptTouchEvent(event: MotionEvent): Boolean = true
-            override fun onTouchEvent(event: MotionEvent): Boolean = true
+        val previewContainer = FrameLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
         }
-        stack.orientation = LinearLayout.VERTICAL
-        stack.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        val stack = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            clipChildren = false
+            clipToPadding = false
+        }
         val bar = CandidateBarView(this)
         bar.render(
             CandidateUiState(
@@ -171,13 +178,52 @@ class ImeSettingsActivity : Activity() {
                 ),
             ),
         )
-        val keyboard = KeyboardView(this)
-        keyboard.rowHeightDp = rowDp
+        val keyboard = KeyboardView(this).apply {
+            rowHeightDp = rowDp
+            latinTopNumberRow = keyboardPreferences.latinTopNumberRow()
+            fullWidthSymbols = keyboardPreferences.fullWidthSymbols()
+            vibrationEnabled = keyboardPreferences.vibrationEnabled()
+            keyPopupEnabled = keyboardPreferences.keyPopupEnabled()
+        }
+        val overlay = KeyPreviewOverlayView(this)
+        keyboard.onShowKeyPreview = { label, keyRectInKeyboard ->
+            val keyLoc = IntArray(2)
+            keyboard.getLocationInWindow(keyLoc)
+            val overlayLoc = IntArray(2)
+            overlay.getLocationInWindow(overlayLoc)
+            val dx = (keyLoc[0] - overlayLoc[0]).toFloat()
+            val dy = (keyLoc[1] - overlayLoc[1]).toFloat()
+            val rectInOverlay = RectF(
+                keyRectInKeyboard.left + dx,
+                keyRectInKeyboard.top + dy,
+                keyRectInKeyboard.right + dx,
+                keyRectInKeyboard.bottom + dy,
+            )
+            overlay.show(label, rectInOverlay, keyboard.isNightMode())
+        }
+        keyboard.onDismissKeyPreview = { immediate ->
+            if (immediate) overlay.dismissImmediately() else overlay.dismissDelayed(80L)
+        }
+
         val width = LinearLayout.LayoutParams.MATCH_PARENT
         val height = LinearLayout.LayoutParams.WRAP_CONTENT
         stack.addView(bar, LinearLayout.LayoutParams(width, height))
         stack.addView(keyboard, LinearLayout.LayoutParams(width, height))
-        host.addView(stack, LinearLayout.LayoutParams(width, height))
+        previewContainer.addView(
+            stack,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        previewContainer.addView(
+            overlay,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        host.addView(previewContainer, LinearLayout.LayoutParams(width, height))
         previewKeyboard = keyboard
     }
 

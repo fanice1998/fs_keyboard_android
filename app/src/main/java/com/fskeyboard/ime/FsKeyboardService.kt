@@ -2,6 +2,7 @@ package com.fskeyboard.ime
 
 import android.content.res.Resources
 import android.graphics.Color
+import android.graphics.RectF
 import java.lang.ref.WeakReference
 import android.inputmethodservice.InputMethodService
 import android.os.Build
@@ -24,6 +25,7 @@ import com.fskeyboard.ime.engine.RustZhuyinLexicon
 import com.fskeyboard.ime.keyboard.EnterActions
 import com.fskeyboard.ime.keyboard.EnterChoice
 import com.fskeyboard.ime.keyboard.KeyAction
+import com.fskeyboard.ime.keyboard.KeyPreviewOverlayView
 import com.fskeyboard.ime.keyboard.KeyboardView
 import com.fskeyboard.ime.latency.FrameLatencyProbe
 import com.fskeyboard.ime.latency.KeyLatency
@@ -46,6 +48,7 @@ class FsKeyboardService : InputMethodService() {
     private var keyboard: KeyboardView? = null
     private var candidateBar: CandidateBarView? = null
     private var candidatePanel: CandidatePanelView? = null
+    private var keyPreviewOverlay: KeyPreviewOverlayView? = null
     private var panelOpen = false
     private var inputRoot: LinearLayout? = null
     private var navigationSpacer: View? = null
@@ -93,6 +96,7 @@ class FsKeyboardService : InputMethodService() {
 
     override fun onDestroy() {
         keyboard?.dismissPopupImmediately()
+        keyPreviewOverlay?.dismissImmediately()
         if (framesWatched) {
             runCatching { window?.window?.removeOnFrameMetricsAvailableListener(latencyProbe) }
             framesWatched = false
@@ -115,6 +119,8 @@ class FsKeyboardService : InputMethodService() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(KeyboardPalette.of(isNightMode()).background)
+            clipChildren = false
+            clipToPadding = false
         }
         candidateBar = CandidateBarView(this).apply {
             onCandidate = { controller.onCandidate(it) }
@@ -167,6 +173,8 @@ class FsKeyboardService : InputMethodService() {
         )
         // The panel lies over the keys, so opening it does not change the keyboard height.
         val keys = FrameLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
             addView(
                 keyboard,
                 FrameLayout.LayoutParams(
@@ -198,10 +206,57 @@ class FsKeyboardService : InputMethodService() {
         )
         inputRoot = root
         navigationSpacer = spacer
+
+        val rootContainer = FrameLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
+        }
+        rootContainer.addView(
+            root,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        val overlay = KeyPreviewOverlayView(this)
+        keyPreviewOverlay = overlay
+        rootContainer.addView(
+            overlay,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
+
+        keyboard?.let { kb ->
+            kb.onShowKeyPreview = { label, keyRectInKeyboard ->
+                val keyLoc = IntArray(2)
+                kb.getLocationInWindow(keyLoc)
+                val overlayLoc = IntArray(2)
+                overlay.getLocationInWindow(overlayLoc)
+                val dx = (keyLoc[0] - overlayLoc[0]).toFloat()
+                val dy = (keyLoc[1] - overlayLoc[1]).toFloat()
+                val rectInOverlay = RectF(
+                    keyRectInKeyboard.left + dx,
+                    keyRectInKeyboard.top + dy,
+                    keyRectInKeyboard.right + dx,
+                    keyRectInKeyboard.bottom + dy,
+                )
+                overlay.show(label, rectInOverlay, kb.isNightMode())
+            }
+            kb.onDismissKeyPreview = { immediate ->
+                if (immediate) {
+                    overlay.dismissImmediately()
+                } else {
+                    overlay.dismissDelayed(80L)
+                }
+            }
+        }
+
         window?.window?.decorView?.requestApplyInsets()
         watchFrames()
         render(pending)
-        return root
+        return rootContainer
     }
 
     /** Key latency is a measurement. A window that cannot report frames still types. */
@@ -403,10 +458,17 @@ class FsKeyboardService : InputMethodService() {
 
     override fun onFinishInput() {
         keyboard?.dismissPopupImmediately()
+        keyPreviewOverlay?.dismissImmediately()
         if (::controller.isInitialized) {
             controller.onFinishInput()
         }
         super.onFinishInput()
+    }
+
+    override fun onFinishInputView(finishingInput: Boolean) {
+        keyboard?.dismissPopupImmediately()
+        keyPreviewOverlay?.dismissImmediately()
+        super.onFinishInputView(finishingInput)
     }
 
     override fun onUpdateSelection(
@@ -461,7 +523,11 @@ class FsKeyboardService : InputMethodService() {
     private fun showPanel(open: Boolean) {
         val candidates = pending.candidates.candidates
         panelOpen = open && candidates.isNotEmpty()
-        if (panelOpen) candidatePanel?.render(candidates)
+        if (panelOpen) {
+            keyboard?.dismissPopupImmediately()
+            keyPreviewOverlay?.dismissImmediately()
+            candidatePanel?.render(candidates)
+        }
         candidatePanel?.visibility = if (panelOpen) View.VISIBLE else View.GONE
         candidateBar?.expanded = panelOpen
     }
