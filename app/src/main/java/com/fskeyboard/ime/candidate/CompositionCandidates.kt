@@ -37,6 +37,30 @@ internal object CompositionCandidates {
  * Shows the lexicon hits for the front of the composition.
  * The raw bopomofo stays at the end so it can still be committed.
  */
+/**
+ * Exact hits stay in lexicon order, and the first one stays first so Enter still
+ * confirms the typed reading. Neighbour readings are inserted after it, skipping
+ * words already offered for the same span. With no exact hit, the neighbour words lead.
+ */
+internal fun mergeTouchCorrections(
+    exact: List<Candidate>,
+    corrected: List<Candidate>,
+    limit: Int = TOUCH_CORRECTION_CANDIDATES,
+): List<Candidate> {
+    val seen = exact.map { it.text to it.span }.toMutableSet()
+    val extra = ArrayList<Candidate>()
+    for (hit in corrected) {
+        if (extra.size == limit) break
+        if (seen.add(hit.text to hit.span)) extra += hit
+    }
+    if (extra.isEmpty()) return exact
+    if (exact.isEmpty()) return extra
+    return listOf(exact.first()) + extra + exact.drop(1)
+}
+
+/** How many neighbour-reading candidates are added to one row. */
+internal const val TOUCH_CORRECTION_CANDIDATES = 6
+
 internal fun candidatesFor(composer: ZhuyinComposer, hits: List<Candidate>): List<Candidate> {
     val text = composer.text
     if (text.isEmpty()) return emptyList()

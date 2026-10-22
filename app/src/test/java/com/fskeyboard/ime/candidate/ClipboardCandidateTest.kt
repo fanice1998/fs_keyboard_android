@@ -169,6 +169,19 @@ class ClipboardCandidateTest {
     }
 
     @Test
+    fun anImagePreviewFitsInsideTheCandidateRow() {
+        val portrait = clipboardPreviewSize(1000, 2000, maxHeight = 100f)
+        assertEquals(50f, portrait.first, 0.01f)
+        assertEquals(100f, portrait.second, 0.01f)
+        val wide = clipboardPreviewSize(8000, 1000, maxHeight = 100f)
+        assertEquals(400f, wide.first, 0.01f)
+        assertTrue(wide.second <= 100f)
+        assertEquals(0f, clipboardPreviewSize(0, 10, 100f).second, 0.01f)
+        assertEquals(1, clipboardSampleSize(100, 120))
+        assertEquals(32, clipboardSampleSize(4000, 120))
+    }
+
+    @Test
     fun theClipboardRowStaysAStripWhenTheWindowOffersTheWholeScreen() {
         val screen = 2400
         val chip = 72

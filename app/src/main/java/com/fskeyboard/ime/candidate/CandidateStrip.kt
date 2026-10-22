@@ -1,6 +1,7 @@
 package com.fskeyboard.ime.candidate
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
@@ -15,8 +16,11 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeProvider
 import android.widget.Button
 import com.fskeyboard.ime.R
+import com.fskeyboard.ime.keyboard.KeyIcon
+import com.fskeyboard.ime.keyboard.KeyIcons
 import com.fskeyboard.ime.ui.KeyboardPalette
 import com.fskeyboard.ime.ui.dp
+import kotlin.concurrent.thread
 import kotlin.math.abs
 import kotlin.math.ceil
 
@@ -64,10 +68,16 @@ internal class CandidateStrip(context: Context) : View(context) {
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.CENTER
         isSubpixelText = true
     }
+    private var preview: Bitmap? = null
+    private var previewUri: String? = null
+    private var previewLoading = false
+    private var previewGeneration = 0
 
     fun show(next: List<Candidate>, nextPalette: KeyboardPalette) {
         val sameList = candidates == next
@@ -77,9 +87,61 @@ internal class CandidateStrip(context: Context) : View(context) {
         if (!sameList) {
             candidates = next
             if (accessFocus >= candidates.size) accessFocus = HOST
+            requestPreview(next.singleOrNull()?.clipboardImageUri)
             layoutChips()
         }
         invalidate()
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (h > 0 && h != oldh && preview != null) layoutChips()
+    }
+
+    override fun onDetachedFromWindow() {
+        previewGeneration++
+        previewLoading = false
+        preview?.recycle()
+        preview = null
+        super.onDetachedFromWindow()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        val uri = previewUri
+        if (uri != null && preview == null) {
+            previewUri = null
+            previewLoading = false
+            requestPreview(uri)
+            layoutChips()
+        }
+    }
+
+    /** Loads a thumbnail for an image clip. A failed load keeps the 圖片 label. */
+    private fun requestPreview(uri: String?) {
+        if (uri == previewUri && (uri == null || preview != null || previewLoading)) return
+        previewGeneration++
+        previewUri = uri
+        previewLoading = false
+        preview?.recycle()
+        preview = null
+        if (uri.isNullOrEmpty()) return
+        previewLoading = true
+        val generation = previewGeneration
+        val target = (if (height > 0) height else dp(40)).coerceAtLeast(1)
+        thread(name = "clipboard-preview") {
+            val bitmap = decodeClipboardPreview(context, uri, target)
+            post {
+                if (generation != previewGeneration) {
+                    bitmap?.recycle()
+                    return@post
+                }
+                previewLoading = false
+                preview = bitmap
+                layoutChips()
+                invalidate()
+            }
+        }
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -126,7 +188,9 @@ internal class CandidateStrip(context: Context) : View(context) {
                 fill.style = Paint.Style.FILL
             }
             val baseline = rect.centerY() - (textPaint.ascent() + textPaint.descent()) / 2f
-            if (clipboard) {
+            if (clipboard && preview != null && candidates.getOrNull(index)?.clipboardImageUri != null) {
+                drawClipboardPreview(canvas, rect, baseline)
+            } else if (clipboard) {
                 drawClipboardLabel(canvas, rect, labels[index], baseline)
             } else {
                 textPaint.color = palette.text
@@ -201,7 +265,9 @@ internal class CandidateStrip(context: Context) : View(context) {
         textPaint.textSize = sp(TEXT_SP)
         val padH = dp(12).toFloat()
         val margin = dp(4).toFloat()
-        chipHeight = textPaint.descent() - textPaint.ascent() + dp(8)
+        val textChip = textPaint.descent() - textPaint.ascent() + dp(8)
+        val showingImage = preview != null && candidates.any { it.clipboardImageUri != null }
+        chipHeight = if (showingImage && height > 0) height.toFloat() else textChip
         corner = dp(8).toFloat()
         var x = 0f
         for (candidate in candidates) {
@@ -219,28 +285,67 @@ internal class CandidateStrip(context: Context) : View(context) {
         }
     }
 
-    /** The clipboard mark sits in front of the text, in the hint color. */
+    /** The clipboard mark sits in front of the text, or in front of the picture. */
     private fun chipContentWidth(candidate: Candidate, label: String): Float {
-        val body = textPaint.measureText(label)
+        val picture = clipboardPreviewWidth(candidate)
+        val body = if (picture > 0f) picture else textPaint.measureText(label)
         if (candidate.source != CandidateSource.CLIPBOARD) return body
-        return textPaint.measureText(clipboardMark()) + dp(MARK_GAP_DP).toFloat() + body
+        return clipboardMarkSize() + dp(MARK_GAP_DP).toFloat() + body
     }
 
-    private fun clipboardMark(): String = context.getString(R.string.clipboard_chip_mark)
+    /** Width of the scaled picture, or 0 before it has loaded. */
+    private fun clipboardPreviewWidth(candidate: Candidate): Float {
+        val bitmap = preview ?: return 0f
+        if (candidate.clipboardImageUri.isNullOrEmpty()) return 0f
+        return clipboardPreviewSize(bitmap.width, bitmap.height, previewMaxHeight()).first
+    }
+
+    /** The picture stays inside the chip, which is at most the candidate row. */
+    private fun previewMaxHeight(): Float {
+        val row = if (chipHeight > 0f) chipHeight else if (height > 0) height.toFloat() else dp(40).toFloat()
+        return (row - dp(8)).coerceAtLeast(1f)
+    }
+
+    private fun clipboardMarkSize(): Float = sp(TEXT_SP)
+
+    /** A clipboard glyph in the hint color. Returns the width it occupies. */
+    private fun drawClipboardMark(canvas: Canvas, rect: RectF, x: Float): Float {
+        val size = clipboardMarkSize()
+        val top = rect.centerY() - size / 2f
+        KeyIcons.draw(
+            canvas,
+            KeyIcon.CLIPBOARD,
+            RectF(x, top, x + size, top + size),
+            palette.hint,
+            iconPaint,
+            scale = 1f,
+        )
+        return size
+    }
 
     private fun drawClipboardLabel(canvas: Canvas, rect: RectF, label: String, baseline: Float) {
-        val mark = clipboardMark()
         val gap = dp(MARK_GAP_DP).toFloat()
-        val markWidth = textPaint.measureText(mark)
-        val total = markWidth + gap + textPaint.measureText(label)
-        var x = rect.centerX() - total / 2f
+        val markWidth = clipboardMarkSize()
+        var x = rect.centerX() - (markWidth + gap + textPaint.measureText(label)) / 2f
+        x += drawClipboardMark(canvas, rect, x) + gap
         textPaint.textAlign = Paint.Align.LEFT
-        textPaint.color = palette.hint
-        canvas.drawText(mark, x, baseline, textPaint)
-        x += markWidth + gap
         textPaint.color = palette.text
         canvas.drawText(label, x, baseline, textPaint)
         textPaint.textAlign = Paint.Align.CENTER
+    }
+
+    /** The clipboard glyph plus the picture, scaled to fit inside [rect]. */
+    private fun drawClipboardPreview(canvas: Canvas, rect: RectF, baseline: Float) {
+        val bitmap = preview ?: return
+        val maxHeight = (rect.height() - dp(8)).coerceAtLeast(1f)
+        val (width, height) = clipboardPreviewSize(bitmap.width, bitmap.height, maxHeight)
+        if (width <= 0f || height <= 0f) return
+        val gap = dp(MARK_GAP_DP).toFloat()
+        val markWidth = clipboardMarkSize()
+        var x = rect.centerX() - (markWidth + gap + width) / 2f
+        x += drawClipboardMark(canvas, rect, x) + gap
+        val top = rect.centerY() - height / 2f
+        canvas.drawBitmap(bitmap, null, RectF(x, top, x + width, top + height), imagePaint)
     }
 
     /** Chip bounds centered in the row. [slots] store the horizontal span only. */

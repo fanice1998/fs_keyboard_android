@@ -6,7 +6,6 @@
     <string name="status_loading">正在載入注音詞庫…</string>
     <string name="status_missing_rime">尚未載入注音詞庫，仍可組字</string>
     <string name="status_failed">詞庫載入失敗：%1$s</string>
-    <string name="clipboard_chip_mark">剪貼簿</string>
     <string name="clipboard_description">剪貼簿，%1$s</string>
     <string name="clipboard_prompt_title">剪貼簿</string>
     <string name="clipboard_prompt_message">這是剪貼簿的內容。要清空系統剪貼簿嗎？</string>

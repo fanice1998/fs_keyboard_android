@@ -1,10 +1,13 @@
 package com.fskeyboard.ime.candidate
 
 import android.content.Context
+import android.graphics.Paint
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.util.Log
+import android.util.TypedValue
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
@@ -18,6 +21,7 @@ import com.fskeyboard.ime.keyboard.ComputerKey
 import com.fskeyboard.ime.keyboard.ComputerModifiers
 import com.fskeyboard.ime.keyboard.CursorMotion
 import com.fskeyboard.ime.keyboard.EnterActions
+import com.fskeyboard.ime.keyboard.composingSelection
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.keyboard.computerKeyCode
@@ -66,18 +70,44 @@ internal class CandidateController(
 
     /** Letters of the English word under the caret. Empty unless the Latin keyboard is composing. */
     private val english = StringBuilder()
+    private var englishCaret = 0
     private val englishLexicon = EnglishLexicon()
+    private val symbolFrequency = SymbolFrequency()
     private val emailSuggest = EmailSuggest()
     private val englishWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "fskeyboard-english").apply { isDaemon = true }
     }
     private val userEnglishFile by lazy { File(context.filesDir, USER_ENGLISH_FILE) }
+    private val symbolFile by lazy { File(context.filesDir, SYMBOL_FILE) }
     private val emailHistoryFile by lazy { File(context.filesDir, EMAIL_DOMAINS_FILE) }
     private var englishLoaded = false
     private var generation = 0L
     private var closed = false
     private var lastLookupMillis = 0L
     private var cursorSession: CursorSession? = null
+    private var composingGlide = false
+    private var glideOrigin = 0
+    private var glideText = ""
+    private var glideBase = -1
+    private var glideVisualOffset = 0
+
+    /**
+     * Inclusive caret positions of the composing text, remembered while a glide
+     * calls setSelection. A late selection update from that call still lies inside
+     * the word, and must not drop the composition.
+     */
+    private var ownedCaretSpan: IntRange? = null
+
+    /** Widths for a space glide. Created on the first glide so unit tests never touch Paint. */
+    private val caretPaint: Paint by lazy {
+        Paint().apply {
+            textSize = TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_SP,
+                16f,
+                context.resources.displayMetrics,
+            )
+        }
+    }
     private var selStart = -1
     private var selEnd = -1
 
@@ -91,6 +121,7 @@ internal class CandidateController(
     fun start() {
         applySavedLetterMode()
         loadEnglish()
+        loadSymbolFrequency()
         publish()
         lexicon.start(context) {
             if (!closed) {
@@ -125,6 +156,7 @@ internal class CandidateController(
             applySavedLetterMode()
         }
         publish()
+        refreshSymbolSuggestions()
     }
 
     fun onUpdateSelection(
@@ -138,9 +170,13 @@ internal class CandidateController(
         selStart = newSelStart
         selEnd = newSelEnd
         if (candidatesStart == -1 && candidatesEnd == -1) {
+            if (composingGlide) return
+            val owned = ownedCaretSpan
+            if (owned != null && newSelStart == newSelEnd && newSelStart in owned) return
+            ownedCaretSpan = null
             var changed = false
             if (english.isNotEmpty()) {
-                english.setLength(0)
+                clearEnglishWord()
                 changed = true
             }
             if (hasComposition) {
@@ -150,6 +186,9 @@ internal class CandidateController(
             if (changed) {
                 presented = emptyList()
                 publish(EngineSnapshot())
+            }
+            if (cursorSession == null && !hasComposition && english.isEmpty() && newSelStart == newSelEnd) {
+                refreshSymbolSuggestions()
             }
         }
     }
@@ -162,27 +201,59 @@ internal class CandidateController(
         selEnd = -1
     }
 
-    /** Space can glide the caret only when it is not marking 平聲 or finishing an English word. */
-    fun canMoveCursor(): Boolean = !closed && !hasComposition && english.isEmpty()
+    /** Space can glide the editor caret, or the caret inside zhuyin or an English word. */
+    fun canMoveCursor(): Boolean = !closed
 
     /**
-     * Takes the editor text once. Later steps reuse it, so a drag does not re-read the field.
-     * False when the field does not report a caret; the space bar then stays a tap.
+     * Takes the editor text once. Later samples reuse it, so a drag does not re-read the field.
+     * While zhuyin or an English word is open, the glide stays inside that composition and
+     * does not read the field. False when there is nothing to move; the space bar then stays a tap.
      */
     fun beginCursor(): Boolean {
         if (!canMoveCursor()) return false
+        if (english.isNotEmpty()) {
+            glideText = english.toString()
+            glideOrigin = englishCaret.coerceIn(0, glideText.length)
+            glideVisualOffset = 0
+            glideBase = compositionAnchor(glideOrigin)
+            rememberOwnedSpan(glideBase, glideText.length)
+            composingGlide = true
+            cursorSession = null
+            return true
+        }
+        if (hasComposition) {
+            glideText = composition.pending.text
+            glideOrigin = composition.pending.caret.coerceIn(0, glideText.length)
+            glideVisualOffset = composition.chosenText.length
+            glideBase = compositionAnchor(glideVisualOffset + glideOrigin)
+            rememberOwnedSpan(glideBase, composition.text.length)
+            composingGlide = true
+            cursorSession = null
+            return true
+        }
         val session = readCursor() ?: return false
         dismissSuggestions()
         cursorSession = session
+        glideOrigin = (session.cursor - session.startOffset).coerceIn(0, session.text.length)
+        composingGlide = false
         return true
     }
 
-    /** [dx] is graphemes to the right, [dy] is lines down. False when the caret did not move. */
-    fun moveCursor(dx: Int, dy: Int): Boolean {
+    /**
+     * [dxPx] and [dyPx] are pixels from where the glide engaged.
+     * False when the snapped caret did not move.
+     */
+    fun moveCursor(dxPx: Float, dyPx: Float): Boolean {
+        if (composingGlide) return moveComposingCaret(dxPx, dyPx)
         val session = cursorSession ?: return false
-        val local = session.cursor - session.startOffset
-        if (local !in 0..session.text.length) return false
-        val moved = CursorMotion.move(session.text, local, dx, dy)
+        val moved = CursorMotion.nearest(
+            session.text,
+            glideOrigin,
+            dxPx,
+            dyPx,
+            ::textWidth,
+            lineHeight(),
+        )
         val absolute = session.startOffset + moved
         if (absolute == session.cursor) return false
         val applied = try {
@@ -197,6 +268,9 @@ internal class CandidateController(
 
     fun endCursor() {
         cursorSession = null
+        composingGlide = false
+        glideText = ""
+        glideBase = -1
     }
 
     fun onKey(action: KeyAction) {
@@ -300,12 +374,31 @@ internal class CandidateController(
         onLockedModifiers(modifiers.locked())
     }
 
+    /**
+     * Navigation keys leave touch mode unless they are marked as a soft-keyboard event.
+     * The editor then paints a gray focus wash over the field.
+     */
     private fun sendKeyEvent(keyCode: Int, meta: Int) {
         val ic = connection() ?: return
         ic.finishComposingText()
         val time = System.currentTimeMillis()
-        ic.sendKeyEvent(KeyEvent(time, time, KeyEvent.ACTION_DOWN, keyCode, 0, meta))
-        ic.sendKeyEvent(KeyEvent(time, time, KeyEvent.ACTION_UP, keyCode, 0, meta))
+        val flags = KeyEvent.FLAG_SOFT_KEYBOARD or KeyEvent.FLAG_KEEP_TOUCH_MODE
+        ic.sendKeyEvent(softKeyEvent(time, KeyEvent.ACTION_DOWN, keyCode, meta, flags))
+        ic.sendKeyEvent(softKeyEvent(time, KeyEvent.ACTION_UP, keyCode, meta, flags))
+    }
+
+    private fun softKeyEvent(time: Long, action: Int, keyCode: Int, meta: Int, flags: Int): KeyEvent {
+        return KeyEvent(
+            time,
+            time,
+            action,
+            keyCode,
+            0,
+            meta,
+            KeyCharacterMap.VIRTUAL_KEYBOARD,
+            0,
+            flags,
+        )
     }
 
     /**
@@ -321,7 +414,7 @@ internal class CandidateController(
             val isEmail = isEmailContext()
             val text = candidate.text
             val trailing = if (isEmail) "" else " "
-            english.setLength(0)
+            clearEnglishWord()
             acceptCommitted(text + trailing)
             if (isEmail) {
                 emailSuggest.recordChoice(text, beforeUsername())
@@ -339,7 +432,12 @@ internal class CandidateController(
                 emailSuggest.recordChoice(text, beforeUsername())
                 saveEmailHistory()
             }
-            dismissSuggestions()
+            if (isSymbol(text)) {
+                learnSymbol(textBeforeCursor(), text)
+                refreshSymbolSuggestions()
+            } else {
+                dismissSuggestions()
+            }
             return
         }
         val finished = composition.choose(candidate)
@@ -375,7 +473,7 @@ internal class CandidateController(
             commit(action.label)
             return
         }
-        if (!composition.append(action.label)) return
+        if (!composition.append(action.label, action.nearby)) return
         apply(refresh())
     }
 
@@ -406,9 +504,13 @@ internal class CandidateController(
         }
         val before = recent.toString() + composition.chosenText
         val start = System.nanoTime()
-        val found = traced("ime.lookup") { lexicon.lookup(queries, before) }
+        val exact = traced("ime.lookup") { lexicon.lookup(queries, before) }
+        val corrected = ArrayList<Candidate>()
+        for (correction in pending.corrections()) {
+            corrected += lexicon.lookup(correction.queries, before)
+        }
         lastLookupMillis = (System.nanoTime() - start) / 1_000_000L
-        return found
+        return mergeTouchCorrections(exact, corrected)
     }
 
     private fun onPunctuation(text: String) {
@@ -420,7 +522,8 @@ internal class CandidateController(
             finishComposition(convertAll())
         }
         commit(text)
-        dismissSuggestions()
+        if (isSymbol(text)) learnSymbol(textBeforeCursor(), text)
+        refreshSymbolSuggestions()
     }
 
     private fun onSpace() {
@@ -434,14 +537,21 @@ internal class CandidateController(
                 composition.pending.isEmpty -> finishComposition(convertAll())
                 composition.markLevelTone() -> apply(refresh())
             }
-            KeyPolicy.Space.CommitSpace -> commit(" ")
+            KeyPolicy.Space.CommitSpace -> {
+                commit(" ")
+                refreshSymbolSuggestions()
+            }
         }
     }
 
     private fun onBackspace() {
         if (english.isNotEmpty()) {
-            english.deleteCharAt(english.lastIndex)
+            if (englishCaret <= 0) return
+            english.deleteCharAt(englishCaret - 1)
+            englishCaret -= 1
             if (english.isEmpty()) {
+                englishCaret = 0
+                ownedCaretSpan = null
                 presented = emptyList()
                 val ic = connection()
                 ic?.setComposingText("", 1)
@@ -496,22 +606,73 @@ internal class CandidateController(
         }
     }
 
-    /** Commits, learns the phrases the user put together, and offers punctuation after a particle. */
+    /** Commits, learns the phrases the user put together, and offers symbols learned after this word. */
     private fun finishComposition(done: Commit) {
         composition.clear()
-        presented = emptyList()
         val ic = connection()
         ic?.commitText(done.text, 1)
         ic?.finishComposingText()
         remember(done.text)
         lexicon.learn(done.learned)
-        val punctuation = Particles.punctuationAfter(recent.toString()).mapIndexed { index, text ->
-            Candidate(text = text, engineIndex = -(index + 1), source = CandidateSource.SUGGESTION, span = 0)
-        }
-        publish(EngineSnapshot(candidates = punctuation))
+        refreshSymbolSuggestions()
     }
 
-    /** Drops punctuation offered after a commit once the user does something else. */
+    /**
+     * Symbols learned after the word touching the caret.
+     * A space or no text before the caret clears them. Composition and the English word
+     * keep their own candidates.
+     */
+    private fun refreshSymbolSuggestions() {
+        if (closed || hasComposition || english.isNotEmpty() || !mode.isLetters) return
+        if (selStart >= 0 && selEnd >= 0 && selStart != selEnd) return
+        val symbols = symbolFrequency.predict(textBeforeCursor())
+        val candidates = symbols.mapIndexed { index, text ->
+            Candidate(
+                text = text,
+                engineIndex = -(index + 1),
+                source = CandidateSource.SUGGESTION,
+                span = 0,
+            )
+        }
+        if (candidates == presented) return
+        presented = candidates
+        publish(EngineSnapshot(candidates = candidates))
+    }
+
+    /** The field text before the caret, or the characters this keyboard just committed. */
+    private fun textBeforeCursor(): String {
+        return try {
+            connection()?.getTextBeforeCursor(64, 0)?.toString() ?: recent.toString()
+        } catch (_: Exception) {
+            recent.toString()
+        }
+    }
+
+    private fun learnSymbol(before: String, symbol: String) {
+        if (closed || !symbolFrequency.learn(before, symbol)) return
+        val lines = symbolFrequency.serialize()
+        englishWorker.execute {
+            try {
+                val file = symbolFile
+                file.parentFile?.mkdirs()
+                file.writeText(lines.joinToString("\n", postfix = "\n"))
+            } catch (e: Exception) {
+                Log.e(TAG, "failed to save symbol frequency", e)
+            }
+        }
+    }
+
+    private fun loadSymbolFrequency() {
+        try {
+            val file = symbolFile
+            if (!file.isFile) return
+            symbolFrequency.load(file.readLines())
+        } catch (_: Exception) {
+            // The row simply has no learned symbols until the next one is typed.
+        }
+    }
+
+    /** Drops symbol suggestions once the user does something else. */
     private fun dismissSuggestions() {
         if (hasComposition || presented.isEmpty()) return
         presented = emptyList()
@@ -531,7 +692,10 @@ internal class CandidateController(
             recent.setLength(0)
             return
         }
-        if (choice.newline) commit("\n")
+        if (choice.newline) {
+            commit("\n")
+            refreshSymbolSuggestions()
+        }
     }
 
     private fun apply(snapshot: EngineSnapshot) {
@@ -542,11 +706,94 @@ internal class CandidateController(
         traced("ime.setComposing") {
             if (inline.isNotEmpty()) {
                 ic.setComposingText(inline, 1)
+                val caret = visualCaret(inline)
+                if (caret >= inline.length) ownedCaretSpan = null else placeComposingCaret(ic, inline, caret)
             } else {
+                ownedCaretSpan = null
                 ic.setComposingText("", 1)
                 ic.finishComposingText()
             }
         }
+    }
+
+    /** Caret inside the underlined text. The end means setComposingText already placed it. */
+    private fun visualCaret(inline: String): Int {
+        val caret = when {
+            english.isNotEmpty() -> englishCaret
+            hasComposition -> composition.chosenText.length + composition.pending.caret
+            else -> inline.length
+        }
+        return caret.coerceIn(0, inline.length)
+    }
+
+    /**
+     * setComposingText leaves the caret at the end of [text]. A caret in the middle
+     * is then moved with setSelection. A missing extract skips that; the next insert
+     * still rewrites the whole composing string.
+     */
+    private fun placeComposingCaret(ic: InputConnection, text: String, caret: Int) {
+        val extracted = try {
+            val request = ExtractedTextRequest().apply { hintMaxChars = MAX_EXTRACT }
+            ic.getExtractedText(request, 0)
+        } catch (_: Exception) {
+            null
+        } ?: return
+        val absolute = composingSelection(extracted.selectionEnd, text.length, caret) ?: return
+        val start = absolute - caret
+        ownedCaretSpan = start..(start + text.length)
+        try {
+            ic.setSelection(absolute, absolute)
+        } catch (_: Exception) {
+            // The buffer caret is already updated. The next key writes it again.
+        }
+    }
+
+    private fun moveComposingCaret(dxPx: Float, dyPx: Float): Boolean {
+        val next = CursorMotion.nearest(glideText, glideOrigin, dxPx, dyPx, ::textWidth, lineHeight())
+        val current = if (english.isNotEmpty()) {
+            englishCaret
+        } else {
+            composition.pending.caret
+        }
+        if (next == current) return false
+        if (english.isNotEmpty()) {
+            englishCaret = next
+        } else {
+            composition.pending.moveCaret(next)
+        }
+        val base = glideBase
+        if (base >= 0) {
+            val ic = connection()
+            if (ic != null) {
+                try {
+                    ic.setSelection(base + glideVisualOffset + next, base + glideVisualOffset + next)
+                } catch (_: Exception) {
+                    // The next key rewrites the composing text and places the caret.
+                }
+            }
+        }
+        return true
+    }
+
+    /** Absolute start of the composing text, assuming the editor caret is at [caret] inside it. */
+    private fun compositionAnchor(caret: Int): Int {
+        val session = readCursor() ?: return -1
+        val start = session.cursor - caret
+        return if (start < 0) -1 else start
+    }
+
+    private fun rememberOwnedSpan(start: Int, length: Int) {
+        ownedCaretSpan = if (start < 0) null else start..(start + length)
+    }
+
+    private fun textWidth(text: String): Float = caretPaint.measureText(text)
+
+    private fun lineHeight(): Float = caretPaint.fontSpacing.coerceAtLeast(1f)
+
+    private fun clearEnglishWord() {
+        english.setLength(0)
+        englishCaret = 0
+        ownedCaretSpan = null
     }
 
     private fun commit(text: String) {
@@ -609,7 +856,9 @@ internal class CandidateController(
             composeEnglish &&
             continuesEnglish(value)
         ) {
-            english.append(value)
+            val at = englishCaret.coerceIn(0, english.length)
+            english.insert(at, value)
+            englishCaret = at + 1
             showEnglish()
             return
         }
@@ -711,7 +960,7 @@ internal class CandidateController(
     private fun finishEnglish(trailing: String, takePrediction: Boolean) {
         if (english.isEmpty()) return
         val currentTyped = english.toString()
-        english.setLength(0)
+        clearEnglishWord()
 
         val before = connection()?.getTextBeforeCursor(currentTyped.length, 0)?.toString().orEmpty()
         if (before != currentTyped && !before.endsWith(currentTyped)) {
@@ -735,6 +984,8 @@ internal class CandidateController(
         } else {
             learnEnglish(word)
         }
+        if (isSymbol(trailingChar)) learnSymbol(textBeforeCursor(), trailingChar)
+        refreshSymbolSuggestions()
     }
 
     /** Writes the underlined letters as they stand. Used when the field is closing. */
@@ -762,7 +1013,7 @@ internal class CandidateController(
     private fun cancelComposition() {
         val discard = hasComposition || english.isNotEmpty()
         composition.clear()
-        english.setLength(0)
+        clearEnglishWord()
         presented = emptyList()
         if (!discard) return
         val ic = connection() ?: return
@@ -842,6 +1093,7 @@ internal class CandidateController(
                 engineIndex = -1,
                 source = CandidateSource.CLIPBOARD,
                 span = 0,
+                clipboardImageUri = offer.imageUri,
             ),
         )
     }
@@ -925,6 +1177,7 @@ internal class CandidateController(
         const val ENGLISH_CANDIDATES = 8
         const val ENGLISH_ASSET = "lexicon/english.tsv"
         const val USER_ENGLISH_FILE = "lexicon/user_english.tsv"
+        const val SYMBOL_FILE = "lexicon/symbol_freq.tsv"
         const val EMAIL_DOMAINS_FILE = "lexicon/email_domains.tsv"
     }
 

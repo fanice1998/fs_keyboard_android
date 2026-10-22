@@ -1,68 +1,53 @@
 package com.fskeyboard.ime.keyboard
 
 /**
- * Finger travel on the space bar, turned into cursor steps.
- * Movement inside [slop] stays a tap. Past that, the bar is a trackpad:
- * leftover distance is kept, so reversing undoes the partial step instead of jumping.
- * [xPerStep] and [yPerStep] are in the same pixels as the touch coordinates.
+ * Finger travel on the space bar.
+ * Movement inside [slop] stays a tap. Past that, the bar is a trackpad and each
+ * sample reports the total pixels from where the glide engaged, so the caret can
+ * snap to wherever the finger is instead of stepping one character at a time.
  */
 internal class SpaceCursor(
     private val slop: Float,
-    private val xPerStep: Float,
-    private val yPerStep: Float,
 ) {
     var tracking: Boolean = false
         private set
 
     private var originX = 0f
     private var originY = 0f
-    private var lastX = 0f
-    private var lastY = 0f
-    private var carryX = 0f
-    private var carryY = 0f
+    private var anchorX = 0f
+    private var anchorY = 0f
 
     fun down(x: Float, y: Float) {
         tracking = false
         originX = x
         originY = y
-        lastX = x
-        lastY = y
-        carryX = 0f
-        carryY = 0f
+        anchorX = x
+        anchorY = y
     }
 
     /**
      * Null while the finger has not yet left the tap slop.
-     * The event that crosses the slop returns (0, 0): that distance is not a step.
+     * The event that crosses the slop returns (0, 0): that distance is not travel.
+     * Later samples are the total from the point where the slop was crossed.
      */
-    fun move(x: Float, y: Float): Pair<Int, Int>? {
+    fun move(x: Float, y: Float): Pair<Float, Float>? {
         if (!tracking) {
             val dx = x - originX
             val dy = y - originY
             if (dx * dx + dy * dy < slop * slop) return null
             tracking = true
-            lastX = x
-            lastY = y
-            return 0 to 0
+            anchorX = x
+            anchorY = y
+            return 0f to 0f
         }
-        carryX += x - lastX
-        carryY += y - lastY
-        lastX = x
-        lastY = y
-        val stepsX = (carryX / xPerStep).toInt()
-        val stepsY = (carryY / yPerStep).toInt()
-        carryX -= stepsX * xPerStep
-        carryY -= stepsY * yPerStep
-        return stepsX to stepsY
+        return (x - anchorX) to (y - anchorY)
     }
 
     /** A still hold becomes a trackpad without spending the distance so far. */
     fun hold() {
         if (tracking) return
         tracking = true
-        lastX = originX
-        lastY = originY
-        carryX = 0f
-        carryY = 0f
+        anchorX = originX
+        anchorY = originY
     }
 }

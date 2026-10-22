@@ -1,5 +1,6 @@
 package com.fskeyboard.ime.candidate
 
+import com.fskeyboard.ime.keyboard.NearbyKey
 import com.fskeyboard.ime.keyboard.ZhuyinComposer
 import com.fskeyboard.ime.keyboard.ZhuyinSyllable
 
@@ -30,7 +31,8 @@ internal class ZhuyinComposition {
     val chosenText: String
         get() = chosen.joinToString("") { it.text }
 
-    fun append(glyph: String): Boolean = pending.append(glyph)
+    fun append(glyph: String, nearby: List<NearbyKey> = emptyList()): Boolean =
+        pending.append(glyph, nearby)
 
     fun markLevelTone(): Boolean = pending.markLevelTone()
 
@@ -46,10 +48,12 @@ internal class ZhuyinComposition {
     }
 
     fun backspace() {
-        if (!pending.isEmpty) {
+        if (!pending.isEmpty && pending.caret > 0) {
             pending.backspace()
         } else if (chosen.isNotEmpty()) {
             pending.restore(chosen.removeAt(chosen.lastIndex).syllables)
+        } else if (!pending.isEmpty) {
+            pending.backspace()
         }
     }
 

@@ -11,14 +11,22 @@ internal enum class KeyIcon {
     CHECK,
     GLOBE,
     SYMBOLS,
+    CLIPBOARD,
 }
 
 internal object KeyIcons {
     private val path = Path()
     private val oval = RectF()
 
-    fun draw(canvas: Canvas, icon: KeyIcon, bounds: RectF, color: Int, paint: Paint) {
-        val size = minOf(bounds.width(), bounds.height()) * 0.48f
+    fun draw(
+        canvas: Canvas,
+        icon: KeyIcon,
+        bounds: RectF,
+        color: Int,
+        paint: Paint,
+        scale: Float = 0.48f,
+    ) {
+        val size = minOf(bounds.width(), bounds.height()) * scale
         if (size <= 0f) return
         canvas.save()
         canvas.translate(bounds.centerX() - size / 2f, bounds.centerY() - size / 2f)
@@ -34,6 +42,7 @@ internal object KeyIcons {
             KeyIcon.CHECK -> drawCheck(canvas, paint)
             KeyIcon.GLOBE -> drawGlobe(canvas, paint)
             KeyIcon.SYMBOLS -> drawSymbols(canvas, paint)
+            KeyIcon.CLIPBOARD -> drawClipboard(canvas, paint)
         }
         canvas.restore()
     }
@@ -82,5 +91,14 @@ internal object KeyIcons {
         canvas.drawLine(15f, 5f, 15f, 19f, paint)
         canvas.drawLine(5f, 9f, 19f, 9f, paint)
         canvas.drawLine(5f, 15f, 19f, 15f, paint)
+    }
+
+    /** A board with a clip, in the same 24-unit stroke as the key icons. */
+    private fun drawClipboard(canvas: Canvas, paint: Paint) {
+        oval.set(5f, 7f, 19f, 21f)
+        canvas.drawRoundRect(oval, 2.2f, 2.2f, paint)
+        oval.set(9f, 3f, 15f, 9f)
+        canvas.drawRoundRect(oval, 1.6f, 1.6f, paint)
+        canvas.drawLine(10.2f, 6f, 13.8f, 6f, paint)
     }
 }

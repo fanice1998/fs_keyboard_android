@@ -1,6 +1,7 @@
 package com.fskeyboard.ime.keyboard
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class CursorMotionTest {
@@ -46,5 +47,57 @@ class CursorMotionTest {
     fun aShorterLineStopsAfterItsLastCharacter() {
         val text = "abc\nz"
         assertEquals(text.length, CursorMotion.move(text, 2, 0, 1))
+    }
+
+    @Test
+    fun aGlideSnapsToTheNearestGrapheme() {
+        val text = "abcd"
+        assertEquals(1, nearest(text, 0, 14f, 0f))
+        assertEquals(2, nearest(text, 0, 16f, 0f))
+        assertEquals(0, nearest(text, 0, 4f, 0f))
+        assertEquals(3, nearest(text, text.length, -14f, 0f))
+    }
+
+    @Test
+    fun aTieFollowsTheDirectionOfTheFinger() {
+        assertEquals(2, nearest("abcd", 0, 15f, 0f))
+        assertEquals(2, nearest("abcd", 4, -15f, 0f))
+    }
+
+    @Test
+    fun aGlidePastTheEndOfALineStaysOnThatLine() {
+        assertEquals(2, nearest("ab\ncd", 0, 100f, 0f))
+    }
+
+    @Test
+    fun verticalTravelPicksTheNearestLineThenTheNearestGrapheme() {
+        val text = "ab\ncd\nef"
+        assertEquals(4, nearest(text, 1, 0f, 25f))
+        assertEquals(1, nearest(text, 1, 4f, 4f))
+        assertEquals(4, nearest("ab\ncd", 1, 0f, 20f))
+        assertEquals(3, nearest("ab\ncd", 0, 0f, 10f))
+        assertEquals(0, nearest("ab\ncd", 3, 0f, -10f))
+    }
+
+    @Test
+    fun theCaretDoesNotLandInsideAnEmoji() {
+        val thumbs = "a👍b"
+        assertEquals(1 + "👍".length, nearest(thumbs, 0, 20f, 0f))
+    }
+
+    @Test
+    fun anEmptyFieldStaysAtTheStart() {
+        assertEquals(0, nearest("", 0, 30f, 10f))
+    }
+
+    @Test
+    fun composingSelectionSitsInsideTheUnderlinedText() {
+        assertEquals(7, composingSelection(selectionEnd = 10, textLength = 4, caret = 1))
+        assertNull(composingSelection(selectionEnd = 10, textLength = 4, caret = 4))
+        assertNull(composingSelection(selectionEnd = 2, textLength = 4, caret = 1))
+    }
+
+    private fun nearest(text: String, origin: Int, dx: Float, dy: Float): Int {
+        return CursorMotion.nearest(text, origin, dx, dy, { it.length * 10f }, 20f)
     }
 }

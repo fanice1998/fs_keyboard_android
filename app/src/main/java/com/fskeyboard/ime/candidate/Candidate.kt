@@ -4,7 +4,7 @@ internal enum class CandidateSource {
     RIME,
     SYNTHETIC,
 
-    /** Offered with nothing typed, such as punctuation after a particle. It uses no syllables. */
+    /** Offered from learned symbol frequency, with nothing being composed. It uses no syllables. */
     SUGGESTION,
 
     /**
@@ -21,6 +21,7 @@ internal enum class CandidateSource {
  * A candidate invented by a reranker uses a negative index and [CandidateSource.SYNTHETIC].
  * [span] is how many syllables, from the front of the composition, the candidate uses.
  * [reading] is the lexicon reading it was found under; empty for one the lexicon did not give.
+ * [clipboardImageUri] is set only for an image clipboard chip, so the row can draw a preview.
  */
 internal data class Candidate(
     val text: String,
@@ -30,4 +31,5 @@ internal data class Candidate(
         if (engineIndex >= 0) CandidateSource.RIME else CandidateSource.SYNTHETIC,
     val span: Int = 1,
     val reading: String = "",
+    val clipboardImageUri: String? = null,
 )

@@ -25,14 +25,17 @@ internal class KeyboardView(context: Context) : View(context) {
     /** After a touch-fired key is handled, with that touch's event time. Not for repeat or long press. */
     var onTyped: (eventUptimeMillis: Long) -> Unit = {}
 
-    /** False while zhuyin is being composed: space then stays 平聲. */
+    /** False when a space glide should stay a tap, for example while the keyboard is closed. */
     var trackpadAllowed: () -> Boolean = { false }
 
     /** Opens the cursor track. False keeps the gesture a space tap. */
     var onTrackpadStart: () -> Boolean = { false }
 
-    /** Steps are graphemes right and lines down. Returns whether the caret moved. */
-    var onCursorStep: (dx: Int, dy: Int) -> Boolean = { _, _ -> false }
+    /**
+     * Pixels from where the glide engaged, right and down.
+     * Returns whether the snapped caret moved.
+     */
+    var onCursorGlide: (dxPx: Float, dyPx: Float) -> Boolean = { _, _ -> false }
 
     /** The keys are blank and the candidate bar should fade while this is true. */
     var onTrackpadActive: (Boolean) -> Unit = {}
@@ -371,7 +374,7 @@ internal class KeyboardView(context: Context) : View(context) {
         backspaceSent = false
         when {
             spec?.action == KeyAction.Space && trackpadAllowed() -> {
-                spaceCursor = SpaceCursor(slop = dp(10).toFloat(), xPerStep = dp(8).toFloat(), yPerStep = dp(22).toFloat())
+                spaceCursor = SpaceCursor(slop = dp(10).toFloat())
                 spaceCursor?.down(x, y)
                 postDelayed(holdTrackpad, ViewConfiguration.getLongPressTimeout().toLong())
             }
@@ -394,7 +397,7 @@ internal class KeyboardView(context: Context) : View(context) {
         val index = event.findPointerIndex(downPointer)
         if (index < 0) return false
         val wasTracking = cursor.tracking
-        val steps = cursor.move(event.getX(index), event.getY(index)) ?: return false
+        val travel = cursor.move(event.getX(index), event.getY(index)) ?: return false
         if (!wasTracking) {
             if (!onTrackpadStart()) {
                 spaceCursor = null
@@ -403,12 +406,8 @@ internal class KeyboardView(context: Context) : View(context) {
             }
             showTrackpad()
         }
-        val (sx, sy) = steps
-        if ((sx != 0 || sy != 0) && onCursorStep(sx, sy)) {
-            // A fast flick can cross several graphemes in one sample. One tick per sample
-            // would add a binder call on top of setSelection and make that flick hesitate.
-            if (kotlin.math.abs(sx) + kotlin.math.abs(sy) == 1) tick()
-        }
+        val (dx, dy) = travel
+        if ((dx != 0f || dy != 0f) && onCursorGlide(dx, dy)) tick()
         return true
     }
 

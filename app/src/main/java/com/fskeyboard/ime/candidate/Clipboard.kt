@@ -4,11 +4,14 @@ import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputContentInfo
+import kotlin.math.min
 
 /**
  * What the candidate row can offer from the clipboard.
@@ -26,6 +29,9 @@ internal data class ClipOffer(
 internal const val CLIP_LABEL_LIMIT = 18
 
 internal const val IMAGE_LABEL = "圖片"
+
+/** A wide picture stays a thumbnail: at most this many times the row height. */
+internal const val CLIP_PREVIEW_WIDTH_RATIO = 4f
 
 /**
  * Blank text is not a paste. Explicit text wins over an image so a content URI
@@ -47,6 +53,50 @@ internal fun clipOffer(
         return ClipOffer(label = clipLabel(coerced), text = coerced)
     }
     return null
+}
+
+/**
+ * Fits [srcWidth] by [srcHeight] inside [maxHeight] and [maxWidth], keeping the aspect.
+ * The height is never above [maxHeight]. A non-positive size fits nothing.
+ */
+internal fun clipboardPreviewSize(
+    srcWidth: Int,
+    srcHeight: Int,
+    maxHeight: Float,
+    maxWidth: Float = maxHeight * CLIP_PREVIEW_WIDTH_RATIO,
+): Pair<Float, Float> {
+    if (srcWidth <= 0 || srcHeight <= 0 || maxHeight <= 0f) return 0f to 0f
+    val widthCap = if (maxWidth > 0f) maxWidth else maxHeight * CLIP_PREVIEW_WIDTH_RATIO
+    val scale = min(maxHeight / srcHeight, widthCap / srcWidth)
+    return srcWidth * scale to srcHeight * scale
+}
+
+/** Power-of-two sample so a decoded bitmap is at least about [targetHeight] pixels tall. */
+internal fun clipboardSampleSize(srcHeight: Int, targetHeight: Int): Int {
+    if (srcHeight <= 0 || targetHeight <= 0) return 1
+    var sample = 1
+    while (sample < 256 && srcHeight / (sample * 2) >= targetHeight) sample *= 2
+    return sample
+}
+
+/**
+ * A small bitmap for the clipboard chip, or null when the picture cannot be read.
+ * [maxHeightPx] is the candidate row, so the preview is not decoded at full size.
+ */
+internal fun decodeClipboardPreview(context: Context, uri: String, maxHeightPx: Int): Bitmap? {
+    return try {
+        val parsed = Uri.parse(uri)
+        val resolver = context.contentResolver
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        resolver.openInputStream(parsed)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = clipboardSampleSize(bounds.outHeight, maxHeightPx)
+        }
+        resolver.openInputStream(parsed)?.use { BitmapFactory.decodeStream(it, null, options) }
+    } catch (_: Exception) {
+        null
+    }
 }
 
 /** One line, trimmed, with whitespace collapsed. Longer text ends with an ellipsis. */

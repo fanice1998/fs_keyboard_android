@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SpaceCursorTest {
-    private fun cursor() = SpaceCursor(slop = 10f, xPerStep = 8f, yPerStep = 22f)
+    private fun cursor() = SpaceCursor(slop = 10f)
 
     @Test
     fun aWobbleInsideTheSlopStaysATap() {
@@ -21,55 +21,51 @@ class SpaceCursorTest {
     fun crossingTheSlopStartsTrackingWithoutSpendingThatDistance() {
         val cursor = cursor()
         cursor.down(0f, 0f)
-        assertEquals(0 to 0, cursor.move(12f, 3f))
+        assertEquals(0f to 0f, cursor.move(12f, 3f))
         assertTrue(cursor.tracking)
-        assertEquals(1 to 0, cursor.move(20f, 3f))
+        assertEquals(8f to 0f, cursor.move(20f, 3f))
     }
 
     @Test
-    fun leftoverDistanceIsKeptUntilItMakesAStep() {
+    fun travelIsMeasuredFromTheAnchorEachTime() {
+        val cursor = cursor()
+        cursor.down(0f, 0f)
+        assertEquals(0f to 0f, cursor.move(12f, 0f))
+        assertEquals(8f to 0f, cursor.move(20f, 0f))
+        assertEquals(18f to 4f, cursor.move(30f, 4f))
+    }
+
+    @Test
+    fun reversingReportsNegativeTravel() {
+        val cursor = cursor()
+        cursor.down(0f, 0f)
+        cursor.move(12f, 0f)
+        assertEquals(-4f to 0f, cursor.move(8f, 0f))
+    }
+
+    @Test
+    fun aFastSlideReportsTheWholeDistance() {
         val cursor = cursor()
         cursor.down(0f, 0f)
         cursor.move(10f, 0f)
-        assertEquals(0 to 0, cursor.move(17f, 0f))
-        assertEquals(1 to 0, cursor.move(18f, 0f))
+        assertEquals(26f to 0f, cursor.move(36f, 0f))
     }
 
     @Test
-    fun reversingUndoesThePartialStepBeforeMovingBack() {
-        val cursor = cursor()
-        cursor.down(0f, 0f)
-        cursor.move(10f, 0f)
-        cursor.move(17f, 0f)
-        assertEquals(0 to 0, cursor.move(10f, 0f))
-        assertEquals(-1 to 0, cursor.move(-1f, 0f))
-    }
-
-    @Test
-    fun aFastSlideTakesSeveralStepsAndKeepsTheFraction() {
-        val cursor = cursor()
-        cursor.down(0f, 0f)
-        cursor.move(10f, 0f)
-        assertEquals(3 to 0, cursor.move(10f + 24f + 1.6f, 0f))
-        assertEquals(0 to 0, cursor.move(10f + 24f + 1.6f + 6f, 0f))
-        assertEquals(1 to 0, cursor.move(10f + 24f + 1.6f + 8f, 0f))
-    }
-
-    @Test
-    fun verticalTravelDoesNotSpendHorizontalDistance() {
+    fun verticalTravelDoesNotChangeTheHorizontalAnchor() {
         val cursor = cursor()
         cursor.down(0f, 0f)
         cursor.move(0f, 10f)
-        assertEquals(0 to 1, cursor.move(0f, 32f))
-        assertEquals(0 to 0, cursor.move(7f, 32f))
+        assertEquals(0f to 22f, cursor.move(0f, 32f))
+        assertEquals(7f to 22f, cursor.move(7f, 32f))
     }
 
     @Test
-    fun aStillHoldTracksFromTheFingerWithoutAStep() {
+    fun aStillHoldTracksFromTheFinger() {
         val cursor = cursor()
         cursor.down(40f, 50f)
         cursor.hold()
         assertTrue(cursor.tracking)
-        assertEquals(1 to 0, cursor.move(48f, 50f))
+        assertEquals(8f to 0f, cursor.move(48f, 50f))
     }
 }

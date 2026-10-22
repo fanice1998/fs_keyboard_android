@@ -25,6 +25,16 @@ class ZhuyinCompositionTest {
     }
 
     @Test
+    fun backspaceAtTheStartOfThePendingZhuyinRestoresTheChosenWord() {
+        val composition = typed("ㄋㄧˇㄏㄠ")
+        composition.choose(word("你", span = 1))
+        composition.pending.moveCaret(0)
+        composition.backspace()
+        assertEquals("ㄋㄧˇㄏㄠ", composition.text)
+        assertEquals(3, composition.pending.caret)
+    }
+
+    @Test
     fun backspaceEditsTheZhuyinThenTurnsTheLastWordBackIntoZhuyin() {
         val composition = typed("ㄐㄧㄣㄊㄧㄢㄊ")
         composition.choose(word("今天", span = 2))

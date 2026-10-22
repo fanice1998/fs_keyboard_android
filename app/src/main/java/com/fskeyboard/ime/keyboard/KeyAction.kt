@@ -25,8 +25,9 @@ internal sealed interface KeyAction {
     /**
      * A zhuyin key. [label] is the bopomofo glyph kept in the composition.
      * [key] is the ASCII position librime's speller accepts, and is never committed.
-     * [nearby] is what [TouchModel] made of the touch that typed it, [label] included;
-     * empty when the key did not come from a touch.
+     * [nearby] is what [TouchModel] made of the touch that typed it, [label] included.
+     * The composer turns the likely neighbours into extra lexicon readings.
+     * Empty when the key did not come from a touch.
      */
     data class Bopomofo(
         val label: String,
