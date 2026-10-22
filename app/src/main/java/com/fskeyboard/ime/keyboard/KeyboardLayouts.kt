@@ -89,14 +89,20 @@ internal object KeyboardLayouts {
         val upper = shifted || capsLock
         val rows = ArrayList<KeyRow>(5)
         if (topNumberRow) {
-            rows += KeyRow(symbolKeys(split("1234567890")))
+            rows += KeyRow(symbolKeys(split("1234567890"), computerKeys, computerMap))
         }
         rows += KeyRow(letters("qwertyuiop", upper, computerKeys, computerMap))
         rows += KeyRow(letters("asdfghjkl", upper, computerKeys, computerMap), leading = 0.5f, trailing = 0.5f)
         rows += KeyRow(
-            listOf(shift(upper, capsLock)) + letters("zxcvbnm", upper, computerKeys, computerMap) + deleteKey(),
+            listOf(shift(upper, capsLock)) +
+                letters("zxcvbnm", upper, computerKeys, computerMap) +
+                deleteKey(computerKeys, computerMap),
         )
-        rows += KeyRow(
+        val comma = keyed(",", computerKeys, computerMap)
+        val period = keyed(".", computerKeys, computerMap)
+        val leading = if (computerKeys) {
+            listOf(latinCtrlKey(), latinFnKey())
+        } else {
             listOf(
                 iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.35f),
                 iconKey(
@@ -105,12 +111,9 @@ internal object KeyboardLayouts {
                     weight = 1.15f,
                     secondary = KeyAction.NextInputMethod,
                 ),
-                KeySpec(",", KeyAction.Character(',')),
-                space(),
-                KeySpec(".", KeyAction.Character('.')),
-                enterKey(enter, 1.7f),
-            ),
-        )
+            )
+        }
+        rows += KeyRow(leading + comma + space() + period + enterKey(enter, 1.7f))
         return rows
     }
 
@@ -164,10 +167,38 @@ internal object KeyboardLayouts {
     private fun split(value: String): List<String> = value.map { it.toString() }
 
     /** One character commits as typed; a longer label such as ^_^ commits as text. */
-    private fun symbolKeys(labels: List<String>): List<KeySpec> = labels.map { label ->
+    private fun symbolKeys(
+        labels: List<String>,
+        computerKeys: Boolean = false,
+        computerMap: ComputerKeyMap = ComputerKeyMap.DEFAULT,
+    ): List<KeySpec> = labels.map { label ->
         val action = if (label.length == 1) KeyAction.Character(label[0]) else KeyAction.Punctuation(label)
-        KeySpec(label, action)
+        val swipes = if (computerKeys && label.length == 1) computerMap.swipes(label[0]) else emptyMap()
+        KeySpec(label, action, swipes = swipes)
     }
+
+    private fun keyed(label: String, computerKeys: Boolean, computerMap: ComputerKeyMap): KeySpec {
+        val swipes = if (computerKeys) computerMap.swipes(label[0]) else emptyMap()
+        return KeySpec(label, KeyAction.Character(label[0]), swipes = swipes)
+    }
+
+    private fun latinCtrlKey() = KeySpec(
+        label = "Ctrl",
+        action = KeyAction.Computer(ComputerKey.CTRL),
+        weight = 1.35f,
+        role = KeyRole.MODIFIER,
+        holdKey = ComputerKey.CTRL,
+    )
+
+    private fun latinFnKey() = KeySpec(
+        label = "Fn",
+        action = KeyAction.Computer(ComputerKey.FN),
+        weight = 1.15f,
+        role = KeyRole.MODIFIER,
+        holdKey = ComputerKey.FN,
+        swipes = mapOf(SwipeDirection.UP_LEFT to ComputerKey.ALT),
+        extraSwipes = mapOf(SwipeDirection.DOWN_RIGHT to KeyAction.SetMode(KeyboardMode.ZHUYIN)),
+    )
 
     private fun letters(
         value: String,
@@ -197,22 +228,21 @@ internal object KeyboardLayouts {
         highlighted = active,
     )
 
-    private fun deleteKey() = KeySpec(
+    private fun deleteKey(
+        computerKeys: Boolean = false,
+        computerMap: ComputerKeyMap = ComputerKeyMap.DEFAULT,
+    ) = KeySpec(
         label = "",
         action = KeyAction.Backspace,
         weight = 1.5f,
         role = KeyRole.ACTION,
         icon = KeyIcon.DELETE,
+        swipes = if (computerKeys) computerMap.swipes(ComputerKeyMap.DELETE) else emptyMap(),
     )
 
     private fun enterKey(choice: EnterChoice, weight: Float): KeySpec {
-        if (choice.newline) return iconKey(KeyIcon.RETURN, KeyAction.Enter, weight)
-        return KeySpec(
-            label = choice.label.orEmpty(),
-            action = KeyAction.Enter,
-            weight = weight,
-            role = KeyRole.ACTION,
-        )
+        val icon = if (choice.confirming) KeyIcon.CHECK else KeyIcon.RETURN
+        return iconKey(icon, KeyAction.Enter, weight)
     }
 
     private fun iconKey(

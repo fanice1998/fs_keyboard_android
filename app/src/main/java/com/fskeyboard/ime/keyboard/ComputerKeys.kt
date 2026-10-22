@@ -28,7 +28,8 @@ internal enum class ComputerKey(
     PAGE_UP("PgUp", KeyEvent.KEYCODE_PAGE_UP),
     PAGE_DOWN("PgDn", KeyEvent.KEYCODE_PAGE_DOWN),
     FORWARD_DELETE("Del", KeyEvent.KEYCODE_FORWARD_DEL),
-    META("Meta", KeyEvent.KEYCODE_META_LEFT, modifier = true),
+    META("⌘", KeyEvent.KEYCODE_META_LEFT, modifier = true),
+    FN("Fn", KeyEvent.KEYCODE_FUNCTION, modifier = true),
     BANG("!", KeyEvent.KEYCODE_UNKNOWN, symbol = '!'),
     AT("@", KeyEvent.KEYCODE_UNKNOWN, symbol = '@'),
     HASH("#", KeyEvent.KEYCODE_UNKNOWN, symbol = '#'),
@@ -75,6 +76,7 @@ internal enum class ComputerKey(
             CTRL -> KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
             ALT -> KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON
             META -> KeyEvent.META_META_ON or KeyEvent.META_META_LEFT_ON
+            FN -> KeyEvent.META_FUNCTION_ON
             else -> 0
         }
 }
@@ -118,8 +120,9 @@ internal enum class SwipeDirection(val arrow: String) {
 internal data class ComputerSlot(val letter: Char, val direction: SwipeDirection)
 
 /**
- * Which computer key a swipe on an English letter sends.
- * Each [ComputerKey] belongs to at most one slot. [assign] refuses a key that already has a slot.
+ * Which computer key a swipe on an English key sends.
+ * Each [ComputerKey] belongs to at most one key. That key may use it on more than one direction.
+ * [assign] refuses a key that already belongs to a different key.
  */
 internal class ComputerKeyMap private constructor(
     private val bindings: Map<ComputerSlot, ComputerKey>,
@@ -141,32 +144,32 @@ internal class ComputerKeyMap private constructor(
     }
 
     /**
-     * Puts [key] on this letter and direction.
-     * Returns null when the key is already on a different slot, or the letter is not a-z.
-     * The same slot may replace its own key, which frees the previous one.
+     * Puts [key] on this key and direction.
+     * Returns null when the key is already on a different key, or this is not a swipeable key.
+     * The same key may use it on more than one direction. Replacing one direction frees nothing else.
      */
     fun assign(letter: Char, direction: SwipeDirection, key: ComputerKey): ComputerKeyMap? {
-        val lower = letter.lowercaseChar()
-        if (lower !in 'a'..'z') return null
-        val slot = ComputerSlot(lower, direction)
+        val token = swipeToken(letter) ?: return null
+        val slot = ComputerSlot(token, direction)
         if (bindings[slot] == key) return this
         val taken = owner(key)
-        if (taken != null && taken != slot) return null
+        if (taken != null && taken.letter != token) return null
         return ComputerKeyMap(bindings + (slot to key))
     }
 
     fun clear(letter: Char, direction: SwipeDirection): ComputerKeyMap {
-        val slot = ComputerSlot(letter.lowercaseChar(), direction)
+        val token = swipeToken(letter) ?: return this
+        val slot = ComputerSlot(token, direction)
         if (slot !in bindings) return this
         return ComputerKeyMap(bindings - slot)
     }
 
-    /** `q/up=esc,w/up=tab`. Empty when nothing is assigned. */
+    /** `q/down_right=esc,./left=left,del/up_right=forward_delete`. Empty when nothing is assigned. */
     fun encode(): String {
         return bindings.entries
-            .sortedWith(compareBy({ it.key.letter }, { it.key.direction.ordinal }))
+            .sortedWith(compareBy({ it.key.letter.code }, { it.key.direction.ordinal }))
             .joinToString(",") { (slot, key) ->
-                "${slot.letter}/${slot.direction.name.lowercase()}=${key.name.lowercase()}"
+                "${tokenName(slot.letter)}/${slot.direction.name.lowercase()}=${key.name.lowercase()}"
             }
     }
 
@@ -179,74 +182,163 @@ internal class ComputerKeyMap private constructor(
     companion object {
         val EMPTY = ComputerKeyMap(emptyMap())
 
-        /** The upward map from before directions could be edited. */
+        /** Delete key in the stored map. It is not a typed character. */
+        const val DELETE = '\u0008'
+
+        /** The English computer-key gestures used until the user edits them. */
         val DEFAULT = ComputerKeyMap(
-            mapOf(
-                ComputerSlot('q', SwipeDirection.UP) to ComputerKey.ESC,
-                ComputerSlot('w', SwipeDirection.UP) to ComputerKey.TAB,
-                ComputerSlot('e', SwipeDirection.UP) to ComputerKey.CTRL,
-                ComputerSlot('r', SwipeDirection.UP) to ComputerKey.ALT,
-                ComputerSlot('t', SwipeDirection.UP) to ComputerKey.UP,
-                ComputerSlot('y', SwipeDirection.UP) to ComputerKey.DOWN,
-                ComputerSlot('u', SwipeDirection.UP) to ComputerKey.LEFT,
-                ComputerSlot('i', SwipeDirection.UP) to ComputerKey.RIGHT,
-                ComputerSlot('o', SwipeDirection.UP) to ComputerKey.HOME,
-                ComputerSlot('p', SwipeDirection.UP) to ComputerKey.END,
-                ComputerSlot('a', SwipeDirection.UP) to ComputerKey.PAGE_UP,
-                ComputerSlot('s', SwipeDirection.UP) to ComputerKey.PAGE_DOWN,
-                ComputerSlot('d', SwipeDirection.UP) to ComputerKey.FORWARD_DELETE,
-                ComputerSlot('f', SwipeDirection.UP) to ComputerKey.META,
-            ),
+            listOf(
+                slot('q', SwipeDirection.DOWN_RIGHT, ComputerKey.ESC),
+                slot('a', SwipeDirection.UP_LEFT, ComputerKey.TAB),
+                slot('1', SwipeDirection.DOWN_RIGHT, ComputerKey.BANG),
+                slot('2', SwipeDirection.DOWN_RIGHT, ComputerKey.AT),
+                slot('3', SwipeDirection.DOWN_RIGHT, ComputerKey.HASH),
+                slot('4', SwipeDirection.DOWN_RIGHT, ComputerKey.DOLLAR),
+                slot('5', SwipeDirection.DOWN_RIGHT, ComputerKey.PERCENT),
+                slot('6', SwipeDirection.DOWN_LEFT, ComputerKey.CARET),
+                slot('7', SwipeDirection.DOWN_LEFT, ComputerKey.AMPERSAND),
+                slot('8', SwipeDirection.DOWN_LEFT, ComputerKey.STAR),
+                slot('9', SwipeDirection.DOWN_LEFT, ComputerKey.PAREN_LEFT),
+                slot('0', SwipeDirection.DOWN_LEFT, ComputerKey.PAREN_RIGHT),
+                slot('w', SwipeDirection.DOWN_LEFT, ComputerKey.DOUBLE_QUOTE),
+                slot('g', SwipeDirection.DOWN_LEFT, ComputerKey.UNDERSCORE),
+                slot('g', SwipeDirection.UP_RIGHT, ComputerKey.MINUS),
+                slot('h', SwipeDirection.DOWN_LEFT, ComputerKey.PLUS),
+                slot('h', SwipeDirection.UP_RIGHT, ComputerKey.EQUALS),
+                slot('j', SwipeDirection.DOWN_LEFT, ComputerKey.BRACE_LEFT),
+                slot('j', SwipeDirection.DOWN_RIGHT, ComputerKey.BRACE_RIGHT),
+                slot('k', SwipeDirection.DOWN_LEFT, ComputerKey.BRACKET_LEFT),
+                slot('k', SwipeDirection.DOWN_RIGHT, ComputerKey.BRACKET_RIGHT),
+                slot('l', SwipeDirection.DOWN_LEFT, ComputerKey.QUOTE),
+                slot('l', SwipeDirection.UP_RIGHT, ComputerKey.TILDE),
+                slot('z', SwipeDirection.DOWN_LEFT, ComputerKey.BACKSLASH),
+                slot('z', SwipeDirection.DOWN_RIGHT, ComputerKey.PIPE),
+                slot('c', SwipeDirection.UP_RIGHT, ComputerKey.LESS),
+                slot('v', SwipeDirection.UP_RIGHT, ComputerKey.GREATER),
+                slot('b', SwipeDirection.DOWN_LEFT, ComputerKey.SLASH),
+                slot('b', SwipeDirection.UP_RIGHT, ComputerKey.QUESTION),
+                slot('n', SwipeDirection.UP_RIGHT, ComputerKey.COLON),
+                slot('n', SwipeDirection.DOWN_RIGHT, ComputerKey.SEMICOLON),
+                slot('.', SwipeDirection.LEFT, ComputerKey.LEFT),
+                slot('.', SwipeDirection.UP, ComputerKey.UP),
+                slot('.', SwipeDirection.RIGHT, ComputerKey.RIGHT),
+                slot('.', SwipeDirection.DOWN, ComputerKey.DOWN),
+                slot(DELETE, SwipeDirection.UP_RIGHT, ComputerKey.FORWARD_DELETE),
+                slot('u', SwipeDirection.UP_LEFT, ComputerKey.HOME),
+                slot('d', SwipeDirection.DOWN_RIGHT, ComputerKey.END),
+                slot(',', SwipeDirection.DOWN_RIGHT, ComputerKey.META),
+            ).toMap(),
         )
+
+        private fun slot(letter: Char, direction: SwipeDirection, key: ComputerKey) =
+            ComputerSlot(letter, direction) to key
+
+        private fun tokenName(letter: Char): String = when (letter) {
+            DELETE -> "del"
+            ',' -> "comma"
+            else -> letter.toString()
+        }
+
+        private fun parseToken(raw: String): Char? {
+            val text = raw.trim()
+            if (text.equals("del", ignoreCase = true)) return DELETE
+            if (text.equals("comma", ignoreCase = true)) return ','
+            if (text.length != 1) return null
+            return swipeToken(text[0])
+        }
 
         private val directions = SwipeDirection.values().associateBy { it.name.lowercase() }
         private val keys = ComputerKey.values().associateBy { it.name.lowercase() }
 
-        /** Unknown tokens are skipped. A repeated computer key keeps the first slot. */
+        /**
+         * Unknown tokens are skipped.
+         * The same computer key may repeat on one key. A different key keeps the first one.
+         */
         fun decode(stored: String): ComputerKeyMap {
             if (stored.isBlank()) return EMPTY
             val bindings = linkedMapOf<ComputerSlot, ComputerKey>()
-            val used = mutableSetOf<ComputerKey>()
             for (part in stored.split(',')) {
                 val token = part.trim()
                 val slotSep = token.indexOf('/')
                 val eq = token.indexOf('=')
                 if (slotSep <= 0 || eq <= slotSep + 1 || eq >= token.length - 1) continue
-                val letter = token.substring(0, slotSep).singleOrNull()?.lowercaseChar() ?: continue
-                if (letter !in 'a'..'z') continue
+                val letter = parseToken(token.substring(0, slotSep)) ?: continue
                 val direction = directions[token.substring(slotSep + 1, eq).trim().lowercase()] ?: continue
                 val key = keys[token.substring(eq + 1).trim().lowercase()] ?: continue
-                if (!used.add(key)) continue
-                bindings[ComputerSlot(letter, direction)] = key
+                val slot = ComputerSlot(letter, direction)
+                val owner = bindings.entries.firstOrNull { it.value == key }?.key
+                if (owner != null && owner.letter != letter) continue
+                bindings[slot] = key
             }
             return ComputerKeyMap(bindings)
         }
     }
 }
 
+/** Letters, digits, comma, period, and the delete key can own swipe directions. */
+internal fun swipeToken(value: Char): Char? {
+    if (value == ComputerKeyMap.DELETE) return value
+    val token = value.lowercaseChar()
+    if (token in 'a'..'z' || token in '0'..'9' || token == '.' || token == ',') return token
+    return null
+}
+
+/** Token edited from the settings keyboard, or null when that key has no directions. */
+internal fun swipeKeyToken(spec: KeySpec): Char? {
+    val action = spec.action
+    if (action is KeyAction.Character) return swipeToken(action.value)
+    if (action == KeyAction.Backspace) return ComputerKeyMap.DELETE
+    return null
+}
+
 /**
- * Ctrl, Alt, and Meta selected by a swipe.
- * Tapping the same one again removes it. A following key consumes the set.
+ * Ctrl, Alt, Fn, and Command selected by a tap or a swipe.
+ * A tap arms the modifier until the next key.
+ * Holding for the long-press delay locks it, and it stays after the finger lifts until that key is tapped again.
  */
 internal class ComputerModifiers {
     private val armed = linkedSetOf<ComputerKey>()
+    private val held = linkedSetOf<ComputerKey>()
 
-    fun active(): Set<ComputerKey> = armed.toSet()
+    fun active(): Set<ComputerKey> = (armed + held).toSet()
 
-    fun isActive(): Boolean = armed.isNotEmpty()
+    /** Modifiers locked by a hold. They stay until [hold] is called with down false. */
+    fun locked(): Set<ComputerKey> = held.toSet()
+
+    fun isActive(): Boolean = armed.isNotEmpty() || held.isNotEmpty()
+
+    fun hasLatched(): Boolean = armed.isNotEmpty()
 
     fun toggle(key: ComputerKey) {
         if (!key.modifier) return
         if (!armed.add(key)) armed.remove(key)
     }
 
+    /** Locks [key], or unlocks it and drops a one-shot of the same key. */
+    fun hold(key: ComputerKey, down: Boolean) {
+        if (!key.modifier) return
+        if (down) {
+            held.add(key)
+        } else {
+            held.remove(key)
+            armed.remove(key)
+        }
+    }
+
+    /** Drops one-shot modifiers. A finger that is still down keeps its modifier. */
+    fun clearLatched() {
+        armed.clear()
+    }
+
     fun clear() {
         armed.clear()
+        held.clear()
     }
 
     fun metaState(shift: Boolean = false): Int {
         var meta = if (shift) KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON else 0
         for (key in armed) meta = meta or key.metaState
+        for (key in held) meta = meta or key.metaState
         return meta
     }
 }

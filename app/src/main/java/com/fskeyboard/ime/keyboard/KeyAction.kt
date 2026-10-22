@@ -66,9 +66,32 @@ internal data class KeySpec(
     val highlighted: Boolean = false,
     val icon: KeyIcon? = null,
     val secondary: KeyAction? = null,
+    /** Held while the finger stays down, instead of the tap action. */
+    val holdKey: ComputerKey? = null,
     /** Computer keys reached by swiping this key. Empty keeps a normal tap. */
     val swipes: Map<SwipeDirection, ComputerKey> = emptyMap(),
+    /** Swipe actions that are not computer keys, such as switching language. */
+    val extraSwipes: Map<SwipeDirection, KeyAction> = emptyMap(),
 )
+
+internal fun KeySpec.swipeAction(direction: SwipeDirection): KeyAction? {
+    extraSwipes[direction]?.let { return it }
+    return swipes[direction]?.let { KeyAction.Computer(it) }
+}
+
+internal fun KeySpec.swipeLabels(): Map<SwipeDirection, String> {
+    val labels = linkedMapOf<SwipeDirection, String>()
+    for ((direction, key) in swipes) labels[direction] = key.label
+    for ((direction, action) in extraSwipes) {
+        val text = when (action) {
+            is KeyAction.Computer -> action.key.label
+            is KeyAction.SetMode -> if (action.mode == KeyboardMode.ZHUYIN) "注" else "En"
+            else -> null
+        }
+        if (text != null) labels[direction] = text
+    }
+    return labels
+}
 
 internal data class KeyRow(
     val keys: List<KeySpec>,

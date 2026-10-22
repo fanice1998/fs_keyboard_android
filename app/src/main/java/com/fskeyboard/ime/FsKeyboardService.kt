@@ -87,7 +87,9 @@ class FsKeyboardService : InputMethodService() {
             connection = { currentInputConnection },
             editorInfo = { currentInputEditorInfo },
             onUi = ::render,
+            letterMode = { KeyboardPreferences(this).letterMode() },
         )
+        controller.onLetterMode = { mode -> KeyboardPreferences(this).setLetterMode(mode) }
         controller.start()
     }
 
@@ -156,6 +158,12 @@ class FsKeyboardService : InputMethodService() {
         }
         controller.onComputerModifiers = { armed ->
             keyboard?.armedComputerKeys = armed
+        }
+        controller.onLockedModifiers = { locked ->
+            keyboard?.lockedComputerKeys = locked
+        }
+        keyboard?.onModifierHold = { key, down ->
+            controller.setModifierHeld(key, down)
         }
         val spacer = View(this)
         val initial = KeyboardInsets.resolve(
@@ -451,7 +459,7 @@ class FsKeyboardService : InputMethodService() {
         traced("ime.render") {
             keyboard?.setMode(state.mode, state.base)
             val enterChoice = if (state.hasUnconfirmedText) {
-                EnterChoice(label = "確認")
+                EnterChoice(confirming = true)
             } else {
                 EnterActions.choose(currentInputEditorInfo)
             }

@@ -8,6 +8,7 @@ import android.graphics.RectF
 internal enum class KeyIcon {
     DELETE,
     RETURN,
+    CHECK,
     GLOBE,
     SYMBOLS,
 }
@@ -30,6 +31,7 @@ internal object KeyIcons {
         when (icon) {
             KeyIcon.DELETE -> drawDelete(canvas, paint)
             KeyIcon.RETURN -> drawReturn(canvas, paint)
+            KeyIcon.CHECK -> drawCheck(canvas, paint)
             KeyIcon.GLOBE -> drawGlobe(canvas, paint)
             KeyIcon.SYMBOLS -> drawSymbols(canvas, paint)
         }
@@ -47,6 +49,14 @@ internal object KeyIcons {
         canvas.drawPath(path, paint)
         canvas.drawLine(11.5f, 9f, 17f, 15f, paint)
         canvas.drawLine(17f, 9f, 11.5f, 15f, paint)
+    }
+
+    private fun drawCheck(canvas: Canvas, paint: Paint) {
+        path.reset()
+        path.moveTo(5f, 12.5f)
+        path.lineTo(10f, 18f)
+        path.lineTo(19.5f, 6.5f)
+        canvas.drawPath(path, paint)
     }
 
     private fun drawReturn(canvas: Canvas, paint: Paint) {

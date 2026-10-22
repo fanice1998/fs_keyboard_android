@@ -27,8 +27,14 @@ class KeyboardLayoutTest {
             KeyboardMode.LATIN,
             enter = EnterChoice(label = "搜尋", actionId = 3),
         ).flatMap { it.keys }.first { it.action == KeyAction.Enter }
-        assertEquals("搜尋", search.label)
-        assertEquals(null, search.icon)
+        assertEquals("", search.label)
+        assertEquals(KeyIcon.RETURN, search.icon)
+        val check = KeyboardLayouts.rows(
+            KeyboardMode.LATIN,
+            enter = EnterChoice(label = "搜尋", actionId = 3, confirming = true),
+        ).flatMap { it.keys }.first { it.action == KeyAction.Enter }
+        assertEquals("", check.label)
+        assertEquals(KeyIcon.CHECK, check.icon)
         assertTrue(specs.any { it.icon == KeyIcon.GLOBE && it.action == KeyAction.SetMode(KeyboardMode.ZHUYIN) })
     }
 

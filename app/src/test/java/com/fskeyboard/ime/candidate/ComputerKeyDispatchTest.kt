@@ -144,4 +144,73 @@ class ComputerKeyDispatchTest {
         assertEquals(listOf("!"), handler.committed)
         assertEquals(listOf(setOf(ComputerKey.CTRL), emptySet()), armed)
     }
+
+    @Test
+    fun aHeldModifierStaysWhileTheNextLetterIsSent() {
+        val handler = RecordingConnection()
+        val armed = ArrayList<Set<ComputerKey>>()
+        val controller = controller(handler)
+        controller.onComputerModifiers = { armed += it }
+
+        controller.setModifierHeld(ComputerKey.CTRL, true)
+        assertEquals(listOf(setOf(ComputerKey.CTRL)), armed)
+        assertTrue(handler.events.isEmpty())
+
+        controller.onKey(KeyAction.Character('c'))
+        assertEquals(2, handler.events.size)
+        assertEquals(listOf(setOf(ComputerKey.CTRL)), armed)
+
+        controller.setModifierHeld(ComputerKey.CTRL, false)
+        assertEquals(listOf(setOf(ComputerKey.CTRL), emptySet()), armed)
+        assertEquals(2, handler.events.size)
+    }
+
+    @Test
+    fun aSymbolClearsAOneShotAndKeepsAHeldModifier() {
+        val handler = RecordingConnection()
+        val armed = ArrayList<Set<ComputerKey>>()
+        val controller = controller(handler)
+        controller.onComputerModifiers = { armed += it }
+
+        controller.setModifierHeld(ComputerKey.ALT, true)
+        controller.onKey(KeyAction.Computer(ComputerKey.CTRL))
+        controller.onKey(KeyAction.Computer(ComputerKey.BANG))
+        assertTrue(handler.events.isEmpty())
+        assertEquals(listOf("!"), handler.committed)
+        assertEquals(
+            listOf(
+                setOf(ComputerKey.ALT),
+                setOf(ComputerKey.ALT, ComputerKey.CTRL),
+                setOf(ComputerKey.ALT),
+            ),
+            armed,
+        )
+    }
+
+    private fun controller(handler: RecordingConnection): CandidateController {
+        val connection = Proxy.newProxyInstance(
+            InputConnection::class.java.classLoader,
+            arrayOf(InputConnection::class.java),
+            handler,
+        ) as InputConnection
+        val context = object : android.content.ContextWrapper(null) {}
+        val lexicon = object : ZhuyinLexicon {
+            override val status = com.fskeyboard.ime.engine.EngineStatus.READY
+            override val statusDetail = ""
+            override val isReady = true
+            override fun start(context: Context, onReady: () -> Unit) = Unit
+            override fun close() = Unit
+            override fun lookup(queries: List<String>, before: String) = emptyList<Candidate>()
+            override fun learn(phrases: List<Pair<String, String>>) = Unit
+        }
+        return CandidateController(
+            context = context,
+            lexicon = lexicon,
+            pipeline = CandidatePipeline(),
+            connection = { connection },
+            editorInfo = { EditorInfo() },
+            onUi = {},
+            post = { it.run() },
+        )
+    }
 }

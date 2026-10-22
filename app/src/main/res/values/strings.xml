@@ -20,9 +20,9 @@
     <string name="latin_top_number_row_switch">開啟英文鍵盤頂層數字鍵</string>
     <string name="latin_top_number_row_summary">開啟時，在英文鍵盤頂部額外顯示一排獨立的數字按鍵（1～0）。關閉後恢復為標準四排鍵盤。</string>
     <string name="latin_computer_keys_switch">英文鍵盤電腦特殊鍵</string>
-    <string name="latin_computer_keys_summary">開啟後，英文鍵盤的字母可以往八個方向滑出快捷鍵。沒有改過時，往上滑是 Esc、Tab、Ctrl、Alt、方向鍵、Home、End、PgUp、PgDn、Del 和 Meta。方向也可以指定鍵盤符號，例如 ! @ #、引號、括號、標點，以及 … — · ° ± × ÷，滑過去會打出那個符號。Ctrl、Alt、Meta 會加在下一個按鍵上，再滑一次就取消。滑向沒有設定的方向不會打出字母。</string>
-    <string name="computer_key_editor_hint">點一個字母，再點一個方向，指定快捷鍵或符號。已經用在別的字母或方向上的不能再選，要先清除原本的位置。</string>
-    <string name="computer_key_pick_letter">先點選一個字母</string>
+    <string name="latin_computer_keys_summary">開啟後，英文鍵盤的字母、數字、逗號、句號和刪除鍵可以往八個方向滑出快捷鍵或符號。左下角點一下是 Ctrl，語言鍵點一下是 Fn，語言鍵往左上滑是 Alt，逗號往右下滑是 ⌘。這些點一下或滑一下只加在下一個按鍵上，再做一次就取消。按住約 0.4 秒後放開則保持按下，再點一次原來的按鍵才取消。語言鍵往右下滑切換注音。滑向沒有設定的方向不會打出字。</string>
+    <string name="computer_key_editor_hint">點一個按鍵，再點一個方向，指定快捷鍵或符號。已經用在別的按鍵上的不能再選，要先清除原本的位置。同一個按鍵的不同方向可以重複。</string>
+    <string name="computer_key_pick_letter">先點選一個按鍵</string>
     <string name="computer_key_letter">正在設定 %1$s</string>
     <string name="computer_key_clear">清除</string>
     <string name="computer_key_reset">還原預設</string>

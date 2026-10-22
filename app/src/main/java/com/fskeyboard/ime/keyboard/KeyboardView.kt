@@ -19,6 +19,9 @@ import com.fskeyboard.ime.ui.isNightMode
 internal class KeyboardView(context: Context) : View(context) {
     var onKey: (KeyAction) -> Unit = {}
 
+    /** Locks a modifier after a long press, or unlocks it when its key is tapped again. */
+    var onModifierHold: (ComputerKey, Boolean) -> Unit = { _, _ -> }
+
     /** After a touch-fired key is handled, with that touch's event time. Not for repeat or long press. */
     var onTyped: (eventUptimeMillis: Long) -> Unit = {}
 
@@ -82,7 +85,7 @@ internal class KeyboardView(context: Context) : View(context) {
         }
 
     /**
-     * When set, a tap on a letter reports that letter and the key does not type.
+     * When set, a tap on a letter, digit, comma, period, or delete reports that key and does not type.
      * Swipes, long-press, and the space trackpad stay off.
      */
     var onLetterPick: ((Char) -> Unit)? = null
@@ -96,13 +99,16 @@ internal class KeyboardView(context: Context) : View(context) {
             invalidate()
         }
 
-    /** Ctrl, Alt, or Meta waiting for the next key. Their labels stay highlighted. */
+    /** One-shot and locked modifiers. Their labels stay highlighted. */
     var armedComputerKeys: Set<ComputerKey> = emptySet()
         set(value) {
             if (field == value) return
             field = value
             invalidate()
         }
+
+    /** Modifiers that stay down after the finger lifts, until their key is tapped. */
+    var lockedComputerKeys: Set<ComputerKey> = emptySet()
 
     /** Whether key presses produce haptic vibration feedback. */
     var vibrationEnabled: Boolean = true
@@ -145,6 +151,8 @@ internal class KeyboardView(context: Context) : View(context) {
     private var spaceCursor: SpaceCursor? = null
     private var swipe: KeySwipe? = null
     private var swipeDirection: SwipeDirection? = null
+    private var backspaceSent = false
+    private val modifierHolds = ArrayList<Pair<Int, ComputerKey>>()
     private var trackpad = false
     private var zhuyinAreas: List<KeyArea> = emptyList()
     private var gap = 0f
@@ -162,17 +170,33 @@ internal class KeyboardView(context: Context) : View(context) {
     private val repeat = object : Runnable {
         override fun run() {
             val spec = down?.spec ?: return
-            if (spec.action != KeyAction.Backspace) return
+            if (spec.action != KeyAction.Backspace || swipeDirection != null) return
+            backspaceSent = true
             dispatch(spec.action)
             postDelayed(this, 45L)
         }
     }
 
     private val longPress = Runnable {
-        val action = down?.spec?.secondary ?: return@Runnable
+        val spec = down?.spec ?: return@Runnable
+        val hold = spec.holdKey
+        if (hold != null && swipeDirection == null) {
+            beginHold(hold)
+            return@Runnable
+        }
+        val action = spec.secondary ?: return@Runnable
         release()
         buzz()
         fire(action)
+    }
+
+    /** A modifier swipe becomes a hold when the finger stays in that direction. */
+    private val holdSwipe = Runnable {
+        val direction = swipeDirection ?: return@Runnable
+        val action = down?.spec?.swipeAction(direction) ?: return@Runnable
+        val key = (action as? KeyAction.Computer)?.key ?: return@Runnable
+        if (!key.modifier) return@Runnable
+        beginHold(key)
     }
 
     /** A still finger on space becomes a trackpad, the way a hold does on iOS. */
@@ -204,6 +228,8 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     override fun onDetachedFromWindow() {
+        releaseAllHolds()
+        stopRepeat()
         previewFramePosted = false
         endPreview(linger = false)
         super.onDetachedFromWindow()
@@ -214,9 +240,12 @@ internal class KeyboardView(context: Context) : View(context) {
         canvas.drawColor(palette.background)
         val radius = dp(11).toFloat()
         for (box in boxes) {
-            val marked = markedLetter != null &&
-                (box.spec.action as? KeyAction.Character)?.value?.lowercaseChar() == markedLetter
-            val pressed = !trackpad && (box == down || box.spec.highlighted || marked)
+            val marked = markedLetter != null && swipeKeyToken(box.spec) == markedLetter
+            val faceKey = (box.spec.action as? KeyAction.Computer)?.key
+            val faceArmed = faceKey != null && faceKey in armedComputerKeys
+            val lockHeld = box.spec.holdKey in lockedComputerKeys ||
+                box.spec.swipes.values.any { it in lockedComputerKeys }
+            val pressed = !trackpad && (box == down || box.spec.highlighted || marked || faceArmed || lockHeld)
             fill.color = when {
                 trackpad -> palette.key
                 pressed -> palette.keyPressed
@@ -231,7 +260,7 @@ internal class KeyboardView(context: Context) : View(context) {
                 KeyIcons.draw(canvas, icon, draw, palette.text, iconPaint)
             } else if (box.spec.label.isNotEmpty()) {
                 label.color = if (box.spec.role == KeyRole.SPACE) palette.hint else palette.text
-                val hasSwipes = box.spec.swipes.isNotEmpty()
+                val hasSwipes = box.spec.swipes.isNotEmpty() || box.spec.extraSwipes.isNotEmpty()
                 label.textSize = when {
                     box.spec.label.length >= 6 -> sp(11f)
                     box.spec.label.length >= 4 -> sp(13f)
@@ -251,8 +280,8 @@ internal class KeyboardView(context: Context) : View(context) {
                     val secY = draw.top - secondaryLabel.ascent() + dp(2)
                     canvas.drawText(secondary.value.toString(), secX, secY, secondaryLabel)
                 }
-                drawSwipeLabels(canvas, box, draw, palette)
             }
+            drawSwipeLabels(canvas, box, draw, palette)
         }
     }
 
@@ -278,15 +307,19 @@ internal class KeyboardView(context: Context) : View(context) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 parent?.requestDisallowInterceptTouchEvent(false)
                 val index = event.actionIndex
-                if (event.getPointerId(index) != downPointer) return true
+                val pointer = event.getPointerId(index)
+                if (modifierHolds.any { it.first == pointer }) {
+                    releaseHold(pointer)
+                    if (pointer == downPointer) release()
+                    return true
+                }
+                if (pointer != downPointer) return true
                 if (onLetterPick != null) {
                     val box = down
-                    val letter = (box?.spec?.action as? KeyAction.Character)?.value
+                    val token = box?.spec?.let { swipeKeyToken(it) }
                     val stillOnKey = box != null && box == hit(event.getX(index), event.getY(index))
                     release()
-                    if (stillOnKey && letter != null && letter.isLetter()) {
-                        onLetterPick?.invoke(letter.lowercaseChar())
-                    }
+                    if (stillOnKey && token != null) onLetterPick?.invoke(token)
                     return true
                 }
                 val box = down
@@ -296,20 +329,24 @@ internal class KeyboardView(context: Context) : View(context) {
                     event.getX(index) - downX,
                     event.getY(index) - downY,
                 )
-                val computer = direction?.let { box?.spec?.swipes[it] }
-                val linger = computer != null ||
-                    (direction == null && !tracking && box != null && box == released && KeyPreview.visible(box.spec))
-                release(lingerPreview = linger)
-                when {
-                    computer != null -> fire(KeyAction.Computer(computer), event.eventTime)
-                    direction != null -> Unit
-                    !tracking && box != null && box == released && box.spec.action != KeyAction.Backspace ->
-                        fire(box.spec.action, event.eventTime)
+                val tapped = box != null && !tracking && direction == null && box == released
+                val unlocked = tapped && unlockLockedModifiers(box.spec)
+                val action = when {
+                    box == null || tracking || unlocked -> null
+                    direction != null -> box.spec.swipeAction(direction)
+                    box != released -> null
+                    box.spec.action == KeyAction.Backspace && backspaceSent -> null
+                    else -> box.spec.action
                 }
+                val linger = action != null && box != null &&
+                    (direction != null || (box == released && KeyPreview.visible(box.spec)))
+                release(lingerPreview = linger)
+                if (action != null) fire(action, event.eventTime)
             }
             MotionEvent.ACTION_CANCEL -> {
                 parent?.requestDisallowInterceptTouchEvent(false)
                 release()
+                releaseAllHolds()
             }
         }
         return true
@@ -328,17 +365,23 @@ internal class KeyboardView(context: Context) : View(context) {
         // so a window call does not hold the highlight back.
         if (spec != null && vibrationEnabled) buzz()
         armPreview(down)
-        swipe = if (spec?.swipes?.isNotEmpty() == true) KeySwipe(slop = dp(22).toFloat()) else null
+        val hasSwipes = spec != null && (spec.swipes.isNotEmpty() || spec.extraSwipes.isNotEmpty())
+        swipe = if (hasSwipes) KeySwipe(slop = dp(22).toFloat()) else null
         swipeDirection = null
-        if (spec?.action == KeyAction.Space && trackpadAllowed()) {
-            spaceCursor = SpaceCursor(slop = dp(10).toFloat(), xPerStep = dp(8).toFloat(), yPerStep = dp(22).toFloat())
-            spaceCursor?.down(x, y)
-            postDelayed(holdTrackpad, ViewConfiguration.getLongPressTimeout().toLong())
-        } else if (spec?.action == KeyAction.Backspace) {
-            fire(spec.action, eventTime)
-            postDelayed(repeat, 320L)
-        } else if (spec?.secondary != null) {
-            postDelayed(longPress, 400L)
+        backspaceSent = false
+        when {
+            spec?.action == KeyAction.Space && trackpadAllowed() -> {
+                spaceCursor = SpaceCursor(slop = dp(10).toFloat(), xPerStep = dp(8).toFloat(), yPerStep = dp(22).toFloat())
+                spaceCursor?.down(x, y)
+                postDelayed(holdTrackpad, ViewConfiguration.getLongPressTimeout().toLong())
+            }
+            spec?.action == KeyAction.Backspace && !hasSwipes -> {
+                backspaceSent = true
+                fire(spec.action, eventTime)
+                postDelayed(repeat, 320L)
+            }
+            spec?.action == KeyAction.Backspace -> postDelayed(repeat, 320L)
+            spec?.holdKey != null || spec?.secondary != null -> postDelayed(longPress, 400L)
         }
     }
 
@@ -392,16 +435,21 @@ internal class KeyboardView(context: Context) : View(context) {
         val direction = gesture.move(event.getX(index) - downX, event.getY(index) - downY)
         if (direction != swipeDirection) {
             swipeDirection = direction
-            val box = down
-            val key = if (box != null && direction != null) box.spec.swipes[direction] else null
-            when {
-                key != null && box != null -> showComputerPreview(box, key)
-                direction != null -> {
-                    previewBox = null
-                    keyPreview.hide()
+            releaseHold(downPointer)
+            if (direction != null) {
+                removeCallbacks(longPress)
+                removeCallbacks(repeat)
+                scheduleHoldSwipe(direction)
+            } else {
+                removeCallbacks(holdSwipe)
+                val spec = down?.spec
+                if (spec?.action == KeyAction.Backspace) postDelayed(repeat, 320L)
+                if (spec?.holdKey != null || spec?.secondary != null) {
+                    removeCallbacks(longPress)
+                    postDelayed(longPress, 400L)
                 }
-                box != null -> armPreview(box)
             }
+            updateSwipePreview(direction)
             invalidate()
         }
         if (direction != null) return true
@@ -410,39 +458,125 @@ internal class KeyboardView(context: Context) : View(context) {
         return true
     }
 
-    private fun showComputerPreview(box: KeyBox, key: ComputerKey) {
+    private fun scheduleHoldSwipe(direction: SwipeDirection) {
+        removeCallbacks(holdSwipe)
+        val key = (down?.spec?.swipeAction(direction) as? KeyAction.Computer)?.key
+        if (key != null && key.modifier) postDelayed(holdSwipe, 400L)
+    }
+
+    private fun updateSwipePreview(direction: SwipeDirection?) {
+        val box = down
+        val action = if (box != null && direction != null) box.spec.swipeAction(direction) else null
+        when {
+            action is KeyAction.Computer && box != null -> showSwipePreview(box, action.key.label)
+            action is KeyAction.SetMode && box != null -> showSwipePreview(
+                box,
+                if (action.mode == KeyboardMode.ZHUYIN) "注" else "En",
+            )
+            direction != null -> {
+                previewBox = null
+                keyPreview.hide()
+            }
+            box != null -> armPreview(box)
+        }
+    }
+
+    private fun showSwipePreview(box: KeyBox, text: String) {
         if (!keyPreviewEnabled || !isAttachedToWindow) return
         previewLinger = false
         previewBox = null
         keyPreview.cancelDismiss()
-        keyPreview.show(key.label, box.rect, width)
+        keyPreview.show(text, box.rect, width)
     }
 
-    /** Commits the key still under a finger. Backspace already fired on its down. A trackpad does not. */
+    /**
+     * Commits the key still under a finger so a second finger can type.
+     * A modifier that is already held stays down. Backspace that already repeated is not sent again.
+     */
     private fun commitHeld(eventTime: Long) {
         if (trackpad) {
             release()
             return
         }
         if (onLetterPick != null) {
-            val letter = (down?.spec?.action as? KeyAction.Character)?.value
+            val token = down?.spec?.let { swipeKeyToken(it) }
             release()
-            if (letter != null && letter.isLetter()) onLetterPick?.invoke(letter.lowercaseChar())
+            if (token != null) onLetterPick?.invoke(token)
             return
         }
-        val spec = down?.spec ?: return
-        val computer = swipeDirection?.let { spec.swipes[it] }
+        if (downPointer != NO_POINTER && modifierHolds.any { it.first == downPointer }) {
+            detachHeldPointer()
+            return
+        }
+        val spec = down?.spec ?: run {
+            release()
+            return
+        }
+        val direction = swipeDirection
+        val unlocked = direction == null && unlockLockedModifiers(spec)
         val action = when {
-            computer != null -> KeyAction.Computer(computer)
-            swipeDirection != null -> null
+            unlocked -> null
+            direction != null -> spec.swipeAction(direction)
+            spec.action == KeyAction.Backspace && backspaceSent -> null
             else -> spec.action
         }
-        val linger = computer != null || (swipeDirection == null && KeyPreview.visible(spec))
+        val linger = action != null && (direction != null || KeyPreview.visible(spec))
         release(lingerPreview = linger)
-        if (action != null && action != KeyAction.Backspace) fire(action, eventTime)
+        if (action != null) fire(action, eventTime)
+    }
+
+    /** Drops the gesture under the current finger without lifting a modifier it is holding. */
+    private fun detachHeldPointer() {
+        stopRepeat()
+        removeCallbacks(holdTrackpad)
+        swipe = null
+        swipeDirection = null
+        down = null
+        downPointer = NO_POINTER
+        endPreview(linger = false)
+        invalidate()
+    }
+
+    private fun beginHold(key: ComputerKey) {
+        val pointer = downPointer
+        if (pointer == NO_POINTER) return
+        modifierHolds.removeAll { it.first == pointer }
+        modifierHolds += pointer to key
+        onModifierHold(key, true)
+        removeCallbacks(longPress)
+        removeCallbacks(holdSwipe)
+        buzz()
+        invalidate()
+    }
+
+    /** Forgets the finger. A lock stays until the key is tapped again. */
+    private fun releaseHold(pointer: Int) {
+        modifierHolds.removeAll { it.first == pointer }
+    }
+
+    /**
+     * A tap on a key that locked Ctrl, Alt, Fn, or ⌘ releases those modifiers and types nothing.
+     * Returns true when a lock was released.
+     */
+    private fun unlockLockedModifiers(spec: KeySpec): Boolean {
+        val locked = ArrayList<ComputerKey>()
+        val hold = spec.holdKey
+        if (hold != null && hold.modifier && hold in lockedComputerKeys) locked += hold
+        for (key in spec.swipes.values) {
+            if (key.modifier && key in lockedComputerKeys && key !in locked) locked += key
+        }
+        if (locked.isEmpty()) return false
+        for (key in locked) onModifierHold(key, false)
+        return true
+    }
+
+    private fun releaseAllHolds() {
+        val pointers = modifierHolds.map { it.first }.distinct()
+        for (pointer in pointers) releaseHold(pointer)
     }
 
     private fun release(lingerPreview: Boolean = false) {
+        releaseHold(downPointer)
         stopRepeat()
         removeCallbacks(holdTrackpad)
         val wasTracking = trackpad
@@ -629,13 +763,13 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     private fun drawSwipeLabels(canvas: Canvas, box: KeyBox, draw: RectF, palette: KeyboardPalette) {
-        val swipes = box.spec.swipes
-        if (swipes.isEmpty()) return
+        val labels = box.spec.swipeLabels()
+        if (labels.isEmpty()) return
         val active = if (box == down) swipeDirection else null
         val pad = dp(2).toFloat()
-        for ((direction, key) in swipes) {
-            val text = key.label
-            val armed = key in armedComputerKeys || direction == active
+        for ((direction, text) in labels) {
+            val key = box.spec.swipes[direction]
+            val armed = (key != null && key in armedComputerKeys) || direction == active
             swipeLabel.textSize = sp(8f)
             swipeLabel.color = if (armed) palette.text else palette.hint
             val textWidth = swipeLabel.measureText(text)
@@ -706,6 +840,7 @@ internal class KeyboardView(context: Context) : View(context) {
     private fun stopRepeat() {
         removeCallbacks(repeat)
         removeCallbacks(longPress)
+        removeCallbacks(holdSwipe)
     }
 
     private fun sp(value: Float): Float {

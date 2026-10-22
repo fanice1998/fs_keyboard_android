@@ -6,7 +6,7 @@ package com.fskeyboard.ime.keyboard
  * [LINGER_MS] keeps a quick tap visible after the finger lifts.
  */
 internal object KeyPreview {
-    const val LINGER_MS = 120L
+    const val LINGER_MS = 50L
 
     fun visible(spec: KeySpec): Boolean {
         if (spec.icon != null || spec.label.isEmpty()) return false

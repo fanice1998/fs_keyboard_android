@@ -3,10 +3,11 @@ package com.fskeyboard.ime.settings
 import android.content.Context
 import com.fskeyboard.ime.keyboard.ComputerKeyMap
 import com.fskeyboard.ime.keyboard.KeyboardHeight
+import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.rerank.RerankPreferences
 
 /**
- * Keyboard height, symbol width, and key feedback stored in the app's private preferences.
+ * Keyboard height, symbol width, key feedback, and the last letter keyboard.
  * The values survive process death and reboot, and are cleared only when the app data is removed.
  */
 internal class KeyboardPreferences(context: Context) {
@@ -72,6 +73,24 @@ internal class KeyboardPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_PREVIEW, enabled).apply()
     }
 
+    /**
+     * The letter keyboard last chosen by the user. Missing or unknown values are zhuyin.
+     * Symbol pages are not stored. An email field must not call [setLetterMode].
+     */
+    fun letterMode(): KeyboardMode {
+        return when (prefs.getString(KEY_LETTER_MODE, null)) {
+            "latin" -> KeyboardMode.LATIN
+            else -> KeyboardMode.ZHUYIN
+        }
+    }
+
+    fun setLetterMode(mode: KeyboardMode) {
+        if (!mode.isLetters) return
+        val name = if (mode == KeyboardMode.LATIN) "latin" else "zhuyin"
+        if (prefs.getString(KEY_LETTER_MODE, null) == name) return
+        prefs.edit().putString(KEY_LETTER_MODE, name).apply()
+    }
+
     companion object {
         const val KEY_ROW_DP = "keyboard_row_height_dp"
         const val KEY_FULL_WIDTH = "zhuyin_full_width_symbols"
@@ -80,5 +99,6 @@ internal class KeyboardPreferences(context: Context) {
         const val KEY_COMPUTER_KEY_MAP = "latin_computer_key_map"
         const val KEY_VIBRATION = "keyboard_vibration_enabled"
         const val KEY_PREVIEW = "key_preview_enabled"
+        const val KEY_LETTER_MODE = "letter_mode"
     }
 }

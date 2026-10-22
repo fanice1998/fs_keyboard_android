@@ -41,9 +41,17 @@ internal class CandidateController(
     private val post: (Runnable) -> Unit = { runnable ->
         Handler(Looper.getMainLooper()).post(runnable)
     },
+    private val letterMode: () -> KeyboardMode = { KeyboardMode.ZHUYIN },
+    private val clipboard: () -> ClipOffer? = { readClipboard(context) },
 ) {
     /** Ctrl, Alt, and Meta chosen from an English swipe, until the next key. */
     var onComputerModifiers: (Set<ComputerKey>) -> Unit = {}
+
+    /** Modifiers locked by a hold. They stay after the finger lifts. */
+    var onLockedModifiers: (Set<ComputerKey>) -> Unit = {}
+
+    /** The user switched between zhuyin and Latin. An email field does not call this. */
+    var onLetterMode: (KeyboardMode) -> Unit = {}
 
     private val modifiers = ComputerModifiers()
     private var mode = KeyboardMode.ZHUYIN
@@ -73,10 +81,15 @@ internal class CandidateController(
     private var selStart = -1
     private var selEnd = -1
 
+    /** Clipboard read for this field. Cleared from the row once the user types. */
+    private var clipOffer: ClipOffer? = null
+    private var clipVisible = false
+
     private val hasComposition: Boolean
         get() = !composition.isEmpty
 
     fun start() {
+        applySavedLetterMode()
         loadEnglish()
         publish()
         lexicon.start(context) {
@@ -101,11 +114,15 @@ internal class CandidateController(
         if (!restarting) {
             recent.setLength(0)
         }
-        english.setLength(0)
         cancelComposition()
         clearModifiers()
-        if (emailSuggest.isEmailField(editorInfo())) {
-            setMode(KeyboardMode.LATIN)
+        refreshClipboard()
+        if (emailSuggest.isEmailField(info)) {
+            // This field opens in Latin. That must not replace the keyboard the user chose.
+            mode = KeyboardMode.LATIN
+            base = KeyboardMode.LATIN
+        } else {
+            applySavedLetterMode()
         }
         publish()
     }
@@ -207,26 +224,36 @@ internal class CandidateController(
     }
 
     /**
-     * A symbol is typed and any waiting modifier is cleared.
-     * A modifier waits. Any other computer key is sent, with the waiting modifiers, then those clear.
+     * Locks [key] after a long press, or unlocks it when that key is tapped again.
+     * Releasing the finger does not call this with down false.
+     */
+    fun setModifierHeld(key: ComputerKey, down: Boolean) {
+        modifiers.hold(key, down)
+        publishModifiers()
+    }
+
+    /**
+     * A symbol is typed and a tap-armed modifier is cleared. A held modifier stays.
+     * A modifier waits. Any other computer key is sent, with the waiting modifiers, then the tap-armed ones clear.
      */
     private fun onComputer(key: ComputerKey) {
         val symbol = key.symbol
         if (symbol != null) {
-            clearModifiers()
+            clearLatched()
             onPunctuation(symbol.toString())
             return
         }
         if (key.modifier) {
             modifiers.toggle(key)
-            onComputerModifiers(modifiers.active())
+            publishModifiers()
             return
         }
         dismissSuggestions()
+        hideClipboard()
         if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
         if (mode == KeyboardMode.ZHUYIN && hasComposition) finishComposition(convertAll())
         sendKeyEvent(key.keyCode, modifiers.metaState())
-        clearModifiers()
+        clearLatched()
     }
 
     /**
@@ -243,21 +270,34 @@ internal class CandidateController(
             else -> null
         }
         if (keyCode == null) {
-            clearModifiers()
+            clearLatched()
             return false
         }
         dismissSuggestions()
+        hideClipboard()
         if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
         if (mode == KeyboardMode.ZHUYIN && hasComposition) finishComposition(convertAll())
         sendKeyEvent(keyCode, modifiers.metaState(shift))
-        clearModifiers()
+        clearLatched()
         return true
+    }
+
+    /** Drops a tap-armed modifier. A locked modifier stays until its key is tapped again. */
+    private fun clearLatched() {
+        if (!modifiers.hasLatched()) return
+        modifiers.clearLatched()
+        publishModifiers()
     }
 
     private fun clearModifiers() {
         if (!modifiers.isActive()) return
         modifiers.clear()
-        onComputerModifiers(emptySet())
+        publishModifiers()
+    }
+
+    private fun publishModifiers() {
+        onComputerModifiers(modifiers.active())
+        onLockedModifiers(modifiers.locked())
     }
 
     private fun sendKeyEvent(keyCode: Int, meta: Int) {
@@ -273,6 +313,10 @@ internal class CandidateController(
      * A suggestion, offered with nothing typed, is committed as it is.
      */
     fun onCandidate(candidate: Candidate) {
+        if (candidate.source == CandidateSource.CLIPBOARD) {
+            pasteClipboard()
+            return
+        }
         if (mode == KeyboardMode.LATIN && english.isNotEmpty()) {
             val isEmail = isEmailContext()
             val text = candidate.text
@@ -318,6 +362,7 @@ internal class CandidateController(
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
             finishComposition(convertAll())
         }
+        if (next.isLetters && next != base) onLetterMode(next)
         if (next.isLetters) base = next
         mode = next
         presented = emptyList()
@@ -325,6 +370,7 @@ internal class CandidateController(
     }
 
     private fun onBopomofo(action: KeyAction.Bopomofo) {
+        hideClipboard()
         if (mode != KeyboardMode.ZHUYIN) {
             commit(action.label)
             return
@@ -378,6 +424,7 @@ internal class CandidateController(
     }
 
     private fun onSpace() {
+        hideClipboard()
         if (english.isNotEmpty()) {
             finishEnglish(trailing = " ", takePrediction = false)
             return
@@ -477,6 +524,7 @@ internal class CandidateController(
     }
 
     private fun performEnter() {
+        hideClipboard()
         val choice = EnterActions.choose(editorInfo())
         val ic = connection() ?: return
         if (!choice.newline && ic.performEditorAction(choice.actionId)) {
@@ -502,11 +550,52 @@ internal class CandidateController(
     }
 
     private fun commit(text: String) {
+        hideClipboard()
         connection()?.commitText(text, 1)
         remember(text)
     }
 
+    /**
+     * Drops the clipboard chip once the user types. Deleting back to an empty field
+     * does not bring it back; the next time the keyboard opens reads the clip again.
+     * A tap on the chip does not come through here, so the chip stays for another paste.
+     */
+    private fun hideClipboard() {
+        if (!clipVisible) return
+        clipVisible = false
+        publish()
+    }
+
+    /** Commits the cached offer, not the short chip label, and leaves the chip up. */
+    private fun pasteClipboard() {
+        val offer = clipOffer ?: return
+        val ic = connection() ?: return
+        pasteClip(ic, offer, editorInfo())
+    }
+
+    private fun refreshClipboard() {
+        clipOffer = try {
+            clipboard()
+        } catch (_: Exception) {
+            null
+        }
+        clipVisible = clipOffer != null
+    }
+
+    /** Restores the saved letter keyboard without writing the preference again. */
+    private fun applySavedLetterMode() {
+        val saved = try {
+            letterMode()
+        } catch (_: Exception) {
+            return
+        }
+        if (!saved.isLetters) return
+        mode = saved
+        base = saved
+    }
+
     private fun onCharacter(value: Char) {
+        hideClipboard()
         val composeEnglish = EnglishInputPolicy.shouldCompose(editorInfo())
         if ((mode == KeyboardMode.LATIN || (mode.isSymbols && base == KeyboardMode.LATIN)) &&
             composeEnglish &&
@@ -657,12 +746,20 @@ internal class CandidateController(
         ic?.finishComposingText()
     }
 
+    /**
+     * Drops an in-progress word. An empty field is left untouched: [InputConnection.setComposingText]
+     * with an empty string replaces the current selection, which deletes a browser address bar
+     * that selected its text when focused.
+     */
     private fun cancelComposition() {
+        val discard = hasComposition || english.isNotEmpty()
         composition.clear()
-        val ic = connection()
-        ic?.setComposingText("", 1)
-        ic?.finishComposingText()
+        english.setLength(0)
         presented = emptyList()
+        if (!discard) return
+        val ic = connection() ?: return
+        ic.setComposingText("", 1)
+        ic.finishComposingText()
     }
 
     private fun publish(snapshot: EngineSnapshot? = null) {
@@ -713,8 +810,9 @@ internal class CandidateController(
     }
 
     private fun ui(candidates: List<Candidate>): ImeUiState {
-        val visible = shownCandidates(mode, candidates)
+        val lookedUp = shownCandidates(mode, candidates)
         val hasUnconfirmed = (mode == KeyboardMode.ZHUYIN && hasComposition) || english.isNotEmpty()
+        val visible = if (lookedUp.isEmpty() && !hasUnconfirmed) clipboardCandidates() else lookedUp
         return ImeUiState(
             mode = mode,
             base = base,
@@ -723,6 +821,20 @@ internal class CandidateController(
                 message = if (visible.isEmpty()) statusMessage() else "",
             ),
             hasUnconfirmedText = hasUnconfirmed,
+        )
+    }
+
+    /** One chip, and only on a letter keyboard before the user has typed. */
+    private fun clipboardCandidates(): List<Candidate> {
+        val offer = clipOffer ?: return emptyList()
+        if (!clipVisible || !mode.isLetters) return emptyList()
+        return listOf(
+            Candidate(
+                text = offer.label,
+                engineIndex = -1,
+                source = CandidateSource.CLIPBOARD,
+                span = 0,
+            ),
         )
     }
 

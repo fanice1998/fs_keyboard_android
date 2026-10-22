@@ -10,9 +10,11 @@ import android.view.inputmethod.EditorInfo
 internal data class EnterChoice(
     val label: String? = null,
     val actionId: Int = EditorInfo.IME_ACTION_NONE,
+    /** Choosing a candidate. The key draws a check instead of the return arrow. */
+    val confirming: Boolean = false,
 ) {
     val newline: Boolean
-        get() = label == null
+        get() = label == null && !confirming
 }
 
 /**

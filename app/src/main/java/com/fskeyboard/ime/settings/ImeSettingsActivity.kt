@@ -294,13 +294,18 @@ class ImeSettingsActivity : Activity() {
         refreshComputerPad()
     }
 
+    private fun keyFace(token: Char): String = when (token) {
+        ComputerKeyMap.DELETE -> "⌫"
+        else -> token.uppercaseChar().toString()
+    }
+
     private fun refreshComputerPad() {
         val letter = editorLetter
-        padCenter.text = letter?.uppercaseChar()?.toString() ?: "·"
+        padCenter.text = letter?.let { keyFace(it) } ?: "·"
         letterLabel.text = if (letter == null) {
             getString(R.string.computer_key_pick_letter)
         } else {
-            getString(R.string.computer_key_letter, letter.uppercaseChar().toString())
+            getString(R.string.computer_key_letter, keyFace(letter))
         }
         val swipes = letter?.let { editorMap.swipes(it) }.orEmpty()
         for ((direction, button) in padButtons) {
@@ -320,14 +325,14 @@ class ImeSettingsActivity : Activity() {
         items += getString(R.string.computer_key_clear)
         for (key in keys) {
             val owner = editorMap.owner(key)
-            val mine = owner != null && owner.letter == letter && owner.direction == direction
+            val mine = owner != null && owner.letter == letter
             items += if (owner == null || mine) {
                 key.label
             } else {
                 getString(
                     R.string.computer_key_used,
                     key.label,
-                    owner.letter.uppercaseChar().toString(),
+                    keyFace(owner.letter),
                     owner.direction.arrow,
                 )
             }
@@ -336,7 +341,7 @@ class ImeSettingsActivity : Activity() {
             .setTitle(
                 getString(
                     R.string.computer_key_assign_title,
-                    letter.uppercaseChar().toString(),
+                    keyFace(letter),
                     direction.arrow,
                 ),
             )
@@ -347,14 +352,14 @@ class ImeSettingsActivity : Activity() {
                 }
                 val key = keys[which - 1]
                 val owner = editorMap.owner(key)
-                val mine = owner != null && owner.letter == letter && owner.direction == direction
+                val mine = owner != null && owner.letter == letter
                 if (owner != null && !mine) {
                     Toast.makeText(
                         this,
                         getString(
                             R.string.computer_key_taken,
                             key.label,
-                            owner.letter.uppercaseChar().toString(),
+                            keyFace(owner.letter),
                             owner.direction.arrow,
                         ),
                         Toast.LENGTH_SHORT,

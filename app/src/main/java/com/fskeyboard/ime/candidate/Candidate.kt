@@ -6,6 +6,12 @@ internal enum class CandidateSource {
 
     /** Offered with nothing typed, such as punctuation after a particle. It uses no syllables. */
     SUGGESTION,
+
+    /**
+     * The clipboard chip. [Candidate.text] is only the short label.
+     * The paste uses the offer cached by the controller.
+     */
+    CLIPBOARD,
 }
 
 /**

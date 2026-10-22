@@ -17,12 +17,18 @@ class BackspaceSelectionTest {
     private class TestInputConnection : InvocationHandler {
         var selectedText: String? = null
         var committedText: String? = null
+        var composingText: String? = null
         var deletedBefore: Int = 0
         var deletedAfter: Int = 0
 
         override fun invoke(proxy: Any?, method: Method, args: Array<out Any>?): Any? {
             return when (method.name) {
                 "getSelectedText" -> selectedText
+                "setComposingText" -> {
+                    composingText = args?.get(0)?.toString()
+                    true
+                }
+                "finishComposingText" -> true
                 "commitText" -> {
                     committedText = args?.get(0)?.toString()
                     true
@@ -48,7 +54,10 @@ class BackspaceSelectionTest {
         ) as InputConnection
     }
 
-    private fun createController(connection: InputConnection): CandidateController {
+    private fun createController(
+        connection: InputConnection,
+        editorInfo: () -> EditorInfo? = { EditorInfo() },
+    ): CandidateController {
         // Dummy Context placeholder (methods not called during backspace test)
         val dummyContext = Proxy.newProxyInstance(
             Context::class.java.classLoader,
@@ -76,7 +85,7 @@ class BackspaceSelectionTest {
             lexicon = dummyLexicon,
             pipeline = CandidatePipeline(),
             connection = { connection },
-            editorInfo = { EditorInfo() },
+            editorInfo = editorInfo,
             onUi = {},
             post = { it.run() },
         )
@@ -131,6 +140,22 @@ class BackspaceSelectionTest {
         controller.onKey(KeyAction.Backspace)
 
         assertEquals("", handler.committedText)
+        assertEquals(0, handler.deletedBefore)
+    }
+
+    @Test
+    fun openingAFieldWhoseTextIsSelectedDoesNotDeleteIt() {
+        val handler = TestInputConnection()
+        val info = EditorInfo().apply {
+            initialSelStart = 0
+            initialSelEnd = 18
+        }
+        val controller = createController(createConnection(handler)) { info }
+
+        controller.onStartInput(restarting = false)
+
+        assertNull(handler.composingText)
+        assertNull(handler.committedText)
         assertEquals(0, handler.deletedBefore)
     }
 }

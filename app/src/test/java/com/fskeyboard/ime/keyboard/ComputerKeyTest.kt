@@ -80,22 +80,32 @@ class ComputerKeyTest {
     }
 
     @Test
-    fun aComputerKeyCanBelongToOnlyOneSlot() {
+    fun aComputerKeyCanBelongToOnlyOneKey() {
         val map = ComputerKeyMap.DEFAULT
-        assertEquals(ComputerSlot('q', SwipeDirection.UP), map.owner(ComputerKey.ESC))
+        assertEquals(ComputerSlot('q', SwipeDirection.DOWN_RIGHT), map.owner(ComputerKey.ESC))
         assertNull(map.assign('z', SwipeDirection.LEFT, ComputerKey.ESC))
         assertNull(map.assign('1', SwipeDirection.UP, ComputerKey.TAB))
-        val replaced = map.assign('q', SwipeDirection.UP, ComputerKey.TAB)
-        assertNull(replaced)
-        val moved = map.clear('w', SwipeDirection.UP).assign('z', SwipeDirection.DOWN_LEFT, ComputerKey.TAB)
+        assertNull(map.assign('q', SwipeDirection.UP, ComputerKey.TAB))
+        val moved = map.clear('a', SwipeDirection.UP_LEFT)
+            .assign('z', SwipeDirection.DOWN_LEFT, ComputerKey.TAB)
         assertEquals(ComputerSlot('z', SwipeDirection.DOWN_LEFT), moved!!.owner(ComputerKey.TAB))
-        val sameSlot = map
-            .clear('w', SwipeDirection.UP)
-            .assign('q', SwipeDirection.UP, ComputerKey.TAB)!!
-        assertEquals(ComputerKey.TAB, sameSlot.swipes('q')[SwipeDirection.UP])
-        assertNull(sameSlot.owner(ComputerKey.ESC))
-        assertEquals(map, map.assign('q', SwipeDirection.UP, ComputerKey.ESC))
+        val sameLetter = map.assign('q', SwipeDirection.UP, ComputerKey.ESC)!!
+        assertEquals(ComputerKey.ESC, sameLetter.swipes('q')[SwipeDirection.UP])
+        assertEquals(ComputerKey.ESC, sameLetter.swipes('q')[SwipeDirection.DOWN_RIGHT])
+        assertEquals(map, map.assign('q', SwipeDirection.DOWN_RIGHT, ComputerKey.ESC))
         assertEquals(map, map.clear('z', SwipeDirection.UP))
+        val comma = ComputerKeyMap.EMPTY
+            .assign(',', SwipeDirection.UP_RIGHT, ComputerKey.META)!!
+            .assign(',', SwipeDirection.DOWN_RIGHT, ComputerKey.META)!!
+        assertEquals(ComputerKey.META, comma.swipes(',')[SwipeDirection.UP_RIGHT])
+        assertEquals(ComputerKey.META, comma.swipes(',')[SwipeDirection.DOWN_RIGHT])
+        assertNull(comma.assign('f', SwipeDirection.UP, ComputerKey.META))
+        val delete = ComputerKeyMap.EMPTY.assign(
+            ComputerKeyMap.DELETE,
+            SwipeDirection.UP_RIGHT,
+            ComputerKey.FORWARD_DELETE,
+        )!!
+        assertEquals("del/up_right=forward_delete", delete.encode())
     }
 
     @Test
@@ -107,34 +117,157 @@ class ComputerKeyTest {
         assertEquals(map, ComputerKeyMap.decode(map.encode()))
         assertEquals(ComputerKeyMap.EMPTY, ComputerKeyMap.decode(""))
         assertEquals(ComputerKeyMap.EMPTY, ComputerKeyMap.decode("   "))
-        val messy = ComputerKeyMap.decode("nope,Q/UP=ESC, q/left=esc,z/down=nope,q/right=tab")
+        val messy = ComputerKeyMap.decode("nope,Q/UP=ESC, q/left=esc,z/down=nope,q/right=tab,z/down=esc")
         assertEquals(ComputerKey.ESC, messy.swipes('q')[SwipeDirection.UP])
-        assertNull(messy.swipes('q')[SwipeDirection.LEFT])
+        assertEquals(ComputerKey.ESC, messy.swipes('q')[SwipeDirection.LEFT])
         assertEquals(ComputerKey.TAB, messy.swipes('q')[SwipeDirection.RIGHT])
+        assertTrue(messy.swipes('z').isEmpty())
         assertEquals(ComputerKeyMap.DEFAULT, ComputerKeyMap.decode(ComputerKeyMap.DEFAULT.encode()))
+        val punctuation = ComputerKeyMap.decode(
+            "./left=left,del/up_right=forward_delete,comma/up_right=meta,comma/down_right=meta",
+        )
+        assertEquals(ComputerKey.LEFT, punctuation.swipes('.')[SwipeDirection.LEFT])
+        assertEquals(
+            ComputerKey.FORWARD_DELETE,
+            punctuation.swipes(ComputerKeyMap.DELETE)[SwipeDirection.UP_RIGHT],
+        )
+        assertEquals(ComputerKey.META, punctuation.swipes(',')[SwipeDirection.UP_RIGHT])
+        assertEquals(ComputerKey.META, punctuation.swipes(',')[SwipeDirection.DOWN_RIGHT])
     }
 
     @Test
-    fun englishLettersKeepTheirComputerKeyOnAnUpSwipe() {
+    fun aHeldModifierSurvivesTheNextKey() {
+        val modifiers = ComputerModifiers()
+        modifiers.hold(ComputerKey.CTRL, true)
+        modifiers.toggle(ComputerKey.FN)
+        modifiers.hold(ComputerKey.META, true)
+        val meta = modifiers.metaState()
+        assertTrue(meta and KeyEvent.META_CTRL_ON != 0)
+        assertTrue(meta and KeyEvent.META_FUNCTION_ON != 0)
+        assertTrue(meta and KeyEvent.META_META_ON != 0)
+        modifiers.clearLatched()
+        assertEquals(setOf(ComputerKey.CTRL, ComputerKey.META), modifiers.active())
+        assertEquals(0, modifiers.metaState() and KeyEvent.META_FUNCTION_ON)
+        modifiers.hold(ComputerKey.CTRL, false)
+        modifiers.hold(ComputerKey.META, false)
+        assertFalse(modifiers.isActive())
+        modifiers.toggle(ComputerKey.ALT)
+        modifiers.hold(ComputerKey.ALT, true)
+        modifiers.hold(ComputerKey.ALT, false)
+        assertFalse(modifiers.isActive())
+        modifiers.hold(ComputerKey.ESC, true)
+        assertFalse(modifiers.isActive())
+    }
+
+    @Test
+    fun theDefaultMapMatchesTheEnglishComputerKeys() {
         val on = KeyboardLayouts.rows(KeyboardMode.LATIN, computerKeys = true).flatMap { it.keys }
-        fun swipe(label: String) = on.first { it.label == label }.swipes[SwipeDirection.UP]
-        assertEquals(ComputerKey.ESC, swipe("q"))
-        assertEquals(ComputerKey.TAB, swipe("w"))
-        assertEquals(ComputerKey.CTRL, swipe("e"))
-        assertEquals(ComputerKey.ALT, swipe("r"))
-        assertEquals(ComputerKey.UP, swipe("t"))
-        assertEquals(ComputerKey.LEFT, swipe("u"))
-        assertEquals(ComputerKey.HOME, swipe("o"))
-        assertEquals(ComputerKey.END, swipe("p"))
-        assertEquals(ComputerKey.PAGE_UP, swipe("a"))
-        assertEquals(ComputerKey.PAGE_DOWN, swipe("s"))
-        assertEquals(ComputerKey.FORWARD_DELETE, swipe("d"))
-        assertEquals(ComputerKey.META, swipe("f"))
-        assertTrue(on.first { it.label == "z" }.swipes.isEmpty())
-        assertTrue(on.first { it.label == "g" }.swipes.isEmpty())
+        fun swipes(label: String) = on.first { it.label == label }.swipes
+        assertEquals(mapOf(SwipeDirection.DOWN_RIGHT to ComputerKey.ESC), swipes("q"))
+        assertEquals(mapOf(SwipeDirection.UP_LEFT to ComputerKey.TAB), swipes("a"))
+        assertEquals(mapOf(SwipeDirection.DOWN_RIGHT to ComputerKey.BANG), swipes("1"))
+        assertEquals(mapOf(SwipeDirection.DOWN_RIGHT to ComputerKey.AT), swipes("2"))
+        assertEquals(mapOf(SwipeDirection.DOWN_RIGHT to ComputerKey.HASH), swipes("3"))
+        assertEquals(mapOf(SwipeDirection.DOWN_RIGHT to ComputerKey.DOLLAR), swipes("4"))
+        assertEquals(mapOf(SwipeDirection.DOWN_RIGHT to ComputerKey.PERCENT), swipes("5"))
+        assertEquals(mapOf(SwipeDirection.DOWN_LEFT to ComputerKey.CARET), swipes("6"))
+        assertEquals(mapOf(SwipeDirection.DOWN_LEFT to ComputerKey.AMPERSAND), swipes("7"))
+        assertEquals(mapOf(SwipeDirection.DOWN_LEFT to ComputerKey.STAR), swipes("8"))
+        assertEquals(mapOf(SwipeDirection.DOWN_LEFT to ComputerKey.PAREN_LEFT), swipes("9"))
+        assertEquals(mapOf(SwipeDirection.DOWN_LEFT to ComputerKey.PAREN_RIGHT), swipes("0"))
+        assertEquals(mapOf(SwipeDirection.DOWN_LEFT to ComputerKey.DOUBLE_QUOTE), swipes("w"))
+        assertEquals(
+            mapOf(
+                SwipeDirection.DOWN_LEFT to ComputerKey.UNDERSCORE,
+                SwipeDirection.UP_RIGHT to ComputerKey.MINUS,
+            ),
+            swipes("g"),
+        )
+        assertEquals(
+            mapOf(
+                SwipeDirection.DOWN_LEFT to ComputerKey.PLUS,
+                SwipeDirection.UP_RIGHT to ComputerKey.EQUALS,
+            ),
+            swipes("h"),
+        )
+        assertEquals(
+            mapOf(
+                SwipeDirection.DOWN_LEFT to ComputerKey.BRACE_LEFT,
+                SwipeDirection.DOWN_RIGHT to ComputerKey.BRACE_RIGHT,
+            ),
+            swipes("j"),
+        )
+        assertEquals(
+            mapOf(
+                SwipeDirection.DOWN_LEFT to ComputerKey.BRACKET_LEFT,
+                SwipeDirection.DOWN_RIGHT to ComputerKey.BRACKET_RIGHT,
+            ),
+            swipes("k"),
+        )
+        assertEquals(
+            mapOf(
+                SwipeDirection.DOWN_LEFT to ComputerKey.QUOTE,
+                SwipeDirection.UP_RIGHT to ComputerKey.TILDE,
+            ),
+            swipes("l"),
+        )
+        assertEquals(
+            mapOf(
+                SwipeDirection.DOWN_LEFT to ComputerKey.BACKSLASH,
+                SwipeDirection.DOWN_RIGHT to ComputerKey.PIPE,
+            ),
+            swipes("z"),
+        )
+        assertEquals(mapOf(SwipeDirection.UP_RIGHT to ComputerKey.LESS), swipes("c"))
+        assertEquals(mapOf(SwipeDirection.UP_RIGHT to ComputerKey.GREATER), swipes("v"))
+        assertEquals(
+            mapOf(
+                SwipeDirection.DOWN_LEFT to ComputerKey.SLASH,
+                SwipeDirection.UP_RIGHT to ComputerKey.QUESTION,
+            ),
+            swipes("b"),
+        )
+        assertEquals(
+            mapOf(
+                SwipeDirection.UP_RIGHT to ComputerKey.COLON,
+                SwipeDirection.DOWN_RIGHT to ComputerKey.SEMICOLON,
+            ),
+            swipes("n"),
+        )
+        assertEquals(
+            mapOf(
+                SwipeDirection.LEFT to ComputerKey.LEFT,
+                SwipeDirection.UP to ComputerKey.UP,
+                SwipeDirection.RIGHT to ComputerKey.RIGHT,
+                SwipeDirection.DOWN to ComputerKey.DOWN,
+            ),
+            swipes("."),
+        )
+        assertEquals(mapOf(SwipeDirection.DOWN_RIGHT to ComputerKey.META), swipes(","))
+        assertEquals(mapOf(SwipeDirection.UP_LEFT to ComputerKey.HOME), swipes("u"))
+        assertEquals(mapOf(SwipeDirection.DOWN_RIGHT to ComputerKey.END), swipes("d"))
+        assertEquals(
+            mapOf(SwipeDirection.UP_RIGHT to ComputerKey.FORWARD_DELETE),
+            on.first { it.action == KeyAction.Backspace }.swipes,
+        )
+        val ctrl = on.first { it.label == "Ctrl" }
+        assertEquals(KeyAction.Computer(ComputerKey.CTRL), ctrl.action)
+        assertEquals(ComputerKey.CTRL, ctrl.holdKey)
+        val fn = on.first { it.label == "Fn" }
+        assertEquals(KeyAction.Computer(ComputerKey.FN), fn.action)
+        assertEquals(ComputerKey.FN, fn.holdKey)
+        assertEquals(ComputerKey.ALT, fn.swipes[SwipeDirection.UP_LEFT])
+        assertEquals(KeyAction.SetMode(KeyboardMode.ZHUYIN), fn.extraSwipes[SwipeDirection.DOWN_RIGHT])
+        assertEquals("注", fn.swipeLabels()[SwipeDirection.DOWN_RIGHT])
+        assertEquals("⌘", ComputerKey.META.label)
+        assertFalse(on.any { it.action == KeyAction.SetMode(KeyboardMode.SYMBOLS) })
+        val enter = on.first { it.action == KeyAction.Enter }
+        assertEquals("", enter.label)
+        assertEquals(KeyIcon.RETURN, enter.icon)
 
         val off = KeyboardLayouts.rows(KeyboardMode.LATIN).flatMap { it.keys }
-        assertTrue(off.none { it.swipes.isNotEmpty() })
+        assertTrue(off.none { it.swipes.isNotEmpty() || it.extraSwipes.isNotEmpty() || it.holdKey != null })
+        assertTrue(off.any { it.icon == KeyIcon.SYMBOLS && it.action == KeyAction.SetMode(KeyboardMode.SYMBOLS) })
         val zhuyin = KeyboardLayouts.rows(KeyboardMode.ZHUYIN).flatMap { it.keys }
         assertTrue(zhuyin.none { it.swipes.isNotEmpty() })
         val shifted = KeyboardLayouts.rows(
@@ -143,7 +276,7 @@ class ComputerKeyTest {
             computerKeys = true,
         ).flatMap { it.keys }
         assertEquals(
-            mapOf(SwipeDirection.UP to ComputerKey.ESC),
+            mapOf(SwipeDirection.DOWN_RIGHT to ComputerKey.ESC),
             shifted.first { it.label == "Q" }.swipes,
         )
     }
@@ -151,7 +284,7 @@ class ComputerKeyTest {
     @Test
     fun aCustomMapReplacesTheDefaultAndStaysOffUntilComputerKeysAreOn() {
         val map = ComputerKeyMap.DEFAULT
-            .clear('q', SwipeDirection.UP)
+            .clear('q', SwipeDirection.DOWN_RIGHT)
             .assign('z', SwipeDirection.DOWN_LEFT, ComputerKey.ESC)!!
         val keys = KeyboardLayouts.rows(
             KeyboardMode.LATIN,
