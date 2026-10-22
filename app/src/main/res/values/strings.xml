@@ -19,8 +19,6 @@
     <string name="full_width_summary">開啟時，從注音鍵盤打開的符號頁是全形中文標點，例如「，。？！」。關閉後改成跟英文鍵盤一樣的半形符號。</string>
     <string name="latin_top_number_row_switch">開啟英文鍵盤頂層數字鍵</string>
     <string name="latin_top_number_row_summary">開啟時，在英文鍵盤頂部額外顯示一排獨立的數字按鍵（1～0）。關閉後恢復為標準四排鍵盤。</string>
-    <string name="key_popup_switch">按鍵懸浮提示</string>
-    <string name="key_popup_summary">開啟時，按下字元鍵時會在按鍵上方顯示放大的懸浮提示框。空格、Enter、刪除、語言切換與符號切換鍵不顯示提示。</string>
     <string name="vibration_switch">按鍵振動回饋</string>
     <string name="vibration_summary">開啟時，按下按鍵或滑動游標時會產生觸覺震動回饋。關閉後不震動。</string>
     <string name="key_latency_label">按鍵延遲</string>

@@ -28,14 +28,11 @@ class ImeSettingsContractTest {
         assertTrue(activity.contains("SettingsSafeArea.padding"))
         assertTrue(activity.contains("titleBottomInWindow"))
         assertTrue(activity.contains("latin_top_number_row_switch"))
-        assertTrue(activity.contains("key_popup_switch"))
         assertTrue(activity.contains("vibration_switch"))
         assertTrue(layout.contains("@+id/settings_root"))
         assertTrue(layout.contains("@+id/keyboard_height_preview"))
         assertTrue(layout.contains("@+id/latin_top_number_row_switch"))
-        assertTrue(layout.contains("@+id/key_popup_switch"))
         assertTrue(layout.contains("@+id/vibration_switch"))
-        assertTrue(strings.contains("name=\"key_popup_switch\""))
         assertTrue(strings.contains("name=\"vibration_switch\""))
     }
 }

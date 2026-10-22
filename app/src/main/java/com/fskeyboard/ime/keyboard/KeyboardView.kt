@@ -2,11 +2,8 @@ package com.fskeyboard.ime.keyboard
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.util.TypedValue
 import android.view.HapticFeedbackConstants
@@ -76,39 +73,6 @@ internal class KeyboardView(context: Context) : View(context) {
             isHapticFeedbackEnabled = value
         }
 
-    /** Whether pressing a character key shows a floating preview popup. */
-    var keyPopupEnabled: Boolean = true
-        set(value) {
-            field = value
-            if (!value) {
-                dismissPopupImmediately()
-            }
-        }
-
-    /** External overlay hooks. If null, KeyboardView renders preview internally. */
-    var onShowKeyPreview: ((label: String, keyRect: RectF) -> Unit)? = null
-    var onDismissKeyPreview: ((immediate: Boolean) -> Unit)? = null
-
-    private var standalonePreviewLabel: String? = null
-    private var standalonePreviewRect: RectF? = null
-    private val standaloneBg = GradientDrawable().apply {
-        shape = GradientDrawable.RECTANGLE
-        cornerRadius = dp(10).toFloat()
-    }
-    private val standaloneTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textAlign = Paint.Align.CENTER
-        typeface = Typeface.DEFAULT_BOLD
-    }
-    private val standaloneShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#33000000")
-    }
-
-    private val dismissStandaloneRunnable = Runnable {
-        standalonePreviewLabel = null
-        standalonePreviewRect = null
-        invalidate()
-    }
-
     init {
         isHapticFeedbackEnabled = vibrationEnabled
     }
@@ -152,7 +116,7 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private val longPress = Runnable {
         val action = down?.spec?.secondary ?: return@Runnable
-        release(dismissImmediately = true)
+        release()
         buzz()
         fire(action)
     }
@@ -223,9 +187,6 @@ internal class KeyboardView(context: Context) : View(context) {
                 }
             }
         }
-        if (onShowKeyPreview == null && standalonePreviewLabel != null && standalonePreviewRect != null) {
-            drawStandalonePreview(canvas, standalonePreviewLabel!!, standalonePreviewRect!!)
-        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -243,7 +204,7 @@ internal class KeyboardView(context: Context) : View(context) {
                 val box = down ?: return true
                 val index = event.findPointerIndex(downPointer)
                 if (index >= 0 && hit(event.getX(index), event.getY(index)) != box) {
-                    release(dismissImmediately = true)
+                    release()
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
@@ -253,23 +214,20 @@ internal class KeyboardView(context: Context) : View(context) {
                 val box = down
                 val released = hit(event.getX(index), event.getY(index))
                 val tracking = trackpad
-                release(dismissImmediately = false)
+                release()
                 if (!tracking && box != null && box == released && box.spec.action != KeyAction.Backspace) {
                     fire(box.spec.action, event.eventTime)
                 }
-                onDismissKeyPreview?.invoke(false)
-                postDelayed(dismissStandaloneRunnable, 80L)
             }
             MotionEvent.ACTION_CANCEL -> {
                 parent?.requestDisallowInterceptTouchEvent(false)
-                release(dismissImmediately = true)
+                release()
             }
         }
         return true
     }
 
     private fun press(pointer: Int, x: Float, y: Float, eventTime: Long) {
-        removeCallbacks(dismissStandaloneRunnable)
         down = hit(x, y)
         downPointer = pointer
         downX = x
@@ -279,22 +237,6 @@ internal class KeyboardView(context: Context) : View(context) {
         // Feedback on touch, not on release. The key itself still fires on release.
         // The vibration waits until this frame is submitted so it does not hold the highlight back.
         if (spec != null && vibrationEnabled) buzz()
-        if (keyPopupEnabled && shouldShowKeyPreview(spec) && down != null) {
-            val label = spec!!.label
-            val rect = down!!.rect
-            if (onShowKeyPreview != null) {
-                onShowKeyPreview?.invoke(label, rect)
-            } else {
-                standalonePreviewLabel = label
-                standalonePreviewRect = rect
-                invalidate()
-            }
-        } else {
-            onDismissKeyPreview?.invoke(true)
-            standalonePreviewLabel = null
-            standalonePreviewRect = null
-            invalidate()
-        }
         if (spec?.action == KeyAction.Space && trackpadAllowed()) {
             spaceCursor = SpaceCursor(slop = dp(10).toFloat(), xPerStep = dp(8).toFloat(), yPerStep = dp(22).toFloat())
             spaceCursor?.down(x, y)
@@ -336,7 +278,6 @@ internal class KeyboardView(context: Context) : View(context) {
 
     private fun showTrackpad() {
         removeCallbacks(holdTrackpad)
-        dismissPopupImmediately()
         down = null
         trackpad = true
         onTrackpadActive(true)
@@ -346,15 +287,15 @@ internal class KeyboardView(context: Context) : View(context) {
     /** Commits the key still under a finger. Backspace already fired on its down. A trackpad does not. */
     private fun commitHeld(eventTime: Long) {
         if (trackpad) {
-            release(dismissImmediately = true)
+            release()
             return
         }
         val action = down?.spec?.action ?: return
-        release(dismissImmediately = true)
+        release()
         if (action != KeyAction.Backspace) fire(action, eventTime)
     }
 
-    private fun release(dismissImmediately: Boolean = false) {
+    private fun release() {
         stopRepeat()
         removeCallbacks(holdTrackpad)
         val wasTracking = trackpad
@@ -362,12 +303,6 @@ internal class KeyboardView(context: Context) : View(context) {
         trackpad = false
         down = null
         downPointer = NO_POINTER
-        if (dismissImmediately) {
-            removeCallbacks(dismissStandaloneRunnable)
-            onDismissKeyPreview?.invoke(true)
-            standalonePreviewLabel = null
-            standalonePreviewRect = null
-        }
         invalidate()
         if (wasTracking) onTrackpadActive(false)
     }
@@ -434,7 +369,6 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     private fun rebuild() {
-        dismissPopupImmediately()
         rows = KeyboardLayouts.rows(
             mode,
             shifted = shiftLock.uppercase,
@@ -449,26 +383,6 @@ internal class KeyboardView(context: Context) : View(context) {
             layoutKeys(width, height)
         }
         invalidate()
-    }
-
-    fun dismissPopupImmediately() {
-        removeCallbacks(dismissStandaloneRunnable)
-        onDismissKeyPreview?.invoke(true)
-        standalonePreviewLabel = null
-        standalonePreviewRect = null
-        invalidate()
-    }
-
-    override fun onDetachedFromWindow() {
-        dismissPopupImmediately()
-        super.onDetachedFromWindow()
-    }
-
-    override fun onWindowVisibilityChanged(visibility: Int) {
-        super.onWindowVisibilityChanged(visibility)
-        if (visibility != VISIBLE) {
-            dismissPopupImmediately()
-        }
     }
 
     private fun layoutKeys(width: Int, height: Int) {
@@ -514,48 +428,6 @@ internal class KeyboardView(context: Context) : View(context) {
     private fun stopRepeat() {
         removeCallbacks(repeat)
         removeCallbacks(longPress)
-    }
-
-    private fun drawStandalonePreview(canvas: Canvas, text: String, keyRect: RectF) {
-        val night = isNightMode()
-        val palette = KeyboardPalette.of(night)
-        val bgColor = if (night) Color.parseColor("#38383A") else Color.parseColor("#FFFFFF")
-        val strokeColor = if (night) Color.parseColor("#505054") else Color.parseColor("#D1D5DB")
-        standaloneBg.setColor(bgColor)
-        standaloneBg.setStroke(dp(1), strokeColor)
-        standaloneTextPaint.color = palette.text
-
-        standaloneTextPaint.textSize = textSizeFor(text)
-        val textWidth = standaloneTextPaint.measureText(text)
-        val minWidth = dp(48).toFloat()
-        val popupWidth = maxOf(keyRect.width() * 1.25f, textWidth + dp(24), minWidth)
-        val popupHeight = dp(56).toFloat()
-
-        val keyCenterX = keyRect.centerX()
-        val margin = dp(4).toFloat()
-        val left = (keyCenterX - popupWidth / 2f).coerceIn(margin, width - popupWidth - margin)
-        val top = (keyRect.top - popupHeight - dp(6).toFloat()).coerceAtLeast(margin)
-        val cardRect = RectF(left, top, left + popupWidth, top + popupHeight)
-
-        val corner = dp(10).toFloat()
-        val shadowRect = RectF(cardRect.left, cardRect.top + dp(2), cardRect.right, cardRect.bottom + dp(3))
-        canvas.drawRoundRect(shadowRect, corner, corner, standaloneShadowPaint)
-        standaloneBg.setBounds(
-            cardRect.left.toInt(),
-            cardRect.top.toInt(),
-            cardRect.right.toInt(),
-            cardRect.bottom.toInt(),
-        )
-        standaloneBg.draw(canvas)
-        val baseline = cardRect.centerY() - (standaloneTextPaint.ascent() + standaloneTextPaint.descent()) / 2f
-        canvas.drawText(text, cardRect.centerX(), baseline, standaloneTextPaint)
-    }
-
-    private fun textSizeFor(text: String): Float = when {
-        text.length >= 4 -> sp(14f)
-        text.length >= 3 -> sp(18f)
-        text.length == 2 -> sp(22f)
-        else -> sp(28f)
     }
 
     private fun sp(value: Float): Float {
