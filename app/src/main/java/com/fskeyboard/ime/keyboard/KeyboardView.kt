@@ -425,8 +425,10 @@ internal class KeyboardView(context: Context) : View(context) {
 
     /**
      * True while this finger is choosing a computer key.
-     * Leaving the key before the swipe passes the slop still cancels, the same as any other key.
-     * A swipe into a direction with no assignment cancels instead of typing the letter.
+     * The direction is measured from the touch-down point, including after the finger
+     * has left the key. A quick slide otherwise crosses the key edge before the slop
+     * and the press is cancelled. Releasing outside the key before a direction is
+     * chosen still types nothing. A direction with no assignment types nothing.
      */
     private fun moveSwipe(event: MotionEvent): Boolean {
         val gesture = swipe ?: return false
@@ -452,9 +454,6 @@ internal class KeyboardView(context: Context) : View(context) {
             updateSwipePreview(direction)
             invalidate()
         }
-        if (direction != null) return true
-        val box = down ?: return true
-        if (hit(event.getX(index), event.getY(index)) != box) release()
         return true
     }
 

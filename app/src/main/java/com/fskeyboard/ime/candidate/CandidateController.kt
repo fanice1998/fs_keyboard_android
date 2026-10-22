@@ -566,6 +566,14 @@ internal class CandidateController(
         publish()
     }
 
+    /** Drops the chip after the system clipboard was cleared. The next open reads it again. */
+    fun dismissClipboard() {
+        clipOffer = null
+        if (!clipVisible) return
+        clipVisible = false
+        publish()
+    }
+
     /** Commits the cached offer, not the short chip label, and leaves the chip up. */
     private fun pasteClipboard() {
         val offer = clipOffer ?: return

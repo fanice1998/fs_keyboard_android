@@ -19,7 +19,9 @@ import android.widget.LinearLayout
 import com.fskeyboard.ime.candidate.CandidateBarView
 import com.fskeyboard.ime.candidate.CandidateController
 import com.fskeyboard.ime.candidate.CandidatePanelView
+import com.fskeyboard.ime.candidate.CandidateSource
 import com.fskeyboard.ime.candidate.ImeUiState
+import com.fskeyboard.ime.candidate.clearSystemClipboard
 import com.fskeyboard.ime.engine.RustZhuyinLexicon
 import com.fskeyboard.ime.keyboard.EnterActions
 import com.fskeyboard.ime.keyboard.EnterChoice
@@ -122,6 +124,9 @@ class FsKeyboardService : InputMethodService() {
         candidateBar = CandidateBarView(this).apply {
             onCandidate = { controller.onCandidate(it) }
             onExpand = { showPanel(!panelOpen) }
+            onClearClipboard = {
+                if (clearSystemClipboard(this@FsKeyboardService)) controller.dismissClipboard()
+            }
         }
         candidatePanel = CandidatePanelView(this).apply {
             visibility = View.GONE
@@ -465,8 +470,9 @@ class FsKeyboardService : InputMethodService() {
             }
             keyboard?.enterChoice = enterChoice
             candidateBar?.render(state.candidates)
+            val clipboardOnly = state.candidates.candidates.singleOrNull()?.source == CandidateSource.CLIPBOARD
             when {
-                state.candidates.candidates.isEmpty() -> showPanel(false)
+                state.candidates.candidates.isEmpty() || clipboardOnly -> showPanel(false)
                 panelOpen -> candidatePanel?.render(state.candidates.candidates)
             }
         }

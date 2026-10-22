@@ -147,6 +147,27 @@ class ClipboardCandidateTest {
     }
 
     @Test
+    fun clearingTheClipboardRemovesTheChip() {
+        val states = mutableListOf<ImeUiState>()
+        val controller = controller(
+            states = states,
+            clipboard = { clipOffer("複製的句子") },
+        )
+
+        controller.onStartInput(restarting = false)
+        assertEquals(CandidateSource.CLIPBOARD, states.last().candidates.candidates.single().source)
+
+        controller.dismissClipboard()
+
+        assertTrue(states.last().candidates.candidates.isEmpty())
+        assertFalse(clearSystemClipboard(object : ContextWrapper(null) {}))
+        assertFalse(primaryClipHasContent(null, hasUri = false))
+        assertFalse(primaryClipHasContent("  \n", hasUri = false))
+        assertTrue(primaryClipHasContent("還在", hasUri = false))
+        assertTrue(primaryClipHasContent(null, hasUri = true))
+    }
+
+    @Test
     fun theLastLetterKeyboardOpensAgainAndAnEmailFieldDoesNotReplaceIt() {
         val saved = mutableListOf<KeyboardMode>()
         val states = mutableListOf<ImeUiState>()

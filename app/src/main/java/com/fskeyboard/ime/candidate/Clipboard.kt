@@ -1,9 +1,11 @@
 package com.fskeyboard.ime.candidate
 
+import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputContentInfo
@@ -138,6 +140,45 @@ internal fun pasteClip(connection: InputConnection, offer: ClipOffer, editor: Ed
     } catch (_: Exception) {
         false
     }
+}
+
+/**
+ * Removes the current system clipboard item, not only this keyboard's chip.
+ * [ClipboardManager.clearPrimaryClip] is a no-op on some devices until this app
+ * replaces the clip, so a leftover clip is replaced and cleared again.
+ * True when the primary clip is gone or blank.
+ */
+internal fun clearSystemClipboard(context: Context): Boolean {
+    return try {
+        val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: return false
+        erasePrimaryClip(manager)
+        if (primaryClipHasContent(manager)) {
+            manager.setPrimaryClip(ClipData.newPlainText("", ""))
+            erasePrimaryClip(manager)
+        }
+        !primaryClipHasContent(manager)
+    } catch (_: Exception) {
+        false
+    }
+}
+
+/** A uri or non-blank text means paste would still insert something. */
+internal fun primaryClipHasContent(text: CharSequence?, hasUri: Boolean): Boolean {
+    if (hasUri) return true
+    return !text.isNullOrBlank()
+}
+
+private fun erasePrimaryClip(manager: ClipboardManager) {
+    if (Build.VERSION.SDK_INT >= 28) manager.clearPrimaryClip()
+}
+
+private fun primaryClipHasContent(manager: ClipboardManager): Boolean {
+    if (!manager.hasPrimaryClip()) return false
+    val clip = manager.primaryClip ?: return false
+    if (clip.itemCount <= 0) return false
+    val item = clip.getItemAt(0) ?: return false
+    return primaryClipHasContent(item.text, item.uri != null)
 }
 
 private fun imageMime(description: ClipDescription?): String? {
