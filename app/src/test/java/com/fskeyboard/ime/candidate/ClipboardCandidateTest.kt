@@ -3,6 +3,7 @@ package com.fskeyboard.ime.candidate
 import android.content.Context
 import android.content.ContextWrapper
 import android.text.InputType
+import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import com.fskeyboard.ime.engine.ZhuyinLexicon
@@ -165,6 +166,16 @@ class ClipboardCandidateTest {
         assertFalse(primaryClipHasContent("  \n", hasUri = false))
         assertTrue(primaryClipHasContent("還在", hasUri = false))
         assertTrue(primaryClipHasContent(null, hasUri = true))
+    }
+
+    @Test
+    fun theClipboardRowStaysAStripWhenTheWindowOffersTheWholeScreen() {
+        val screen = 2400
+        val chip = 72
+        assertEquals(chip, stripMeasuredHeight(View.MeasureSpec.AT_MOST, screen, chip))
+        assertEquals(chip, stripMeasuredHeight(View.MeasureSpec.UNSPECIFIED, screen, chip))
+        assertEquals(40, stripMeasuredHeight(View.MeasureSpec.AT_MOST, 40, chip))
+        assertEquals(120, stripMeasuredHeight(View.MeasureSpec.EXACTLY, 120, chip))
     }
 
     @Test

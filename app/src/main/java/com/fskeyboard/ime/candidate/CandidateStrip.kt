@@ -83,12 +83,14 @@ internal class CandidateStrip(context: Context) : View(context) {
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val height = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) {
-            chipHeight.toInt().coerceAtLeast(1)
-        } else {
-            MeasureSpec.getSize(heightMeasureSpec).coerceAtLeast(1)
-        }
-        setMeasuredDimension(contentWidth, height)
+        setMeasuredDimension(
+            contentWidth,
+            stripMeasuredHeight(
+                MeasureSpec.getMode(heightMeasureSpec),
+                MeasureSpec.getSize(heightMeasureSpec),
+                chipHeight.toInt(),
+            ),
+        )
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -376,5 +378,22 @@ internal class CandidateStrip(context: Context) : View(context) {
         const val NONE = -2
         const val TEXT_SP = 18f
         const val MARK_GAP_DP = 6
+    }
+}
+
+/**
+ * Height of the candidate row.
+ * [View.MeasureSpec.AT_MOST] is the space the window offered, often the whole screen.
+ * The clipboard row hides the expand arrow, so this strip is then the bar's only
+ * visible child and a match-parent height would become the screen. The chip stays
+ * in the bar: content height for an upper bound, and the given size only when the
+ * bar itself has already fixed the row.
+ */
+internal fun stripMeasuredHeight(mode: Int, size: Int, contentHeight: Int): Int {
+    val content = contentHeight.coerceAtLeast(1)
+    return when (mode) {
+        View.MeasureSpec.EXACTLY -> size.coerceAtLeast(1)
+        View.MeasureSpec.AT_MOST -> content.coerceAtMost(size).coerceAtLeast(1)
+        else -> content
     }
 }
