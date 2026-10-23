@@ -103,7 +103,7 @@ internal object KeyboardLayouts {
         val comma = keyed(",", computerKeys, computerMap)
         val period = keyed(".", computerKeys, computerMap)
         val leading = if (computerKeys) {
-            listOf(latinCtrlKey(), latinFnKey())
+            listOf(latinCtrlKey(), latinLanguageKey())
         } else {
             listOf(
                 iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.35f),
@@ -217,14 +217,21 @@ internal object KeyboardLayouts {
         holdKey = ComputerKey.CTRL,
     )
 
-    private fun latinFnKey() = KeySpec(
-        label = "Fn",
-        action = KeyAction.Computer(ComputerKey.FN),
+    /**
+     * The language key. A tap switches to zhuyin. Fn is the down-right swipe,
+     * and holding that swipe locks it the way Alt locks from the up-left swipe.
+     */
+    private fun latinLanguageKey() = KeySpec(
+        label = "",
+        action = KeyAction.SetMode(KeyboardMode.ZHUYIN),
         weight = 1.15f,
-        role = KeyRole.MODIFIER,
-        holdKey = ComputerKey.FN,
-        swipes = mapOf(SwipeDirection.UP_LEFT to ComputerKey.ALT),
-        extraSwipes = mapOf(SwipeDirection.DOWN_RIGHT to KeyAction.SetMode(KeyboardMode.ZHUYIN)),
+        role = KeyRole.ACTION,
+        icon = KeyIcon.GLOBE,
+        secondary = KeyAction.NextInputMethod,
+        swipes = mapOf(
+            SwipeDirection.UP_LEFT to ComputerKey.ALT,
+            SwipeDirection.DOWN_RIGHT to ComputerKey.FN,
+        ),
     )
 
     private fun letters(

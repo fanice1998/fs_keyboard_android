@@ -253,12 +253,13 @@ class ComputerKeyTest {
         val ctrl = on.first { it.label == "Ctrl" }
         assertEquals(KeyAction.Computer(ComputerKey.CTRL), ctrl.action)
         assertEquals(ComputerKey.CTRL, ctrl.holdKey)
-        val fn = on.first { it.label == "Fn" }
-        assertEquals(KeyAction.Computer(ComputerKey.FN), fn.action)
-        assertEquals(ComputerKey.FN, fn.holdKey)
-        assertEquals(ComputerKey.ALT, fn.swipes[SwipeDirection.UP_LEFT])
-        assertEquals(KeyAction.SetMode(KeyboardMode.ZHUYIN), fn.extraSwipes[SwipeDirection.DOWN_RIGHT])
-        assertEquals("注", fn.swipeLabels()[SwipeDirection.DOWN_RIGHT])
+        val language = on.first { it.icon == KeyIcon.GLOBE }
+        assertEquals(KeyAction.SetMode(KeyboardMode.ZHUYIN), language.action)
+        assertEquals(KeyAction.NextInputMethod, language.secondary)
+        assertEquals(null, language.holdKey)
+        assertEquals(ComputerKey.ALT, language.swipes[SwipeDirection.UP_LEFT])
+        assertEquals(ComputerKey.FN, language.swipes[SwipeDirection.DOWN_RIGHT])
+        assertEquals("Fn", language.swipeLabels()[SwipeDirection.DOWN_RIGHT])
         assertEquals("⌘", ComputerKey.META.label)
         assertFalse(on.any { it.action == KeyAction.SetMode(KeyboardMode.SYMBOLS) })
         val enter = on.first { it.action == KeyAction.Enter }
