@@ -168,11 +168,15 @@ class KeyboardLayoutTest {
         val zhuyin = KeyboardLayouts.rows(KeyboardMode.ZHUYIN, split = true)
         assertEquals(5, zhuyin.size)
         assertEquals(6, zhuyin[0].splitAt)
-        assertTrue(zhuyin[0].splitGap >= 1.5f)
+        assertEquals(SplitLayout.SIDE, zhuyin[0].splitX.first(), 0.0001f)
+        assertEquals(SplitLayout.RIGHT, zhuyin[0].splitX[6], 0.0001f)
+        assertEquals(SplitLayout.KEY, zhuyin[0].splitW.first(), 0.0001f)
         assertEquals("ㄅㄉˇˋㄓˊ", zhuyin[0].keys.take(6).joinToString("") { it.label })
         assertEquals("˙ㄚㄞㄢㄦ", zhuyin[0].keys.drop(6).joinToString("") { it.label })
-        assertEquals("ㄆㄊㄍㄐㄔㄗ", zhuyin[1].keys.take(6).joinToString("") { it.label })
-        assertEquals("ㄧㄛㄟㄣ", zhuyin[1].keys.drop(6).joinToString("") { it.label })
+        assertEquals("ㄆㄊㄍㄐㄔ", zhuyin[1].keys.take(5).joinToString("") { it.label })
+        assertEquals("ㄗㄧㄛㄟㄣ", zhuyin[1].keys.drop(5).joinToString("") { it.label })
+        assertEquals(SplitLayout.leftOrigin(1), zhuyin[1].splitX.first(), 0.0001f)
+        assertEquals(SplitLayout.rightOrigin(1), zhuyin[1].splitX[5], 0.0001f)
         assertEquals(KeyAction.Backspace, zhuyin[3].keys.last().action)
         val bottom = zhuyin.last()
         assertEquals(KeyIcon.SYMBOLS, bottom.keys.first().icon)
@@ -219,11 +223,44 @@ class KeyboardLayoutTest {
         val symbols = KeyboardLayouts.rows(KeyboardMode.SYMBOLS, base = KeyboardMode.ZHUYIN, split = true)
         assertEquals("12345", symbols[0].keys.take(5).joinToString("") { it.label })
         assertEquals("67890", symbols[0].keys.drop(5).joinToString("") { it.label })
-        assertTrue(symbols[0].splitGap >= 1.5f)
+        assertEquals(SplitLayout.SIDE, symbols[0].splitX.first(), 0.0001f)
+        assertEquals(SplitLayout.RIGHT, symbols[0].splitX[5], 0.0001f)
         assertEquals(
             KeyboardLayouts.rows(KeyboardMode.NUMBER),
             KeyboardLayouts.rows(KeyboardMode.NUMBER, split = true),
         )
+        assertTrue(KeyboardLayouts.rows(KeyboardMode.ZHUYIN).all { it.splitX.isEmpty() })
+        assertTrue(KeyboardLayouts.rows(KeyboardMode.LATIN).all { it.splitX.isEmpty() })
+        assertSplitStaysInsideTheTemplate(
+            zhuyin,
+            computer,
+            latin,
+            KeyboardLayouts.rows(KeyboardMode.LATIN, split = true, computerKeys = true),
+            symbols,
+            KeyboardLayouts.rows(KeyboardMode.SYMBOLS_MORE, base = KeyboardMode.LATIN, split = true),
+        )
+    }
+
+    private fun assertSplitStaysInsideTheTemplate(vararg layouts: List<KeyRow>) {
+        for (rows in layouts) {
+            for (row in rows) {
+                assertEquals(row.keys.size, row.splitX.size)
+                assertEquals(row.keys.size, row.splitW.size)
+                assertTrue(row.splitAt in 1 until row.keys.size)
+                val leftEnd = row.splitX[row.splitAt - 1] + row.splitW[row.splitAt - 1]
+                assertTrue(leftEnd < row.splitX[row.splitAt])
+                row.splitX.indices.forEach { index ->
+                    val x = row.splitX[index]
+                    val width = row.splitW[index]
+                    assertTrue(x >= SplitLayout.SIDE - 0.0001f)
+                    assertTrue(x + width <= SplitLayout.rightEdge() + 0.0001f)
+                    val drawnLeft = SplitLayout.placedX(x, width)
+                    val drawnRight = drawnLeft + SplitLayout.placedW(width)
+                    assertTrue(drawnLeft > 0f)
+                    assertTrue(drawnRight < 1f)
+                }
+            }
+        }
     }
 
     @Test

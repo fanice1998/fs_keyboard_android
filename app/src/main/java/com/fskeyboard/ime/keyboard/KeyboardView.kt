@@ -252,7 +252,11 @@ internal class KeyboardView(context: Context) : View(context) {
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = MeasureSpec.getSize(widthMeasureSpec)
-        val height = rows.size * dp(rowHeightDp) + dp(6)
+        val height = if (split && width > 0) {
+            (rows.size * SplitLayout.rowSpan(width.toFloat())).toInt().coerceAtLeast(1)
+        } else {
+            rows.size * dp(rowHeightDp) + dp(6)
+        }
         setMeasuredDimension(width, height)
     }
 
@@ -803,12 +807,26 @@ internal class KeyboardView(context: Context) : View(context) {
         boxes.clear()
         zhuyinAreas = emptyList()
         if (rows.isEmpty() || width == 0 || height == 0) return
-        gap = dp(6).toFloat()
+        gap = if (split) 0f else dp(6).toFloat()
         val pad = dp(3).toFloat()
         val available = width - 2f * pad
         val rowHeight = height.toFloat() / rows.size
         var top = 0f
         for (row in rows) {
+            if (row.splitX.isNotEmpty()) {
+                val span = width.toFloat()
+                val faceH = minOf(SplitLayout.placedH() * span, rowHeight)
+                val y = top + (rowHeight - faceH) / 2f
+                for ((index, key) in row.keys.withIndex()) {
+                    val templateX = row.splitX[index]
+                    val templateW = row.splitW[index]
+                    val x = SplitLayout.placedX(templateX, templateW) * span
+                    val cell = SplitLayout.placedW(templateW) * span
+                    boxes += KeyBox(key, RectF(x, y, x + cell, y + faceH))
+                }
+                top += rowHeight
+                continue
+            }
             val units = row.keys.sumOf { it.weight.toDouble() }.toFloat() +
                 row.leading + row.trailing + row.splitGap
             val unit = available / units

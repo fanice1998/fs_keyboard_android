@@ -1,12 +1,6 @@
 package com.fskeyboard.ime.keyboard
 
 internal object KeyboardLayouts {
-    /** Five keys, a gap, and five keys. */
-    private const val LATIN_SPLIT_COLUMNS = 12f
-
-    /** Six keys, a gap, and five keys. */
-    private const val ZHUYIN_SPLIT_COLUMNS = 14f
-
     /**
      * [base] is the letter keyboard the symbol pages were opened from.
      * [fullWidth] picks the Chinese symbol pages when that keyboard is zhuyin.
@@ -126,37 +120,62 @@ internal object KeyboardLayouts {
     )
 
     /**
-     * Landscape zhuyin. The left cluster keeps the first six keys of each row
-     * and the right cluster keeps the rest, with a gap between them.
-     * Each side has a space bar. Symbols stays on the left thumb.
+     * Landscape zhuyin. Eleven-key rows keep six keys on the left. Ten-key rows
+     * keep five, and those rows step inward the way the portrait rows stagger.
+     * Positions are fractions of the keyboard width.
      */
     private fun zhuyinSplit(enter: EnterChoice): List<KeyRow> {
         val phonetic = ZhuyinLayout.rows.mapIndexed { index, row ->
             val keys = row.map { bopomofoKey(it) }
-            val right = if (index == ZhuyinLayout.rows.lastIndex) {
-                keys.drop(6) + deleteKey().copy(weight = 1f)
-            } else {
-                keys.drop(6)
+            val indent = when (index) {
+                1 -> 1
+                2 -> 2
+                else -> 0
             }
-            splitRow(keys.take(6), right, ZHUYIN_SPLIT_COLUMNS)
+            if (index == 0) {
+                percentRow(keys.take(6), keys.drop(6), indent)
+            } else if (index == ZhuyinLayout.rows.lastIndex) {
+                percentRow(
+                    keys.take(6),
+                    keys.drop(6) + deleteKey(),
+                    indent,
+                    rightWidths = List(4) { SplitLayout.KEY } + SplitLayout.FUNCTION,
+                )
+            } else {
+                percentRow(keys.take(5), keys.drop(5), indent)
+            }
         }
-        return phonetic + splitRow(
-            listOf(
-                iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.3f),
+        return phonetic + anchoredRow(
+            keys = listOf(
+                iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1f),
                 iconKey(
                     icon = KeyIcon.GLOBE,
                     action = KeyAction.SetMode(KeyboardMode.LATIN),
-                    weight = 1.15f,
+                    weight = 1f,
                     secondary = KeyAction.NextInputMethod,
                 ),
-                KeySpec("空格", KeyAction.Space, weight = 3.55f, role = KeyRole.SPACE),
-            ),
-            listOf(
-                KeySpec("空格", KeyAction.Space, weight = 2.15f, role = KeyRole.SPACE),
+                KeySpec("空格", KeyAction.Space, role = KeyRole.SPACE),
+                KeySpec("空格", KeyAction.Space, role = KeyRole.SPACE),
                 iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1f),
-                enterKey(enter, 1.85f),
+                enterKey(enter, 1f),
             ),
-            ZHUYIN_SPLIT_COLUMNS,
+            xs = listOf(
+                SplitLayout.SIDE,
+                SplitLayout.GLOBE_X,
+                SplitLayout.LEFT_SPACE_X,
+                SplitLayout.RIGHT_SPACE_X,
+                SplitLayout.RIGHT_SYMBOL_X,
+                SplitLayout.ENTER_X,
+            ),
+            ws = listOf(
+                SplitLayout.FUNCTION,
+                SplitLayout.FUNCTION,
+                SplitLayout.SPACE,
+                SplitLayout.SPACE,
+                SplitLayout.FUNCTION,
+                SplitLayout.FUNCTION,
+            ),
+            splitAt = 3,
         )
     }
 
@@ -165,28 +184,39 @@ internal object KeyboardLayouts {
         val phonetic = ZhuyinLayout.rows.map { row ->
             val keys = if (row.last().label == "ㄦ") row.dropLast(1) else row
             val specs = keys.map { bopomofoKey(it) }
-            splitRow(specs.take(5), specs.drop(5), LATIN_SPLIT_COLUMNS)
+            percentRow(specs.take(5), specs.drop(5))
         }
         val er = ZhuyinLayout.rows.first().last()
-        return phonetic + splitRow(
-            listOf(
-                modeKey("?123", KeyboardMode.SYMBOLS, 1.3f),
-                KeySpec(",", KeyAction.Punctuation(","), weight = 0.9f, role = KeyRole.ACTION),
-                iconKey(
-                    icon = KeyIcon.GLOBE,
-                    action = KeyAction.SetMode(KeyboardMode.LATIN),
-                    weight = 1.05f,
-                    secondary = KeyAction.NextInputMethod,
-                ),
-                KeySpec("注音", KeyAction.Space, weight = 1.75f, role = KeyRole.SPACE),
+        val left = listOf(
+            modeKey("?123", KeyboardMode.SYMBOLS, 1f),
+            KeySpec(",", KeyAction.Punctuation(","), role = KeyRole.ACTION),
+            iconKey(
+                icon = KeyIcon.GLOBE,
+                action = KeyAction.SetMode(KeyboardMode.LATIN),
+                weight = 1f,
+                secondary = KeyAction.NextInputMethod,
             ),
-            listOf(
-                KeySpec("注音", KeyAction.Space, weight = 1.7f, role = KeyRole.SPACE),
-                bopomofoKey(er, 1f),
-                deleteKey().copy(weight = 1f),
-                enterKey(enter, 1.3f),
-            ),
-            LATIN_SPLIT_COLUMNS,
+            KeySpec("注音", KeyAction.Space, role = KeyRole.SPACE),
+        )
+        val right = listOf(
+            KeySpec("注音", KeyAction.Space, role = KeyRole.SPACE),
+            bopomofoKey(er),
+            deleteKey(),
+            enterKey(enter, 1f),
+        )
+        val leftSlots = SplitLayout.packFrom(
+            SplitLayout.SIDE,
+            listOf(SplitLayout.FUNCTION, SplitLayout.KEY, SplitLayout.FUNCTION, SplitLayout.SPACE),
+        )
+        val rightSlots = SplitLayout.packRight(
+            listOf(SplitLayout.SPACE, SplitLayout.KEY, SplitLayout.FUNCTION, SplitLayout.FUNCTION),
+            SplitLayout.rightEdge(),
+        )
+        return phonetic + anchoredRow(
+            left + right,
+            (leftSlots + rightSlots).map { it.first },
+            (leftSlots + rightSlots).map { it.second },
+            splitAt = left.size,
         )
     }
 
@@ -202,17 +232,18 @@ internal object KeyboardLayouts {
         val rows = ArrayList<KeyRow>(5)
         if (topNumberRow) {
             val numbers = symbolKeys(split("1234567890"), computerKeys, computerMap)
-            rows += splitRow(numbers.take(5), numbers.drop(5), LATIN_SPLIT_COLUMNS)
+            rows += percentRow(numbers.take(5), numbers.drop(5))
         }
         val top = letters("qwertyuiop", upper, computerKeys, computerMap)
-        rows += splitRow(top.take(5), top.drop(5), LATIN_SPLIT_COLUMNS)
+        rows += percentRow(top.take(5), top.drop(5))
         val home = letters("asdfghjkl", upper, computerKeys, computerMap)
-        rows += splitRow(home.take(5), home.drop(5), LATIN_SPLIT_COLUMNS)
+        rows += percentRow(home.take(5), home.drop(5))
         val bottom = letters("zxcvbnm", upper, computerKeys, computerMap)
-        rows += splitRow(
+        rows += percentRow(
             listOf(shift(upper, capsLock)) + bottom.take(4),
             bottom.drop(4) + deleteKey(computerKeys, computerMap),
-            LATIN_SPLIT_COLUMNS,
+            leftWidths = listOf(SplitLayout.FUNCTION) + List(4) { SplitLayout.KEY },
+            rightWidths = List(3) { SplitLayout.KEY } + SplitLayout.FUNCTION,
         )
         val comma = keyed(",", computerKeys, computerMap)
         val period = keyed(".", computerKeys, computerMap)
@@ -220,23 +251,34 @@ internal object KeyboardLayouts {
             listOf(latinCtrlKey(), latinLanguageKey())
         } else {
             listOf(
-                iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.35f),
+                iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1f),
                 iconKey(
                     icon = KeyIcon.GLOBE,
                     action = KeyAction.SetMode(KeyboardMode.ZHUYIN),
-                    weight = 1.15f,
+                    weight = 1f,
                     secondary = KeyAction.NextInputMethod,
                 ),
             )
         }
-        rows += splitRow(
-            lead + comma + KeySpec("空格", KeyAction.Space, weight = 1.5f, role = KeyRole.SPACE),
-            listOf(
-                KeySpec("空格", KeyAction.Space, weight = 1.8f, role = KeyRole.SPACE),
-                period,
-                enterKey(enter, 1.7f),
-            ),
-            LATIN_SPLIT_COLUMNS,
+        val leftKeys = lead + comma + KeySpec("空格", KeyAction.Space, role = KeyRole.SPACE)
+        val rightKeys = listOf(
+            KeySpec("空格", KeyAction.Space, role = KeyRole.SPACE),
+            period,
+            enterKey(enter, 1f),
+        )
+        val leftSlots = SplitLayout.packFrom(
+            SplitLayout.SIDE,
+            listOf(SplitLayout.FUNCTION, SplitLayout.FUNCTION, SplitLayout.KEY, 0.145f),
+        )
+        val rightSlots = SplitLayout.packRight(
+            listOf(0.16f, SplitLayout.KEY, SplitLayout.FUNCTION),
+            SplitLayout.rightEdge(),
+        )
+        rows += anchoredRow(
+            leftKeys + rightKeys,
+            (leftSlots + rightSlots).map { it.first },
+            (leftSlots + rightSlots).map { it.second },
+            splitAt = leftKeys.size,
         )
         return rows
     }
@@ -336,31 +378,75 @@ internal object KeyboardLayouts {
         }
         val thirds = symbolKeys(third)
         val mid = thirds.size / 2
+        val symbolBottomLeft = bottomLead + KeySpec("空格", KeyAction.Space, role = KeyRole.SPACE)
+        val symbolBottomRight = listOf(
+            KeySpec("空格", KeyAction.Space, role = KeyRole.SPACE),
+            enterKey(enter, 1f),
+        )
+        val symbolLeftSlots = SplitLayout.packFrom(
+            SplitLayout.SIDE,
+            listOf(SplitLayout.FUNCTION, SplitLayout.FUNCTION, SplitLayout.SPACE),
+        )
+        val symbolRightSlots = listOf(
+            SplitLayout.RIGHT_SPACE_X to SplitLayout.SPACE,
+            SplitLayout.ENTER_X to SplitLayout.FUNCTION,
+        )
         return listOf(
-            splitRow(symbolKeys(first).take(5), symbolKeys(first).drop(5), LATIN_SPLIT_COLUMNS),
-            splitRow(symbolKeys(second).take(5), symbolKeys(second).drop(5), LATIN_SPLIT_COLUMNS),
-            splitRow(
-                listOf(page.copy(weight = 1.5f)) + thirds.take(mid),
-                thirds.drop(mid) + deleteKey().copy(weight = 1f),
-                LATIN_SPLIT_COLUMNS,
+            percentRow(symbolKeys(first).take(5), symbolKeys(first).drop(5)),
+            percentRow(symbolKeys(second).take(5), symbolKeys(second).drop(5)),
+            percentRow(
+                listOf(page) + thirds.take(mid),
+                thirds.drop(mid) + deleteKey(),
+                leftWidths = listOf(SplitLayout.FUNCTION) + List(mid) { SplitLayout.KEY },
+                rightWidths = List(thirds.size - mid) { SplitLayout.KEY } + SplitLayout.FUNCTION,
             ),
-            splitRow(
-                bottomLead + KeySpec("空格", KeyAction.Space, weight = 2.4f, role = KeyRole.SPACE),
-                listOf(
-                    KeySpec("空格", KeyAction.Space, weight = 2.7f, role = KeyRole.SPACE),
-                    enterKey(enter, 1.85f),
-                ),
-                LATIN_SPLIT_COLUMNS,
+            anchoredRow(
+                symbolBottomLeft + symbolBottomRight,
+                (symbolLeftSlots + symbolRightSlots).map { it.first },
+                (symbolLeftSlots + symbolRightSlots).map { it.second },
+                splitAt = symbolBottomLeft.size,
             ),
         )
     }
 
-    /** Two clusters with at least a key and a half of empty space between them. */
-    private fun splitRow(left: List<KeySpec>, right: List<KeySpec>, columns: Float): KeyRow {
-        val used = (left + right).sumOf { it.weight.toDouble() }.toFloat()
-        val gap = maxOf(1.5f, columns - used)
-        return KeyRow(keys = left + right, splitAt = left.size, splitGap = gap)
+    /**
+     * Two clusters whose template edges are fractions of the keyboard width.
+     * Uniform keys step by [SplitLayout.PITCH]. A wider key is packed so it
+     * keeps the same gutter.
+     */
+    private fun percentRow(
+        left: List<KeySpec>,
+        right: List<KeySpec>,
+        indent: Int = 0,
+        leftWidths: List<Float> = List(left.size) { SplitLayout.KEY },
+        rightWidths: List<Float> = List(right.size) { SplitLayout.KEY },
+    ): KeyRow {
+        val leftSlots = if (leftWidths.all { it == SplitLayout.KEY }) {
+            left.indices.map { index -> SplitLayout.keyX(SplitLayout.leftOrigin(indent), index) to SplitLayout.KEY }
+        } else {
+            SplitLayout.packFrom(SplitLayout.leftOrigin(indent), leftWidths)
+        }
+        val rightSlots = if (rightWidths.all { it == SplitLayout.KEY }) {
+            val origin = SplitLayout.rightOriginFor(right.size, indent)
+            right.indices.map { index -> SplitLayout.keyX(origin, index) to SplitLayout.KEY }
+        } else {
+            SplitLayout.packRight(rightWidths, SplitLayout.rightEdge(indent))
+        }
+        val slots = leftSlots + rightSlots
+        return anchoredRow(
+            left + right,
+            slots.map { it.first },
+            slots.map { it.second },
+            splitAt = left.size,
+        )
     }
+
+    private fun anchoredRow(
+        keys: List<KeySpec>,
+        xs: List<Float>,
+        ws: List<Float>,
+        splitAt: Int,
+    ) = KeyRow(keys = keys, splitAt = splitAt, splitX = xs, splitW = ws)
 
     /**
      * Digits only. Four columns keep the grid even: delete stays at the top right,

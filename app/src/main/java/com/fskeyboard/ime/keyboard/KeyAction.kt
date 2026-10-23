@@ -111,4 +111,10 @@ internal data class KeyRow(
      */
     val splitGap: Float = 0f,
     val splitAt: Int = 0,
+    /**
+     * Template left edge and width of each key, as fractions of the keyboard
+     * width. Empty rows still stretch across the screen.
+     */
+    val splitX: List<Float> = emptyList(),
+    val splitW: List<Float> = emptyList(),
 )
