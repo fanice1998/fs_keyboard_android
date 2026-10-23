@@ -83,6 +83,14 @@ internal enum class ComputerKey(
     /** Direction keys repeat while the finger stays in that swipe. */
     val isArrow: Boolean
         get() = this == UP || this == DOWN || this == LEFT || this == RIGHT
+
+    /**
+     * Repeats while the finger stays down, at the same pace as an arrow.
+     * A symbol does not. Tab, Esc, page keys, and forward delete still fire once.
+     */
+    val repeats: Boolean
+        get() = isArrow || this == CTRL || this == ALT || this == META || this == FN ||
+            this == HOME || this == END
 }
 
 /** Key code for a typed Latin letter or digit. Punctuation has none. */

@@ -110,6 +110,123 @@ class KeyboardLayoutTest {
     }
 
     @Test
+    fun zhuyinComputerLayoutIsTenColumnsAndLeavesLatinAlone() {
+        val rows = KeyboardLayouts.rows(KeyboardMode.ZHUYIN, zhuyinComputerLayout = true)
+        assertEquals(5, rows.size)
+        assertEquals(
+            listOf(
+                "ㄅㄉˇˋㄓˊ˙ㄚㄞㄢ",
+                "ㄆㄊㄍㄐㄔㄗㄧㄛㄟㄣ",
+                "ㄇㄋㄎㄑㄕㄘㄨㄜㄠㄤ",
+                "ㄈㄌㄏㄒㄖㄙㄩㄝㄡㄥ",
+            ),
+            rows.take(4).map { row -> row.keys.joinToString("") { it.label } },
+        )
+        for (row in rows) {
+            val width = row.leading + row.trailing + row.keys.sumOf { it.weight.toDouble() }.toFloat()
+            assertEquals(10f, width, 0.001f)
+            assertEquals(0f, row.leading, 0f)
+            assertEquals(0f, row.trailing, 0f)
+        }
+        val phonetic = rows.take(4).flatMap { it.keys }
+        assertTrue(phonetic.none { it.action == KeyAction.Backspace })
+        assertTrue(phonetic.all { it.secondary == null && it.holdKey == null && it.swipes.isEmpty() })
+        val bottom = rows.last().keys
+        assertEquals(listOf("?123", ",", "", "注音", "ㄦ", "", ""), bottom.map { it.label })
+        assertEquals(KeyAction.SetMode(KeyboardMode.SYMBOLS), bottom[0].action)
+        assertEquals(null, bottom[0].icon)
+        assertEquals(KeyAction.Punctuation(","), bottom[1].action)
+        assertEquals(null, bottom[1].secondary)
+        assertEquals(KeyIcon.GLOBE, bottom[2].icon)
+        assertEquals(KeyAction.SetMode(KeyboardMode.LATIN), bottom[2].action)
+        assertEquals(KeyAction.NextInputMethod, bottom[2].secondary)
+        assertTrue(bottom[2].swipes.isEmpty())
+        assertEquals(KeyAction.Space, bottom[3].action)
+        assertEquals(KeyAction.Bopomofo("ㄦ", '-'), bottom[4].action)
+        assertEquals(KeyIcon.DELETE, bottom[5].icon)
+        assertEquals(KeyAction.Backspace, bottom[5].action)
+        assertEquals(KeyIcon.RETURN, bottom[6].icon)
+        val bopomofo = rows.flatMap { it.keys }.mapNotNull { it.action as? KeyAction.Bopomofo }
+        assertEquals(ZhuyinLayout.keys.size, bopomofo.size)
+        assertEquals(
+            ZhuyinLayout.keys.map { it.label to it.key }.toSet(),
+            bopomofo.map { it.label to it.key }.toSet(),
+        )
+        assertFalse(rows.flatMap { it.keys }.any { it.action is KeyAction.Character })
+        assertEquals(
+            KeyboardLayouts.rows(KeyboardMode.LATIN),
+            KeyboardLayouts.rows(KeyboardMode.LATIN, zhuyinComputerLayout = true),
+        )
+        assertEquals(
+            KeyboardLayouts.rows(KeyboardMode.ZHUYIN),
+            KeyboardLayouts.rows(KeyboardMode.ZHUYIN, zhuyinComputerLayout = false),
+        )
+    }
+
+    @Test
+    fun landscapeSplitsTheLetterKeyboardsAndKeepsTheNumberPadWhole() {
+        val zhuyin = KeyboardLayouts.rows(KeyboardMode.ZHUYIN, split = true)
+        assertEquals(5, zhuyin.size)
+        assertEquals(6, zhuyin[0].splitAt)
+        assertTrue(zhuyin[0].splitGap >= 1.5f)
+        assertEquals("ㄅㄉˇˋㄓˊ", zhuyin[0].keys.take(6).joinToString("") { it.label })
+        assertEquals("˙ㄚㄞㄢㄦ", zhuyin[0].keys.drop(6).joinToString("") { it.label })
+        assertEquals("ㄆㄊㄍㄐㄔㄗ", zhuyin[1].keys.take(6).joinToString("") { it.label })
+        assertEquals("ㄧㄛㄟㄣ", zhuyin[1].keys.drop(6).joinToString("") { it.label })
+        assertEquals(KeyAction.Backspace, zhuyin[3].keys.last().action)
+        val bottom = zhuyin.last()
+        assertEquals(KeyIcon.SYMBOLS, bottom.keys.first().icon)
+        assertEquals(KeyAction.SetMode(KeyboardMode.LATIN), bottom.keys[1].action)
+        assertEquals(KeyAction.NextInputMethod, bottom.keys[1].secondary)
+        assertEquals(2, bottom.keys.count { it.action == KeyAction.Space })
+        val right = bottom.keys.drop(bottom.splitAt)
+        assertEquals(KeyAction.SetMode(KeyboardMode.SYMBOLS), right[1].action)
+        assertEquals(KeyAction.Enter, right.last().action)
+        val bopomofo = zhuyin.flatMap { it.keys }.mapNotNull { it.action as? KeyAction.Bopomofo }
+        assertEquals(
+            ZhuyinLayout.keys.map { it.label to it.key }.toSet(),
+            bopomofo.map { it.label to it.key }.toSet(),
+        )
+        assertTrue(KeyboardLayouts.rows(KeyboardMode.ZHUYIN).all { it.splitGap == 0f })
+
+        val computer = KeyboardLayouts.rows(
+            KeyboardMode.ZHUYIN,
+            zhuyinComputerLayout = true,
+            split = true,
+        )
+        assertEquals("ㄅㄉˇˋㄓ", computer[0].keys.take(5).joinToString("") { it.label })
+        assertEquals("ˊ˙ㄚㄞㄢ", computer[0].keys.drop(5).joinToString("") { it.label })
+        val computerRight = computer.last().keys.drop(computer.last().splitAt)
+        assertEquals(KeyAction.Bopomofo("ㄦ", '-'), computerRight[1].action)
+        assertEquals(KeyAction.Punctuation(","), computer.last().keys[1].action)
+
+        val latin = KeyboardLayouts.rows(KeyboardMode.LATIN, split = true)
+        assertEquals("qwert", latin[1].keys.take(5).joinToString("") { it.label })
+        assertEquals("yuiop", latin[1].keys.drop(5).joinToString("") { it.label })
+        assertEquals("asdfg", latin[2].keys.take(5).joinToString("") { it.label })
+        assertEquals("hjkl", latin[2].keys.drop(5).joinToString("") { it.label })
+        assertEquals(2, latin.last().keys.count { it.action == KeyAction.Space })
+        val letters = latin.flatMap { it.keys }
+            .mapNotNull { (it.action as? KeyAction.Character)?.value?.lowercaseChar() }
+            .filter { it in 'a'..'z' }
+            .toSet()
+        assertEquals(('a'..'z').toSet(), letters)
+        assertEquals(
+            KeyboardLayouts.rows(KeyboardMode.LATIN),
+            KeyboardLayouts.rows(KeyboardMode.LATIN, split = false),
+        )
+
+        val symbols = KeyboardLayouts.rows(KeyboardMode.SYMBOLS, base = KeyboardMode.ZHUYIN, split = true)
+        assertEquals("12345", symbols[0].keys.take(5).joinToString("") { it.label })
+        assertEquals("67890", symbols[0].keys.drop(5).joinToString("") { it.label })
+        assertTrue(symbols[0].splitGap >= 1.5f)
+        assertEquals(
+            KeyboardLayouts.rows(KeyboardMode.NUMBER),
+            KeyboardLayouts.rows(KeyboardMode.NUMBER, split = true),
+        )
+    }
+
+    @Test
     fun symbolsFromZhuyinUseChinesePunctuationAndReturnToZhuyin() {
         val specs = KeyboardLayouts.rows(KeyboardMode.SYMBOLS, base = KeyboardMode.ZHUYIN)
             .flatMap { it.keys }

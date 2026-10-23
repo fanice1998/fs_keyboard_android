@@ -1,5 +1,6 @@
 package com.fskeyboard.ime
 
+import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.Color
 import java.lang.ref.WeakReference
@@ -140,6 +141,8 @@ class FsKeyboardService : InputMethodService() {
             rowHeightDp = preferences.rowHeightDp()
             fullWidthSymbols = preferences.fullWidthSymbols()
             latinTopNumberRow = preferences.latinTopNumberRow()
+            zhuyinComputerLayout = preferences.zhuyinComputerLayout()
+            split = isLandscape()
             computerKeys = preferences.computerKeys()
             computerMap = preferences.computerKeyMap()
             vibrationEnabled = preferences.vibrationEnabled()
@@ -289,11 +292,13 @@ class FsKeyboardService : InputMethodService() {
                 embeddedBar = embedded,
                 systemFrame = frame,
                 preferSystemFrame = samsung,
+                landscape = isLandscape(),
             )
             logClearance(
                 clearance,
                 "nav=${bars.bottom} caption=${caption.bottom} mandatory=${mandatory.bottom} " +
-                    "tappable=${tappable.bottom} embedded=$embedded frame=$frame samsung=$samsung",
+                    "tappable=${tappable.bottom} embedded=$embedded frame=$frame samsung=$samsung " +
+                    "landscape=${isLandscape()}",
             )
             clearance
         } else {
@@ -312,11 +317,12 @@ class FsKeyboardService : InputMethodService() {
                 embeddedBar = embedded,
                 systemFrame = frame,
                 preferSystemFrame = samsung,
+                landscape = isLandscape(),
             )
             logClearance(
                 clearance,
                 "nav=$bottomInset caption=0 mandatory=0 tappable=0 " +
-                    "embedded=$embedded frame=$frame samsung=$samsung",
+                    "embedded=$embedded frame=$frame samsung=$samsung landscape=${isLandscape()}",
             )
             clearance
         }
@@ -342,8 +348,12 @@ class FsKeyboardService : InputMethodService() {
             embeddedBar = 0,
             systemFrame = systemBarFrame(),
             preferSystemFrame = isSamsung(),
+            landscape = isLandscape(),
         )
     }
+
+    private fun isLandscape(): Boolean =
+        resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     private fun embeddedNavigationBarHeight(allowSearch: Boolean): Int {
         val decor = window?.window?.decorView as? ViewGroup ?: return 0
@@ -412,6 +422,8 @@ class FsKeyboardService : InputMethodService() {
         keyboard?.rowHeightDp = preferences.rowHeightDp()
         keyboard?.fullWidthSymbols = preferences.fullWidthSymbols()
         keyboard?.latinTopNumberRow = preferences.latinTopNumberRow()
+        keyboard?.zhuyinComputerLayout = preferences.zhuyinComputerLayout()
+        keyboard?.split = isLandscape()
         keyboard?.computerKeys = preferences.computerKeys()
         keyboard?.computerMap = preferences.computerKeyMap()
         keyboard?.vibrationEnabled = preferences.vibrationEnabled()
@@ -455,6 +467,12 @@ class FsKeyboardService : InputMethodService() {
                 candidatesEnd,
             )
         }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        keyboard?.split = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
+        latestInsets?.let(::applyNavigationInset)
     }
 
     override fun onEvaluateFullscreenMode(): Boolean = false

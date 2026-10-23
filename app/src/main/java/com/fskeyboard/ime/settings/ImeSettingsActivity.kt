@@ -2,6 +2,7 @@ package com.fskeyboard.ime.settings
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -93,6 +94,12 @@ class ImeSettingsActivity : Activity() {
         fullWidth.isChecked = keyboardPreferences.fullWidthSymbols()
         fullWidth.setOnCheckedChangeListener { _, checked ->
             keyboardPreferences.setFullWidthSymbols(checked)
+        }
+        val zhuyinComputer = findViewById<Switch>(R.id.zhuyin_computer_layout_switch)
+        zhuyinComputer.isChecked = keyboardPreferences.zhuyinComputerLayout()
+        zhuyinComputer.setOnCheckedChangeListener { _, checked ->
+            keyboardPreferences.setZhuyinComputerLayout(checked)
+            previewKeyboard.zhuyinComputerLayout = checked
         }
         val latinTopNumber = findViewById<Switch>(R.id.latin_top_number_row_switch)
         latinTopNumber.isChecked = keyboardPreferences.latinTopNumberRow()
@@ -209,6 +216,8 @@ class ImeSettingsActivity : Activity() {
         val keyboard = KeyboardView(this).apply {
             rowHeightDp = rowDp
             latinTopNumberRow = keyboardPreferences.latinTopNumberRow()
+            zhuyinComputerLayout = keyboardPreferences.zhuyinComputerLayout()
+            split = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
             computerKeys = keyboardPreferences.computerKeys()
             fullWidthSymbols = keyboardPreferences.fullWidthSymbols()
             vibrationEnabled = keyboardPreferences.vibrationEnabled()

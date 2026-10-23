@@ -71,6 +71,25 @@ internal class KeyboardView(context: Context) : View(context) {
             rebuild()
         }
 
+    /** Landscape rows sit in two clusters with a gap between them. */
+    var split: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            rebuild()
+        }
+
+    /**
+     * Daiqian zhuyin in ten columns. Off keeps the staggered zhuyin rows.
+     * Latin ignores this.
+     */
+    var zhuyinComputerLayout: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            rebuild()
+        }
+
     /** Whether a swipe on an English letter sends the computer key assigned to that direction. */
     var computerKeys: Boolean = false
         set(value) {
@@ -179,7 +198,12 @@ internal class KeyboardView(context: Context) : View(context) {
             val action = currentRepeat() ?: return
             repeating = action
             if (action == KeyAction.Backspace) backspaceSent = true
-            dispatch(action)
+            val firing = if (action is KeyAction.Computer && action.key.modifier) {
+                action.copy(repeating = true)
+            } else {
+                action
+            }
+            dispatch(firing)
             val interval = KeyRepeat.interval(action) ?: return
             postDelayed(this, interval)
         }
@@ -391,7 +415,12 @@ internal class KeyboardView(context: Context) : View(context) {
                 postDelayed(repeat, KeyRepeat.DELAY_MS)
             }
             spec?.action == KeyAction.Backspace -> postDelayed(repeat, KeyRepeat.DELAY_MS)
-            spec?.holdKey != null || spec?.secondary != null -> postDelayed(longPress, 400L)
+            else -> {
+                if (spec != null && KeyRepeat.interval(spec.action) != null) {
+                    postDelayed(repeat, KeyRepeat.DELAY_MS)
+                }
+                if (spec?.holdKey != null || spec?.secondary != null) postDelayed(longPress, 400L)
+            }
         }
     }
 
@@ -453,7 +482,9 @@ internal class KeyboardView(context: Context) : View(context) {
             } else {
                 removeCallbacks(holdSwipe)
                 val spec = down?.spec
-                if (spec?.action == KeyAction.Backspace) postDelayed(repeat, KeyRepeat.DELAY_MS)
+                if (spec != null && KeyRepeat.interval(spec.action) != null) {
+                    postDelayed(repeat, KeyRepeat.DELAY_MS)
+                }
                 if (spec?.holdKey != null || spec?.secondary != null) {
                     removeCallbacks(longPress)
                     postDelayed(longPress, 400L)
@@ -465,14 +496,14 @@ internal class KeyboardView(context: Context) : View(context) {
         return true
     }
 
-    /** An arrow starts repeating once the finger has stayed in that direction. */
+    /** A repeating key starts once the finger has stayed in that direction. */
     private fun scheduleArrowRepeat(direction: SwipeDirection) {
         val action = down?.spec?.swipeAction(direction) ?: return
-        if (action !is KeyAction.Computer || !action.key.isArrow) return
+        if (KeyRepeat.interval(action) == null || action == KeyAction.Backspace) return
         postDelayed(repeat, KeyRepeat.DELAY_MS)
     }
 
-    /** Backspace with no direction, or the arrow whose direction the finger is holding. */
+    /** Backspace with no direction, or the computer key whose direction the finger is holding. */
     private fun currentRepeat(): KeyAction? {
         val spec = down?.spec ?: return null
         val direction = swipeDirection
@@ -758,6 +789,8 @@ internal class KeyboardView(context: Context) : View(context) {
             computerKeys = computerKeys,
             computerMap = computerMap,
             numberPad = numberPad,
+            zhuyinComputerLayout = zhuyinComputerLayout,
+            split = split,
         )
         requestLayout()
         if (width > 0 && height > 0) {
@@ -776,10 +809,14 @@ internal class KeyboardView(context: Context) : View(context) {
         val rowHeight = height.toFloat() / rows.size
         var top = 0f
         for (row in rows) {
-            val units = row.keys.sumOf { it.weight.toDouble() }.toFloat() + row.leading + row.trailing
+            val units = row.keys.sumOf { it.weight.toDouble() }.toFloat() +
+                row.leading + row.trailing + row.splitGap
             val unit = available / units
             var left = pad + row.leading * unit
-            for (key in row.keys) {
+            for ((index, key) in row.keys.withIndex()) {
+                if (row.splitGap > 0f && index > 0 && index == row.splitAt) {
+                    left += row.splitGap * unit
+                }
                 val cellWidth = key.weight * unit
                 boxes += KeyBox(key, RectF(left, top, left + cellWidth, top + rowHeight))
                 left += cellWidth

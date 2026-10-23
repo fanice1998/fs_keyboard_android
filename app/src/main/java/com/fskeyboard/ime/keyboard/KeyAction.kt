@@ -49,8 +49,11 @@ internal sealed interface KeyAction {
     /** Long-press on the language key: move to the next system keyboard. */
     data object NextInputMethod : KeyAction
 
-    /** A computer key from a swipe on an English letter. */
-    data class Computer(val key: ComputerKey) : KeyAction
+    /**
+     * A computer key from a tap or a swipe on an English letter.
+     * [repeating] is a held modifier sending its own key, instead of arming the next letter.
+     */
+    data class Computer(val key: ComputerKey, val repeating: Boolean = false) : KeyAction
 }
 
 internal enum class KeyRole {
@@ -102,4 +105,10 @@ internal data class KeyRow(
     val leading: Float = 0f,
     /** Empty key-widths after the last key. */
     val trailing: Float = 0f,
+    /**
+     * Empty key-widths before [splitAt], so a landscape row can sit in two
+     * clusters. 0 keeps the keys in one run.
+     */
+    val splitGap: Float = 0f,
+    val splitAt: Int = 0,
 )

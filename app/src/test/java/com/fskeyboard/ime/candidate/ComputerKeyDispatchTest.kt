@@ -146,6 +146,23 @@ class ComputerKeyDispatchTest {
     }
 
     @Test
+    fun aRepeatingModifierSendsItsKeyAndDoesNotToggle() {
+        val handler = RecordingConnection()
+        val armed = ArrayList<Set<ComputerKey>>()
+        val controller = controller(handler)
+        controller.onComputerModifiers = { armed += it }
+
+        controller.onKey(KeyAction.Computer(ComputerKey.CTRL, repeating = true))
+        assertEquals(2, handler.events.size)
+        assertTrue(armed.isEmpty())
+
+        controller.onKey(KeyAction.Computer(ComputerKey.ALT))
+        controller.onKey(KeyAction.Computer(ComputerKey.ALT, repeating = true))
+        assertEquals(4, handler.events.size)
+        assertEquals(listOf(setOf(ComputerKey.ALT)), armed)
+    }
+
+    @Test
     fun aHeldModifierStaysWhileTheNextLetterIsSent() {
         val handler = RecordingConnection()
         val armed = ArrayList<Set<ComputerKey>>()

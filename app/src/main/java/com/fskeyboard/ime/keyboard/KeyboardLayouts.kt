@@ -1,6 +1,12 @@
 package com.fskeyboard.ime.keyboard
 
 internal object KeyboardLayouts {
+    /** Five keys, a gap, and five keys. */
+    private const val LATIN_SPLIT_COLUMNS = 12f
+
+    /** Six keys, a gap, and five keys. */
+    private const val ZHUYIN_SPLIT_COLUMNS = 14f
+
     /**
      * [base] is the letter keyboard the symbol pages were opened from.
      * [fullWidth] picks the Chinese symbol pages when that keyboard is zhuyin.
@@ -16,18 +22,21 @@ internal object KeyboardLayouts {
         computerKeys: Boolean = false,
         computerMap: ComputerKeyMap = ComputerKeyMap.DEFAULT,
         numberPad: NumberPad = NumberPad.NONE,
+        zhuyinComputerLayout: Boolean = false,
+        split: Boolean = false,
     ): List<KeyRow> = when (mode) {
-        KeyboardMode.ZHUYIN -> zhuyin(enter)
-        KeyboardMode.LATIN -> latin(
-            shifted,
-            capsLock,
-            enter,
-            latinTopNumberRow,
-            computerKeys,
-            computerMap,
-        )
-        KeyboardMode.SYMBOLS -> symbols(base, more = false, fullWidth, enter)
-        KeyboardMode.SYMBOLS_MORE -> symbols(base, more = true, fullWidth, enter)
+        KeyboardMode.ZHUYIN -> when {
+            !split -> if (zhuyinComputerLayout) zhuyinComputer(enter) else zhuyin(enter)
+            zhuyinComputerLayout -> zhuyinComputerSplit(enter)
+            else -> zhuyinSplit(enter)
+        }
+        KeyboardMode.LATIN -> if (split) {
+            latinSplit(shifted, capsLock, enter, latinTopNumberRow, computerKeys, computerMap)
+        } else {
+            latin(shifted, capsLock, enter, latinTopNumberRow, computerKeys, computerMap)
+        }
+        KeyboardMode.SYMBOLS -> symbols(base, more = false, fullWidth, enter, split)
+        KeyboardMode.SYMBOLS_MORE -> symbols(base, more = true, fullWidth, enter, split)
         KeyboardMode.NUMBER -> number(enter, numberPad)
     }
 
@@ -80,6 +89,158 @@ internal object KeyboardLayouts {
         )
     }
 
+    /**
+     * Daiqian zhuyin in four rows of ten, the arrangement on a computer keyboard.
+     * ㄦ sits on the bottom row. The key where an emoji would be is the language key.
+     * Corner hints and long-press symbols are not keys yet.
+     */
+    private fun zhuyinComputer(enter: EnterChoice): List<KeyRow> {
+        val phonetic = ZhuyinLayout.rows.mapIndexed { index, row ->
+            val keys = if (index == 0) row.dropLast(1) else row
+            KeyRow(keys.map { bopomofoKey(it) })
+        }
+        val er = ZhuyinLayout.rows.first().last()
+        return phonetic + KeyRow(
+            listOf(
+                modeKey("?123", KeyboardMode.SYMBOLS, 1.5f),
+                KeySpec(",", KeyAction.Punctuation(","), weight = 0.9f, role = KeyRole.ACTION),
+                iconKey(
+                    icon = KeyIcon.GLOBE,
+                    action = KeyAction.SetMode(KeyboardMode.LATIN),
+                    weight = 1.05f,
+                    secondary = KeyAction.NextInputMethod,
+                ),
+                KeySpec("注音", KeyAction.Space, weight = 3.2f, role = KeyRole.SPACE),
+                bopomofoKey(er, 0.95f),
+                deleteKey().copy(weight = 1f),
+                enterKey(enter, 1.4f),
+            ),
+        )
+    }
+
+    private fun bopomofoKey(key: ZhuyinLayout.Key, weight: Float = 1f) = KeySpec(
+        label = key.label,
+        action = KeyAction.Bopomofo(key.label, key.key),
+        weight = weight,
+        role = if (key.tone) KeyRole.TONE else KeyRole.NORMAL,
+    )
+
+    /**
+     * Landscape zhuyin. The left cluster keeps the first six keys of each row
+     * and the right cluster keeps the rest, with a gap between them.
+     * Each side has a space bar. Symbols stays on the left thumb.
+     */
+    private fun zhuyinSplit(enter: EnterChoice): List<KeyRow> {
+        val phonetic = ZhuyinLayout.rows.mapIndexed { index, row ->
+            val keys = row.map { bopomofoKey(it) }
+            val right = if (index == ZhuyinLayout.rows.lastIndex) {
+                keys.drop(6) + deleteKey().copy(weight = 1f)
+            } else {
+                keys.drop(6)
+            }
+            splitRow(keys.take(6), right, ZHUYIN_SPLIT_COLUMNS)
+        }
+        return phonetic + splitRow(
+            listOf(
+                iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.3f),
+                iconKey(
+                    icon = KeyIcon.GLOBE,
+                    action = KeyAction.SetMode(KeyboardMode.LATIN),
+                    weight = 1.15f,
+                    secondary = KeyAction.NextInputMethod,
+                ),
+                KeySpec("空格", KeyAction.Space, weight = 3.55f, role = KeyRole.SPACE),
+            ),
+            listOf(
+                KeySpec("空格", KeyAction.Space, weight = 2.15f, role = KeyRole.SPACE),
+                iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1f),
+                enterKey(enter, 1.85f),
+            ),
+            ZHUYIN_SPLIT_COLUMNS,
+        )
+    }
+
+    /** Landscape ten-column zhuyin. Five keys a side, and ㄦ stays on the right. */
+    private fun zhuyinComputerSplit(enter: EnterChoice): List<KeyRow> {
+        val phonetic = ZhuyinLayout.rows.map { row ->
+            val keys = if (row.last().label == "ㄦ") row.dropLast(1) else row
+            val specs = keys.map { bopomofoKey(it) }
+            splitRow(specs.take(5), specs.drop(5), LATIN_SPLIT_COLUMNS)
+        }
+        val er = ZhuyinLayout.rows.first().last()
+        return phonetic + splitRow(
+            listOf(
+                modeKey("?123", KeyboardMode.SYMBOLS, 1.3f),
+                KeySpec(",", KeyAction.Punctuation(","), weight = 0.9f, role = KeyRole.ACTION),
+                iconKey(
+                    icon = KeyIcon.GLOBE,
+                    action = KeyAction.SetMode(KeyboardMode.LATIN),
+                    weight = 1.05f,
+                    secondary = KeyAction.NextInputMethod,
+                ),
+                KeySpec("注音", KeyAction.Space, weight = 1.75f, role = KeyRole.SPACE),
+            ),
+            listOf(
+                KeySpec("注音", KeyAction.Space, weight = 1.7f, role = KeyRole.SPACE),
+                bopomofoKey(er, 1f),
+                deleteKey().copy(weight = 1f),
+                enterKey(enter, 1.3f),
+            ),
+            LATIN_SPLIT_COLUMNS,
+        )
+    }
+
+    private fun latinSplit(
+        shifted: Boolean,
+        capsLock: Boolean,
+        enter: EnterChoice,
+        topNumberRow: Boolean,
+        computerKeys: Boolean,
+        computerMap: ComputerKeyMap,
+    ): List<KeyRow> {
+        val upper = shifted || capsLock
+        val rows = ArrayList<KeyRow>(5)
+        if (topNumberRow) {
+            val numbers = symbolKeys(split("1234567890"), computerKeys, computerMap)
+            rows += splitRow(numbers.take(5), numbers.drop(5), LATIN_SPLIT_COLUMNS)
+        }
+        val top = letters("qwertyuiop", upper, computerKeys, computerMap)
+        rows += splitRow(top.take(5), top.drop(5), LATIN_SPLIT_COLUMNS)
+        val home = letters("asdfghjkl", upper, computerKeys, computerMap)
+        rows += splitRow(home.take(5), home.drop(5), LATIN_SPLIT_COLUMNS)
+        val bottom = letters("zxcvbnm", upper, computerKeys, computerMap)
+        rows += splitRow(
+            listOf(shift(upper, capsLock)) + bottom.take(4),
+            bottom.drop(4) + deleteKey(computerKeys, computerMap),
+            LATIN_SPLIT_COLUMNS,
+        )
+        val comma = keyed(",", computerKeys, computerMap)
+        val period = keyed(".", computerKeys, computerMap)
+        val lead = if (computerKeys) {
+            listOf(latinCtrlKey(), latinLanguageKey())
+        } else {
+            listOf(
+                iconKey(KeyIcon.SYMBOLS, KeyAction.SetMode(KeyboardMode.SYMBOLS), 1.35f),
+                iconKey(
+                    icon = KeyIcon.GLOBE,
+                    action = KeyAction.SetMode(KeyboardMode.ZHUYIN),
+                    weight = 1.15f,
+                    secondary = KeyAction.NextInputMethod,
+                ),
+            )
+        }
+        rows += splitRow(
+            lead + comma + KeySpec("空格", KeyAction.Space, weight = 1.5f, role = KeyRole.SPACE),
+            listOf(
+                KeySpec("空格", KeyAction.Space, weight = 1.8f, role = KeyRole.SPACE),
+                period,
+                enterKey(enter, 1.7f),
+            ),
+            LATIN_SPLIT_COLUMNS,
+        )
+        return rows
+    }
+
     private fun latin(
         shifted: Boolean,
         capsLock: Boolean,
@@ -125,7 +286,13 @@ internal object KeyboardLayouts {
      * Either way they return to the letter keyboard they were opened from.
      * On row three the keys between the page key and delete share seven key widths.
      */
-    private fun symbols(base: KeyboardMode, more: Boolean, fullWidth: Boolean, enter: EnterChoice): List<KeyRow> {
+    private fun symbols(
+        base: KeyboardMode,
+        more: Boolean,
+        fullWidth: Boolean,
+        enter: EnterChoice,
+        split: Boolean = false,
+    ): List<KeyRow> {
         val chinese = base == KeyboardMode.ZHUYIN && fullWidth
         val (first, second, third) = when {
             !more && !chinese -> Triple(split("1234567890"), split("-/:;()$&@\""), split(".,?!'"))
@@ -146,24 +313,53 @@ internal object KeyboardLayouts {
         val letters = if (zhuyin) KeyboardMode.ZHUYIN else KeyboardMode.LATIN
         val other = if (zhuyin) KeyboardMode.LATIN else KeyboardMode.ZHUYIN
         val wide = 7f / third.size
-        return listOf(
-            KeyRow(symbolKeys(first)),
-            KeyRow(symbolKeys(second)),
-            KeyRow(listOf(page) + symbolKeys(third).map { it.copy(weight = wide) } + deleteKey()),
-            KeyRow(
-                listOf(
-                    modeKey(if (zhuyin) "注音" else "ABC", letters, 1.45f),
-                    iconKey(
-                        icon = KeyIcon.GLOBE,
-                        action = KeyAction.SetMode(other),
-                        weight = 1.15f,
-                        secondary = KeyAction.NextInputMethod,
-                    ),
-                    KeySpec("空格", KeyAction.Space, weight = 4.6f, role = KeyRole.SPACE),
-                    enterKey(enter, 1.85f),
-                ),
+        val bottomLead = listOf(
+            modeKey(if (zhuyin) "注音" else "ABC", letters, 1.45f),
+            iconKey(
+                icon = KeyIcon.GLOBE,
+                action = KeyAction.SetMode(other),
+                weight = 1.15f,
+                secondary = KeyAction.NextInputMethod,
             ),
         )
+        if (!split) {
+            return listOf(
+                KeyRow(symbolKeys(first)),
+                KeyRow(symbolKeys(second)),
+                KeyRow(listOf(page) + symbolKeys(third).map { it.copy(weight = wide) } + deleteKey()),
+                KeyRow(
+                    bottomLead +
+                        KeySpec("空格", KeyAction.Space, weight = 4.6f, role = KeyRole.SPACE) +
+                        enterKey(enter, 1.85f),
+                ),
+            )
+        }
+        val thirds = symbolKeys(third)
+        val mid = thirds.size / 2
+        return listOf(
+            splitRow(symbolKeys(first).take(5), symbolKeys(first).drop(5), LATIN_SPLIT_COLUMNS),
+            splitRow(symbolKeys(second).take(5), symbolKeys(second).drop(5), LATIN_SPLIT_COLUMNS),
+            splitRow(
+                listOf(page.copy(weight = 1.5f)) + thirds.take(mid),
+                thirds.drop(mid) + deleteKey().copy(weight = 1f),
+                LATIN_SPLIT_COLUMNS,
+            ),
+            splitRow(
+                bottomLead + KeySpec("空格", KeyAction.Space, weight = 2.4f, role = KeyRole.SPACE),
+                listOf(
+                    KeySpec("空格", KeyAction.Space, weight = 2.7f, role = KeyRole.SPACE),
+                    enterKey(enter, 1.85f),
+                ),
+                LATIN_SPLIT_COLUMNS,
+            ),
+        )
+    }
+
+    /** Two clusters with at least a key and a half of empty space between them. */
+    private fun splitRow(left: List<KeySpec>, right: List<KeySpec>, columns: Float): KeyRow {
+        val used = (left + right).sumOf { it.weight.toDouble() }.toFloat()
+        val gap = maxOf(1.5f, columns - used)
+        return KeyRow(keys = left + right, splitAt = left.size, splitGap = gap)
     }
 
     /**

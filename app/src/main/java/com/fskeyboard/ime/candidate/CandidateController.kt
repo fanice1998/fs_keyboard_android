@@ -287,7 +287,7 @@ internal class CandidateController(
 
     fun onKey(action: KeyAction) {
         if (action is KeyAction.Computer) {
-            onComputer(action.key)
+            onComputer(action)
             return
         }
         if (modifiers.isActive() && sendModified(action)) return
@@ -322,16 +322,25 @@ internal class CandidateController(
      * A symbol is typed and a tap-armed modifier is cleared. A held modifier stays.
      * A modifier waits. Any other computer key is sent, with the waiting modifiers, then the tap-armed ones clear.
      */
-    private fun onComputer(key: ComputerKey) {
+    private fun onComputer(action: KeyAction.Computer) {
+        val key = action.key
         val symbol = key.symbol
         if (symbol != null) {
             clearLatched()
             onPunctuation(symbol.toString())
             return
         }
-        if (key.modifier) {
+        if (key.modifier && !action.repeating) {
             modifiers.toggle(key)
             publishModifiers()
+            return
+        }
+        if (key.modifier) {
+            dismissSuggestions()
+            hideClipboard()
+            if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
+            if (mode == KeyboardMode.ZHUYIN && hasComposition) finishComposition(convertAll())
+            sendKeyEvent(key.keyCode, modifiers.metaState() or key.metaState)
             return
         }
         dismissSuggestions()

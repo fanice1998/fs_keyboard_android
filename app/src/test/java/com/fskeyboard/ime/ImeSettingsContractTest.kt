@@ -53,6 +53,21 @@ class ImeSettingsContractTest {
     }
 
     @Test
+    fun settingsPageOffersTheZhuyinComputerLayout() {
+        val layout = readProjectFile("src/main/res/layout/activity_ime_settings.xml")
+        val strings = readProjectFile("src/main/res/values/strings.xml")
+        val activity = readProjectFile("src/main/java/com/fskeyboard/ime/settings/ImeSettingsActivity.kt")
+        val service = readProjectFile("src/main/java/com/fskeyboard/ime/FsKeyboardService.kt")
+        val preferences = readProjectFile("src/main/java/com/fskeyboard/ime/settings/KeyboardPreferences.kt")
+        assertTrue(layout.contains("@+id/zhuyin_computer_layout_switch"))
+        assertTrue(strings.contains("name=\"zhuyin_computer_layout_switch\""))
+        assertTrue(activity.contains("setZhuyinComputerLayout"))
+        assertTrue(service.contains("zhuyinComputerLayout"))
+        assertTrue(preferences.contains("zhuyin_computer_layout"))
+        assertTrue(preferences.contains("getBoolean(KEY_ZHUYIN_COMPUTER_LAYOUT, false)"))
+    }
+
+    @Test
     fun settingsPageOffersComputerKeysOnTheEnglishKeyboard() {
         val layout = readProjectFile("src/main/res/layout/activity_ime_settings.xml")
         val strings = readProjectFile("src/main/res/values/strings.xml")

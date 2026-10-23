@@ -3,7 +3,8 @@ package com.fskeyboard.ime.keyboard
 /**
  * How long a finger has to stay down before a key starts repeating, and how fast it then repeats.
  * Backspace used to repeat every 45ms. [DELETE_MS] is a little faster.
- * An arrow repeats only after the finger has held that direction; a quick swipe still fires once.
+ * An arrow, Home, End, or a modifier repeats only after the finger has held.
+ * A quick tap or swipe still fires once.
  */
 internal object KeyRepeat {
     const val DELAY_MS = 320L
@@ -12,7 +13,7 @@ internal object KeyRepeat {
 
     fun interval(action: KeyAction): Long? = when {
         action == KeyAction.Backspace -> DELETE_MS
-        action is KeyAction.Computer && action.key.isArrow -> ARROW_MS
+        action is KeyAction.Computer && action.key.repeats -> ARROW_MS
         else -> null
     }
 
@@ -22,6 +23,12 @@ internal object KeyRepeat {
      */
     fun alreadyDelivered(action: KeyAction, repeating: KeyAction?, backspaceSent: Boolean): Boolean {
         if (action == KeyAction.Backspace && backspaceSent) return true
-        return repeating == action && interval(action) != null
+        if (repeating == null || interval(action) == null) return false
+        if (repeating == action) return true
+        // A held modifier is dispatched with repeating set, and released as the plain key.
+        val fired = repeating
+        return action is KeyAction.Computer &&
+            fired is KeyAction.Computer &&
+            action.key == fired.key
     }
 }

@@ -16,6 +16,8 @@ internal data class EdgePadding(
  * share one bottom edge, so clearance is the tallest of them rather than
  * their sum. On Samsung the reported caption inset is often still the short
  * gesture pill, so the system frame height is a floor there.
+ * In landscape that frame is the portrait bar and leaves a tall empty
+ * strip, so [landscape] keeps the measured bar and lets the keys sit on it.
  */
 internal object KeyboardInsets {
     fun resolve(left: Int, right: Int, reportedBottom: Int?, fallbackBottom: Int): EdgePadding {
@@ -35,6 +37,7 @@ internal object KeyboardInsets {
         embeddedBar: Int,
         systemFrame: Int,
         preferSystemFrame: Boolean,
+        landscape: Boolean = false,
     ): Int {
         val measured = maxOf(
             navigationBars,
@@ -44,6 +47,6 @@ internal object KeyboardInsets {
             embeddedBar,
         ).coerceAtLeast(0)
         val frame = systemFrame.coerceAtLeast(0)
-        return if (preferSystemFrame) maxOf(measured, frame) else measured
+        return if (preferSystemFrame && !landscape) maxOf(measured, frame) else measured
     }
 }

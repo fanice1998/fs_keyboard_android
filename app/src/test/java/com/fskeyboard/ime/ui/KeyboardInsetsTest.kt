@@ -67,6 +67,36 @@ class KeyboardInsetsTest {
     }
 
     @Test
+    fun landscapeSitsOnTheMeasuredBar() {
+        assertEquals(
+            24,
+            KeyboardInsets.bottomClearance(
+                navigationBars = 24,
+                captionBar = 0,
+                mandatoryGestures = 0,
+                tappableElements = 0,
+                embeddedBar = 0,
+                systemFrame = 144,
+                preferSystemFrame = true,
+                landscape = true,
+            ),
+        )
+        assertEquals(
+            48,
+            KeyboardInsets.bottomClearance(
+                navigationBars = 24,
+                captionBar = 48,
+                mandatoryGestures = 0,
+                tappableElements = 0,
+                embeddedBar = 0,
+                systemFrame = 144,
+                preferSystemFrame = true,
+                landscape = true,
+            ),
+        )
+    }
+
+    @Test
     fun otherDevicesDoNotForceTheSystemFrame() {
         assertEquals(
             48,
