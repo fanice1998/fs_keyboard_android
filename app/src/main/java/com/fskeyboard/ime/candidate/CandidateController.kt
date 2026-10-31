@@ -77,6 +77,9 @@ internal class CandidateController(
     private val english = StringBuilder()
     private var englishCaret = 0
     private val englishLexicon = EnglishLexicon()
+    private val preference = CandidatePreference()
+    private val preferenceFile by lazy { File(context.filesDir, CANDIDATE_PREF_FILE) }
+    private var spaceUndo: SpaceUndo? = null
     private val symbolFrequency = SymbolFrequency()
     private var wordContinuations: WordContinuations? = continuations
     private val emailSuggest = EmailSuggest()
@@ -127,6 +130,7 @@ internal class CandidateController(
     fun start() {
         applySavedLetterMode()
         loadEnglish()
+        loadCandidatePreference()
         loadSymbolFrequency()
         loadWordContinuations()
         publish()
@@ -222,6 +226,7 @@ internal class CandidateController(
      * does not read the field. False when there is nothing to move; the space bar then stays a tap.
      */
     fun beginCursor(): Boolean {
+        spaceUndo = null
         if (!canMoveCursor()) return false
         if (english.isNotEmpty()) {
             glideText = english.toString()
@@ -286,6 +291,7 @@ internal class CandidateController(
     }
 
     fun onKey(action: KeyAction) {
+        spaceUndo = null
         if (action is KeyAction.Computer) {
             onComputer(action)
             return
@@ -550,17 +556,27 @@ internal class CandidateController(
     private fun onSpace() {
         hideClipboard()
         if (english.isNotEmpty()) {
-            finishEnglish(trailing = " ", takePrediction = false)
+            val typed = english.toString()
+            val committed = finishEnglish(trailing = " ", takePrediction = false)
+            if (committed != null) spaceUndo = SpaceUndo.English(typed, committed)
             return
         }
         when (KeyPolicy.space(mode, composing = hasComposition)) {
             KeyPolicy.Space.MarkLevelTone -> when {
-                composition.pending.isEmpty -> finishComposition(convertAll())
-                composition.markLevelTone() -> apply(refresh())
+                composition.pending.isEmpty -> {
+                    val done = convertAll()
+                    finishComposition(done)
+                    spaceUndo = SpaceUndo.Text(done.text)
+                }
+                composition.markLevelTone() -> {
+                    apply(refresh())
+                    spaceUndo = SpaceUndo.Level
+                }
             }
             KeyPolicy.Space.CommitSpace -> {
                 commit(" ")
                 refreshIdleSuggestions()
+                spaceUndo = SpaceUndo.Space
             }
         }
     }
@@ -1011,8 +1027,8 @@ internal class CandidateController(
      * Ends the underlined word. Space and Enter pass [takePrediction]; punctuation,
      * switching keyboards, and leaving the field keep the letters that were typed.
      */
-    private fun finishEnglish(trailing: String, takePrediction: Boolean) {
-        if (english.isEmpty()) return
+    private fun finishEnglish(trailing: String, takePrediction: Boolean): String? {
+        if (english.isEmpty()) return null
         val currentTyped = english.toString()
         clearEnglishWord()
 
@@ -1021,7 +1037,7 @@ internal class CandidateController(
             clearComposing()
             presented = emptyList()
             publish(EngineSnapshot())
-            return
+            return null
         }
 
         val isEmail = isEmailContext()
@@ -1031,7 +1047,8 @@ internal class CandidateController(
             EnglishSuggest.commit(currentTyped, presented.firstOrNull()?.text, takePrediction)
         }
         val trailingChar = if (isEmail && trailing == " ") "" else trailing
-        acceptCommitted(word + trailingChar)
+        val committed = word + trailingChar
+        acceptCommitted(committed)
         if (isEmail) {
             emailSuggest.recordChoice(word, beforeUsername())
             saveEmailHistory()
@@ -1040,6 +1057,7 @@ internal class CandidateController(
         }
         if (isSymbol(trailingChar)) learnSymbol(textBeforeCursor(), trailingChar)
         refreshIdleSuggestions()
+        return committed
     }
 
     /** Writes the underlined letters as they stand. Used when the field is closing. */
@@ -1085,7 +1103,7 @@ internal class CandidateController(
             else -> emptyList()
         }
         if (snapshot != null) {
-            presented = shown
+            presented = preference.apply(shown)
             // logd is a binder call. A line on every key holds the frame that shows that key.
             if (snapshot.decodeMillis >= SLOW_LOOKUP_MS) {
                 Log.i(TAG, "latency lookup=${snapshot.decodeMillis}ms candidates=${snapshot.candidates.size}")
@@ -1115,8 +1133,9 @@ internal class CandidateController(
             )
         }
         if (superseded || !acceptRerankUpdate(ticket, generation, trace.fallback)) return
-        if (trace.candidates == presented) return
-        presented = trace.candidates
+        val ordered = preference.apply(trace.candidates)
+        if (ordered == presented) return
+        presented = ordered
         onUi(ui(presented))
     }
 
@@ -1214,6 +1233,140 @@ internal class CandidateController(
         }
     }
 
+    private fun loadCandidatePreference() {
+        try {
+            if (!preferenceFile.isFile) return
+            preferenceFile.bufferedReader().use { reader ->
+                preference.load(reader.readLines())
+            }
+        } catch (_: Exception) {
+            // The row still shows the lexicon order.
+        }
+    }
+
+    /** One step up or down, or hide this word. The text in the editor stays. */
+    fun adjustCandidate(candidate: Candidate, weight: CandidateWeight) {
+        if (closed || candidate.source == CandidateSource.CLIPBOARD) return
+        val englishWord = adjustsEnglish(candidate)
+        when (weight) {
+            CandidateWeight.PROMOTE -> {
+                if (englishWord) englishLexicon.learn(candidate.text)
+                preference.promote(candidate)
+            }
+            CandidateWeight.DEMOTE -> {
+                if (englishWord) englishLexicon.demote(candidate.text)
+                preference.demote(candidate)
+            }
+            CandidateWeight.HIDE -> {
+                if (englishWord) englishLexicon.forget(candidate.text)
+                preference.hide(candidate)
+            }
+        }
+        savePreference()
+        if (englishWord) rewriteUserEnglish()
+        reloadCandidates()
+    }
+
+    /**
+     * Undoes the space tap that armed voice input.
+     * A finished zhuyin phrase is deleted. Its syllables are not rebuilt.
+     */
+    fun revertLastSpaceTap() {
+        val undo = spaceUndo ?: return
+        spaceUndo = null
+        when (undo) {
+            SpaceUndo.Space -> {
+                connection()?.deleteSurroundingText(1, 0)
+                trimRecent(1)
+            }
+            SpaceUndo.Level -> {
+                composition.backspace()
+                apply(refresh())
+            }
+            is SpaceUndo.English -> {
+                connection()?.deleteSurroundingText(undo.committed.length, 0)
+                trimRecent(undo.committed.length)
+                english.append(undo.typed)
+                englishCaret = english.length
+                showEnglish()
+            }
+            is SpaceUndo.Text -> {
+                if (undo.committed.isEmpty()) return
+                connection()?.deleteSurroundingText(undo.committed.length, 0)
+                trimRecent(undo.committed.length)
+            }
+        }
+    }
+
+    /** Inserts dictated text. An open word is committed first so the underline does not swallow it. */
+    fun commitVoice(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty() || closed) return
+        if (english.isNotEmpty()) finishEnglish(trailing = " ", takePrediction = false)
+        if (mode == KeyboardMode.ZHUYIN && hasComposition) {
+            finishComposition(convertAll())
+            commit(" ")
+        }
+        commit(trimmed)
+        refreshIdleSuggestions()
+    }
+
+    private fun adjustsEnglish(candidate: Candidate): Boolean {
+        val letters = if (mode.isLetters) mode else base
+        if (letters != KeyboardMode.LATIN) return false
+        if (candidate.reading.isNotEmpty() || candidate.source == CandidateSource.CLIPBOARD) return false
+        return EnglishLexicon.isValidWord(candidate.text)
+    }
+
+    private fun reloadCandidates() {
+        when {
+            hasComposition -> apply(refresh())
+            english.isNotEmpty() -> showEnglish()
+            else -> {
+                presented = emptyList()
+                refreshIdleSuggestions()
+            }
+        }
+    }
+
+    private fun savePreference() {
+        val lines = preference.serialize()
+        englishWorker.execute {
+            try {
+                preferenceFile.parentFile?.mkdirs()
+                val text = if (lines.isEmpty()) "" else lines.joinToString("\n", postfix = "\n")
+                preferenceFile.writeText(text)
+            } catch (e: Exception) {
+                Log.e(TAG, "failed to save candidate preference", e)
+            }
+        }
+    }
+
+    private fun rewriteUserEnglish() {
+        val lines = englishLexicon.userEntries()
+        englishWorker.execute {
+            try {
+                userEnglishFile.parentFile?.mkdirs()
+                val text = if (lines.isEmpty()) "" else lines.joinToString("\n", postfix = "\n")
+                userEnglishFile.writeText(text)
+            } catch (e: Exception) {
+                Log.e(TAG, "failed to save english words", e)
+            }
+        }
+    }
+
+    private fun trimRecent(count: Int) {
+        val drop = count.coerceAtMost(recent.length)
+        if (drop > 0) recent.setLength(recent.length - drop)
+    }
+
+    private sealed interface SpaceUndo {
+        data object Space : SpaceUndo
+        data object Level : SpaceUndo
+        data class English(val typed: String, val committed: String) : SpaceUndo
+        data class Text(val committed: String) : SpaceUndo
+    }
+
     private fun saveEmailHistory() {
         englishWorker.execute {
             try {
@@ -1234,6 +1387,7 @@ internal class CandidateController(
         const val ENGLISH_CANDIDATES = 8
         const val ENGLISH_ASSET = "lexicon/english.tsv"
         const val USER_ENGLISH_FILE = "lexicon/user_english.tsv"
+        const val CANDIDATE_PREF_FILE = "lexicon/candidate_pref.tsv"
         const val SYMBOL_FILE = "lexicon/symbol_freq.tsv"
         const val LEXICON_BIN = "lexicon/lexicon.bin"
         const val EMAIL_DOMAINS_FILE = "lexicon/email_domains.tsv"

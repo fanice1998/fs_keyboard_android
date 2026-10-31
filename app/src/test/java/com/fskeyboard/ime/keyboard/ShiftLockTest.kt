@@ -38,6 +38,21 @@ class ShiftLockTest {
     }
 
     @Test
+    fun aRepeatingLetterKeepsTheOneShotUntilTheFingerLifts() {
+        shift.onShift()
+        assertFalse(shift.onCharacter(keepOnce = true))
+        assertEquals(ShiftMode.ONCE, shift.mode)
+        assertFalse(shift.onCharacter(keepOnce = true))
+        assertTrue(shift.releaseOnce())
+        assertEquals(ShiftMode.OFF, shift.mode)
+        shift.onShift()
+        shift.onShift()
+        assertFalse(shift.onCharacter(keepOnce = true))
+        assertFalse(shift.releaseOnce())
+        assertEquals(ShiftMode.LOCKED, shift.mode)
+    }
+
+    @Test
     fun leavingLatinDropsAOneShotAndKeepsCapsLock() {
         shift.onShift()
         shift.releaseOnce()

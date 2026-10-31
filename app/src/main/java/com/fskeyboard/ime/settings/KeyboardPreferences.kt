@@ -62,7 +62,9 @@ internal class KeyboardPreferences(context: Context) {
      */
     fun computerKeyMap(): ComputerKeyMap {
         if (!prefs.contains(KEY_COMPUTER_KEY_MAP)) return ComputerKeyMap.DEFAULT
-        return ComputerKeyMap.decode(prefs.getString(KEY_COMPUTER_KEY_MAP, "").orEmpty())
+        return ComputerKeyMap.ensuringGrave(
+            ComputerKeyMap.decode(prefs.getString(KEY_COMPUTER_KEY_MAP, "").orEmpty()),
+        )
     }
 
     fun setComputerKeyMap(map: ComputerKeyMap) {

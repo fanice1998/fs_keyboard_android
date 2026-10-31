@@ -238,9 +238,19 @@ internal class ComputerKeyMap private constructor(
                 slot(DELETE, SwipeDirection.UP_RIGHT, ComputerKey.FORWARD_DELETE),
                 slot('u', SwipeDirection.UP_LEFT, ComputerKey.HOME),
                 slot('d', SwipeDirection.DOWN_RIGHT, ComputerKey.END),
+                slot(',', SwipeDirection.UP_LEFT, ComputerKey.GRAVE),
                 slot(',', SwipeDirection.DOWN_RIGHT, ComputerKey.META),
             ).toMap(),
         )
+
+        /**
+         * Fills an empty comma up-left with the backtick.
+         * A direction the user already set, or a backtick parked on another key, stays put.
+         */
+        fun ensuringGrave(map: ComputerKeyMap): ComputerKeyMap {
+            if (map.swipes(',')[SwipeDirection.UP_LEFT] != null) return map
+            return map.assign(',', SwipeDirection.UP_LEFT, ComputerKey.GRAVE) ?: map
+        }
 
         private fun slot(letter: Char, direction: SwipeDirection, key: ComputerKey) =
             ComputerSlot(letter, direction) to key

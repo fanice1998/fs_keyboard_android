@@ -67,6 +67,15 @@ class KeyboardInsetsTest {
     }
 
     @Test
+    fun landscapeGrowthComesOutOfTheSpacerDownToTheNavigationBar() {
+        assertEquals(30, KeyboardInsets.landscapeSpacer(clearance = 48, navigationBars = 24, growth = 18))
+        assertEquals(24, KeyboardInsets.landscapeSpacer(clearance = 48, navigationBars = 24, growth = 28))
+        assertEquals(24, KeyboardInsets.landscapeSpacer(clearance = 48, navigationBars = 24, growth = 100))
+        assertEquals(48, KeyboardInsets.landscapeSpacer(clearance = 48, navigationBars = 24, growth = 0))
+        assertEquals(0, KeyboardInsets.landscapeSpacer(clearance = 0, navigationBars = 0, growth = 10))
+    }
+
+    @Test
     fun landscapeSitsOnTheMeasuredBar() {
         assertEquals(
             24,

@@ -339,7 +339,7 @@ internal object KeyboardLayouts {
         val (first, second, third) = when {
             !more && !chinese -> Triple(split("1234567890"), split("-/:;()$&@\""), split(".,?!'"))
             !more -> Triple(split("1234567890"), split("-/：；（）$@「」"), split("。，、？！."))
-            !chinese -> Triple(split("[]{}#%^*+="), split("_\\|~<>€£¥•"), split(".,?!'"))
+            !chinese -> Triple(split("[]{}#%^*+="), split("_\\|~`<>€£¥"), split(".,?!'•"))
             else -> Triple(
                 split("[]{}#%^*+="),
                 split("_—\\|～«»¥&·"),

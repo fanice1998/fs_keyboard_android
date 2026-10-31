@@ -12,6 +12,11 @@ internal enum class KeyIcon {
     GLOBE,
     SYMBOLS,
     CLIPBOARD,
+    UP,
+    DOWN,
+    TRASH,
+    MICROPHONE,
+    KEYBOARD,
 }
 
 internal object KeyIcons {
@@ -43,6 +48,11 @@ internal object KeyIcons {
             KeyIcon.GLOBE -> drawGlobe(canvas, paint)
             KeyIcon.SYMBOLS -> drawSymbols(canvas, paint)
             KeyIcon.CLIPBOARD -> drawClipboard(canvas, paint)
+            KeyIcon.UP -> drawUp(canvas, paint)
+            KeyIcon.DOWN -> drawDown(canvas, paint)
+            KeyIcon.TRASH -> drawTrash(canvas, paint)
+            KeyIcon.MICROPHONE -> drawMicrophone(canvas, paint)
+            KeyIcon.KEYBOARD -> drawKeyboard(canvas, paint)
         }
         canvas.restore()
     }
@@ -100,5 +110,52 @@ internal object KeyIcons {
         oval.set(9f, 3f, 15f, 9f)
         canvas.drawRoundRect(oval, 1.6f, 1.6f, paint)
         canvas.drawLine(10.2f, 6f, 13.8f, 6f, paint)
+    }
+
+    private fun drawUp(canvas: Canvas, paint: Paint) {
+        canvas.drawLine(12f, 19f, 12f, 5.5f, paint)
+        canvas.drawLine(12f, 5.5f, 6.5f, 11f, paint)
+        canvas.drawLine(12f, 5.5f, 17.5f, 11f, paint)
+    }
+
+    private fun drawDown(canvas: Canvas, paint: Paint) {
+        canvas.drawLine(12f, 5f, 12f, 18.5f, paint)
+        canvas.drawLine(12f, 18.5f, 6.5f, 13f, paint)
+        canvas.drawLine(12f, 18.5f, 17.5f, 13f, paint)
+    }
+
+    private fun drawTrash(canvas: Canvas, paint: Paint) {
+        canvas.drawLine(5f, 7.5f, 19f, 7.5f, paint)
+        canvas.drawLine(9f, 7.5f, 10f, 4.5f, paint)
+        canvas.drawLine(15f, 7.5f, 14f, 4.5f, paint)
+        canvas.drawLine(10f, 4.5f, 14f, 4.5f, paint)
+        path.reset()
+        path.moveTo(7f, 7.5f)
+        path.lineTo(8.2f, 20f)
+        path.lineTo(15.8f, 20f)
+        path.lineTo(17f, 7.5f)
+        canvas.drawPath(path, paint)
+        canvas.drawLine(10.2f, 11f, 10.6f, 17f, paint)
+        canvas.drawLine(13.8f, 11f, 13.4f, 17f, paint)
+    }
+
+    private fun drawMicrophone(canvas: Canvas, paint: Paint) {
+        oval.set(9f, 3f, 15f, 12f)
+        canvas.drawRoundRect(oval, 3f, 3f, paint)
+        path.reset()
+        path.moveTo(7f, 10f)
+        path.quadTo(7f, 17f, 12f, 17f)
+        path.quadTo(17f, 17f, 17f, 10f)
+        canvas.drawPath(path, paint)
+        canvas.drawLine(12f, 17f, 12f, 20.5f, paint)
+        canvas.drawLine(8.5f, 20.5f, 15.5f, 20.5f, paint)
+    }
+
+    private fun drawKeyboard(canvas: Canvas, paint: Paint) {
+        oval.set(3f, 6f, 21f, 18.5f)
+        canvas.drawRoundRect(oval, 2f, 2f, paint)
+        canvas.drawLine(6.5f, 10f, 9.5f, 10f, paint)
+        canvas.drawLine(11.2f, 10f, 17.5f, 10f, paint)
+        canvas.drawLine(8f, 14f, 16f, 14f, paint)
     }
 }

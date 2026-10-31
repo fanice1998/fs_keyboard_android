@@ -22,15 +22,20 @@ internal class ShiftLock {
         }
     }
 
-    /** True when a one-shot shift ended. Caps lock stays through letters. */
-    fun onCharacter(): Boolean {
-        if (mode != ShiftMode.ONCE) return false
+    /**
+     * True when a one-shot shift ended. Caps lock stays through letters.
+     * [keepOnce] holds the shift for a repeating key until the finger lifts.
+     */
+    fun onCharacter(keepOnce: Boolean = false): Boolean {
+        if (keepOnce || mode != ShiftMode.ONCE) return false
         mode = ShiftMode.OFF
         return true
     }
 
     /** Drops a one-shot shift. Caps lock stays, so leaving the Latin keys does not cancel it. */
-    fun releaseOnce() {
-        if (mode == ShiftMode.ONCE) mode = ShiftMode.OFF
+    fun releaseOnce(): Boolean {
+        if (mode != ShiftMode.ONCE) return false
+        mode = ShiftMode.OFF
+        return true
     }
 }

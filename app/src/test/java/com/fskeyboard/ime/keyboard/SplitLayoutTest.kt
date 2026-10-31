@@ -6,16 +6,16 @@ import org.junit.Test
 
 class SplitLayoutTest {
     @Test
-    fun templateMarginsAndAThirdSmallerKeys() {
-        assertEquals(0.117f, SplitLayout.SIDE, 0.0001f)
-        assertEquals(0.883f, SplitLayout.rightEdge(), 0.0001f)
-        assertEquals(2f / 3f, SplitLayout.SCALE, 0f)
+    fun templateMarginsAndScaledKeys() {
+        assertEquals(0.068f, SplitLayout.SIDE, 0.0001f)
+        assertEquals(0.932f, SplitLayout.rightEdge(), 0.0001f)
+        assertEquals(0.84f, SplitLayout.SCALE, 0f)
         val templateW = SplitLayout.KEY
-        assertEquals(templateW * 2f / 3f, SplitLayout.placedW(templateW), 0.0001f)
+        assertEquals(templateW * SplitLayout.SCALE, SplitLayout.placedW(templateW), 0.0001f)
         val center = SplitLayout.SIDE + templateW / 2f
         val placedLeft = SplitLayout.placedX(SplitLayout.SIDE, templateW)
         assertEquals(center, placedLeft + SplitLayout.placedW(templateW) / 2f, 0.0001f)
-        assertEquals(0.643f, SplitLayout.keyX(SplitLayout.RIGHT, 0), 0.0001f)
+        assertEquals(SplitLayout.RIGHT, SplitLayout.keyX(SplitLayout.RIGHT, 0), 0.0001f)
         val width = 1000f
         assertEquals(width * SplitLayout.ROW * SplitLayout.SCALE, SplitLayout.rowSpan(width), 0.01f)
         assertTrue(SplitLayout.KEY_FACE < SplitLayout.ROW)

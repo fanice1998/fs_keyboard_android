@@ -58,6 +58,21 @@ internal class EnglishLexicon {
         return true
     }
 
+    /** Lowers a learned word by one. A count of one removes it. False when it was not learned. */
+    fun demote(word: String): Boolean {
+        val key = word.trim().lowercase()
+        val count = userWords[key] ?: return false
+        val next = count - 1
+        if (next <= 0) userWords.remove(key) else userWords[key] = next
+        return true
+    }
+
+    /** Removes a learned word. The built-in list is unchanged. */
+    fun forget(word: String): Boolean {
+        val key = word.trim().lowercase()
+        return userWords.remove(key) != null
+    }
+
     fun userEntries(): List<Pair<String, Int>> =
         userWords.entries
             .sortedByDescending { it.value }

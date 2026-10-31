@@ -2,6 +2,7 @@ package com.fskeyboard.ime.keyboard
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Build
@@ -24,6 +25,9 @@ internal class KeyboardView(context: Context) : View(context) {
 
     /** After a touch-fired key is handled, with that touch's event time. Not for repeat or long press. */
     var onTyped: (eventUptimeMillis: Long) -> Unit = {}
+
+    /** A space tap, then a still hold, asks for the voice screen. */
+    var onVoice: () -> Unit = {}
 
     /** False when a space glide should stay a tap, for example while the keyboard is closed. */
     var trackpadAllowed: () -> Boolean = { false }
@@ -172,12 +176,17 @@ internal class KeyboardView(context: Context) : View(context) {
     private var previewLinger = false
     private var previewFramePosted = false
     private var spaceCursor: SpaceCursor? = null
+    private var lastSpaceTapAt = VoiceGesture.NONE
+    private var voiceArmed = false
     private var swipe: KeySwipe? = null
     private var swipeDirection: SwipeDirection? = null
     private var backspaceSent = false
 
     /** The action the hold timer is already sending, so key-up does not send it once more. */
     private var repeating: KeyAction? = null
+
+    /** A one-shot shift stayed up for a letter burst and clears when the finger lifts. */
+    private var burstShift = false
     private val modifierHolds = ArrayList<Pair<Int, ComputerKey>>()
     private var trackpad = false
     private var zhuyinAreas: List<KeyArea> = emptyList()
@@ -192,6 +201,12 @@ internal class KeyboardView(context: Context) : View(context) {
     }
     private val swipeLabel = Paint(Paint.ANTI_ALIAS_FLAG)
     private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+    }
+
+    /** A still hold after a recent space tap. A slide cancels it before this runs. */
+    private val voiceHold = Runnable { engageVoice() }
 
     private val repeat = object : Runnable {
         override fun run() {
@@ -240,6 +255,18 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     /** [base] is the letter keyboard that the symbol pages return to. */
+    /** English dictation uses en-US. Zhuyin, and the symbol page opened from it, uses zh-TW. */
+    fun voiceLanguageTag(): String {
+        val letters = if (mode.isLetters) mode else base
+        return if (letters == KeyboardMode.LATIN) "en-US" else "zh-TW"
+    }
+
+    /** Extra landscape height from the larger key scale. Zero until the view has a width. */
+    fun splitGrowthPx(): Int {
+        if (!split || width <= 0 || rows.isEmpty()) return 0
+        return SplitLayout.growthPx(width.toFloat(), rows.size)
+    }
+
     fun setMode(mode: KeyboardMode, base: KeyboardMode = this.base, numberPad: NumberPad = NumberPad.NONE) {
         val pad = if (mode == KeyboardMode.NUMBER) numberPad else NumberPad.NONE
         if (this.mode == mode && this.base == base && this.numberPad == pad) return
@@ -290,8 +317,15 @@ internal class KeyboardView(context: Context) : View(context) {
                 box.spec.role == KeyRole.ACTION || box.spec.role == KeyRole.MODIFIER -> palette.keyAction
                 else -> palette.key
             }
-            val draw = inset(box.rect)
+            val draw = inset(box.face)
             canvas.drawRoundRect(draw, radius, radius, fill)
+            val chosen = box == down && swipeDirection != null &&
+                (box.spec.swipes.isNotEmpty() || box.spec.extraSwipes.isNotEmpty())
+            if (chosen) {
+                stroke.color = swipeInk()
+                stroke.strokeWidth = dp(2).toFloat()
+                canvas.drawRoundRect(draw, radius, radius, stroke)
+            }
             if (trackpad) continue
             val icon = box.spec.icon
             if (icon != null) {
@@ -379,6 +413,7 @@ internal class KeyboardView(context: Context) : View(context) {
                     (direction != null || (box == released && KeyPreview.visible(box.spec)))
                 release(lingerPreview = linger)
                 if (action != null) fire(action, event.eventTime)
+                if (action == KeyAction.Space) lastSpaceTapAt = event.eventTime
             }
             MotionEvent.ACTION_CANCEL -> {
                 parent?.requestDisallowInterceptTouchEvent(false)
@@ -407,11 +442,19 @@ internal class KeyboardView(context: Context) : View(context) {
         swipeDirection = null
         backspaceSent = false
         repeating = null
+        if (spec?.action != KeyAction.Space) lastSpaceTapAt = VoiceGesture.NONE
         when {
-            spec?.action == KeyAction.Space && trackpadAllowed() -> {
-                spaceCursor = SpaceCursor(slop = dp(10).toFloat())
-                spaceCursor?.down(x, y)
-                postDelayed(holdTrackpad, ViewConfiguration.getLongPressTimeout().toLong())
+            spec?.action == KeyAction.Space -> {
+                voiceArmed = VoiceGesture.armed(lastSpaceTapAt, eventTime)
+                if (trackpadAllowed()) {
+                    spaceCursor = SpaceCursor(slop = dp(10).toFloat())
+                    spaceCursor?.down(x, y)
+                }
+                if (voiceArmed) {
+                    postDelayed(voiceHold, VoiceGesture.HOLD_MS)
+                } else if (spaceCursor != null) {
+                    postDelayed(holdTrackpad, ViewConfiguration.getLongPressTimeout().toLong())
+                }
             }
             spec?.action == KeyAction.Backspace && !hasSwipes -> {
                 backspaceSent = true
@@ -420,7 +463,7 @@ internal class KeyboardView(context: Context) : View(context) {
             }
             spec?.action == KeyAction.Backspace -> postDelayed(repeat, KeyRepeat.DELAY_MS)
             else -> {
-                if (spec != null && KeyRepeat.interval(spec.action) != null) {
+                if (spec != null && KeyRepeat.schedules(mode, spec.action)) {
                     postDelayed(repeat, KeyRepeat.DELAY_MS)
                 }
                 if (spec?.holdKey != null || spec?.secondary != null) postDelayed(longPress, 400L)
@@ -439,6 +482,8 @@ internal class KeyboardView(context: Context) : View(context) {
         val wasTracking = cursor.tracking
         val travel = cursor.move(event.getX(index), event.getY(index)) ?: return false
         if (!wasTracking) {
+            voiceArmed = false
+            removeCallbacks(voiceHold)
             if (!onTrackpadStart()) {
                 spaceCursor = null
                 removeCallbacks(holdTrackpad)
@@ -486,7 +531,7 @@ internal class KeyboardView(context: Context) : View(context) {
             } else {
                 removeCallbacks(holdSwipe)
                 val spec = down?.spec
-                if (spec != null && KeyRepeat.interval(spec.action) != null) {
+                if (spec != null && KeyRepeat.schedules(mode, spec.action)) {
                     postDelayed(repeat, KeyRepeat.DELAY_MS)
                 }
                 if (spec?.holdKey != null || spec?.secondary != null) {
@@ -551,7 +596,7 @@ internal class KeyboardView(context: Context) : View(context) {
         previewLinger = false
         previewBox = null
         keyPreview.cancelDismiss()
-        keyPreview.show(text, box.rect, width)
+        keyPreview.show(text, box.face, width)
     }
 
     /**
@@ -639,9 +684,21 @@ internal class KeyboardView(context: Context) : View(context) {
         for (pointer in pointers) releaseHold(pointer)
     }
 
+    private fun engageVoice() {
+        if (!voiceArmed || spaceCursor?.tracking == true) return
+        voiceArmed = false
+        lastSpaceTapAt = VoiceGesture.NONE
+        removeCallbacks(holdTrackpad)
+        onVoice()
+        release()
+    }
+
     private fun release(lingerPreview: Boolean = false) {
+        val endBurst = burstShift
+        burstShift = false
         releaseHold(downPointer)
         stopRepeat()
+        voiceArmed = false
         removeCallbacks(holdTrackpad)
         val wasTracking = trackpad
         spaceCursor = null
@@ -653,6 +710,7 @@ internal class KeyboardView(context: Context) : View(context) {
         endPreview(lingerPreview && !wasTracking)
         invalidate()
         if (wasTracking) onTrackpadActive(false)
+        if (endBurst && shiftLock.releaseOnce()) rebuild()
     }
 
     /**
@@ -699,7 +757,7 @@ internal class KeyboardView(context: Context) : View(context) {
             previewLinger = false
             return
         }
-        keyPreview.show(box.spec.label, box.rect, width)
+        keyPreview.show(box.spec.label, box.face, width)
         if (previewLinger || down != box) {
             previewLinger = false
             keyPreview.hideLater(KeyPreview.LINGER_MS)
@@ -778,7 +836,9 @@ internal class KeyboardView(context: Context) : View(context) {
         }
         if (haptic && vibrationEnabled) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         traced("ime.dispatch") { onKey(action) }
-        if (action is KeyAction.Character && shiftLock.onCharacter()) rebuild()
+        val keepShift = action is KeyAction.Character && repeating == action
+        if (keepShift) burstShift = true
+        if (action is KeyAction.Character && shiftLock.onCharacter(keepShift)) rebuild()
     }
 
     private fun rebuild() {
@@ -841,9 +901,45 @@ internal class KeyboardView(context: Context) : View(context) {
             }
             top += rowHeight
         }
+        extendZhuyinEdges(width)
         zhuyinAreas = boxes.mapNotNull { box ->
             val action = box.spec.action as? KeyAction.Bopomofo ?: return@mapNotNull null
-            KeyArea(action.label, box.rect.centerX(), box.rect.centerY(), box.rect.width(), box.rect.height())
+            val face = box.face
+            KeyArea(action.label, face.centerX(), face.centerY(), face.width(), face.height())
+        }
+    }
+
+    /**
+     * ㄇ and ㄣ sit against the stagger blank. The hit target takes most of that
+     * blank and the drawn key takes half. Computer zhuyin has no gutter.
+     */
+    private fun extendZhuyinEdges(width: Int) {
+        if (mode != KeyboardMode.ZHUYIN || zhuyinComputerLayout) return
+        val margin = dp(3).toFloat()
+        val limit = width.toFloat()
+        for (index in boxes.indices) {
+            val box = boxes[index]
+            val label = (box.spec.action as? KeyAction.Bopomofo)?.label ?: continue
+            val reach = ZhuyinEdgeReach.adjust(
+                label = label,
+                left = box.rect.left,
+                right = box.rect.right,
+                blankLeft = box.rect.left - margin,
+                blankRight = limit - margin - box.rect.right,
+            ) ?: continue
+            val hit = RectF(
+                reach.hitLeft.coerceAtLeast(0f),
+                box.rect.top,
+                reach.hitRight.coerceAtMost(limit),
+                box.rect.bottom,
+            )
+            val face = RectF(
+                reach.drawLeft.coerceAtLeast(0f),
+                box.face.top,
+                reach.drawRight.coerceAtMost(limit),
+                box.face.bottom,
+            )
+            boxes[index] = box.copy(rect = hit, face = face)
         }
     }
 
@@ -851,61 +947,118 @@ internal class KeyboardView(context: Context) : View(context) {
         val labels = box.spec.swipeLabels()
         if (labels.isEmpty()) return
         val active = if (box == down) swipeDirection else null
-        val pad = dp(2).toFloat()
         for ((direction, text) in labels) {
-            val key = box.spec.swipes[direction]
-            val armed = (key != null && key in armedComputerKeys) || direction == active
-            swipeLabel.textSize = sp(8f)
-            swipeLabel.color = if (armed) palette.text else palette.hint
-            val textWidth = swipeLabel.measureText(text)
-            val textHeight = swipeLabel.descent() - swipeLabel.ascent()
-            val alongTop = direction == SwipeDirection.UP ||
-                direction == SwipeDirection.UP_LEFT ||
-                direction == SwipeDirection.UP_RIGHT
-            val alongBottom = direction == SwipeDirection.DOWN ||
-                direction == SwipeDirection.DOWN_LEFT ||
-                direction == SwipeDirection.DOWN_RIGHT
-            val baseline = when {
-                alongTop -> draw.top + pad - swipeLabel.ascent()
-                alongBottom -> draw.bottom - pad - swipeLabel.descent()
-                else -> draw.centerY() - (swipeLabel.ascent() + swipeLabel.descent()) / 2f
+            if (direction == active) {
+                drawSwipeChip(canvas, draw, direction, text)
+            } else {
+                drawSwipeHint(canvas, box, draw, palette, direction, text)
             }
-            val alignLeft = direction == SwipeDirection.LEFT ||
-                direction == SwipeDirection.UP_LEFT ||
-                direction == SwipeDirection.DOWN_LEFT
-            val alignRight = direction == SwipeDirection.RIGHT ||
-                direction == SwipeDirection.UP_RIGHT ||
-                direction == SwipeDirection.DOWN_RIGHT
-            swipeLabel.textAlign = when {
-                alignLeft -> Paint.Align.LEFT
-                alignRight -> Paint.Align.RIGHT
-                else -> Paint.Align.CENTER
-            }
-            val x = when {
-                alignLeft -> draw.left + pad
-                alignRight -> draw.right - pad
-                else -> draw.centerX()
-            }
-            if (armed) {
-                val left = when (swipeLabel.textAlign) {
-                    Paint.Align.LEFT -> x
-                    Paint.Align.RIGHT -> x - textWidth
-                    else -> x - textWidth / 2f
-                }
-                val top = baseline + swipeLabel.ascent()
-                fill.color = palette.accent
-                canvas.drawRoundRect(
-                    left - dp(1),
-                    top,
-                    left + textWidth + dp(1),
-                    top + textHeight,
-                    dp(2).toFloat(),
-                    dp(2).toFloat(),
-                    fill,
-                )
-            }
-            canvas.drawText(text, x, baseline, swipeLabel)
         }
+    }
+
+    /** The selected corner fills enough of the key that the choice reads at a glance. */
+    private fun drawSwipeChip(canvas: Canvas, draw: RectF, direction: SwipeDirection, text: String) {
+        swipeLabel.textSize = sp(if (text.length > 2) 11f else 14f)
+        swipeLabel.color = swipeOnInk()
+        swipeLabel.textAlign = Paint.Align.CENTER
+        val textWidth = swipeLabel.measureText(text)
+        val textHeight = swipeLabel.descent() - swipeLabel.ascent()
+        val padX = dp(6).toFloat()
+        val padY = dp(4).toFloat()
+        val chipW = maxOf(draw.width() * 0.45f, textWidth + padX * 2f).coerceAtMost(draw.width())
+        val chipH = maxOf(draw.height() * 0.45f, textHeight + padY * 2f).coerceAtMost(draw.height())
+        val chip = swipeChipRect(draw, direction, chipW, chipH)
+        val radius = dp(8).toFloat()
+        fill.color = swipeInk()
+        canvas.drawRoundRect(chip, radius, radius, fill)
+        val baseline = chip.centerY() - (swipeLabel.ascent() + swipeLabel.descent()) / 2f
+        canvas.drawText(text, chip.centerX(), baseline, swipeLabel)
+    }
+
+    private fun swipeChipRect(draw: RectF, direction: SwipeDirection, width: Float, height: Float): RectF {
+        val left = when (direction) {
+            SwipeDirection.LEFT, SwipeDirection.UP_LEFT, SwipeDirection.DOWN_LEFT -> draw.left
+            SwipeDirection.RIGHT, SwipeDirection.UP_RIGHT, SwipeDirection.DOWN_RIGHT -> draw.right - width
+            else -> draw.centerX() - width / 2f
+        }
+        val top = when (direction) {
+            SwipeDirection.UP, SwipeDirection.UP_LEFT, SwipeDirection.UP_RIGHT -> draw.top
+            SwipeDirection.DOWN, SwipeDirection.DOWN_LEFT, SwipeDirection.DOWN_RIGHT -> draw.bottom - height
+            else -> draw.centerY() - height / 2f
+        }
+        return RectF(left, top, left + width, top + height)
+    }
+
+    /** Corner hints stay small. A latched modifier keeps the old accent chip. */
+    private fun drawSwipeHint(
+        canvas: Canvas,
+        box: KeyBox,
+        draw: RectF,
+        palette: KeyboardPalette,
+        direction: SwipeDirection,
+        text: String,
+    ) {
+        val key = box.spec.swipes[direction]
+        val armed = key != null && key in armedComputerKeys
+        val pad = dp(2).toFloat()
+        swipeLabel.textSize = sp(8f)
+        swipeLabel.color = if (armed) palette.text else palette.hint
+        val textWidth = swipeLabel.measureText(text)
+        val textHeight = swipeLabel.descent() - swipeLabel.ascent()
+        val alongTop = direction == SwipeDirection.UP ||
+            direction == SwipeDirection.UP_LEFT ||
+            direction == SwipeDirection.UP_RIGHT
+        val alongBottom = direction == SwipeDirection.DOWN ||
+            direction == SwipeDirection.DOWN_LEFT ||
+            direction == SwipeDirection.DOWN_RIGHT
+        val baseline = when {
+            alongTop -> draw.top + pad - swipeLabel.ascent()
+            alongBottom -> draw.bottom - pad - swipeLabel.descent()
+            else -> draw.centerY() - (swipeLabel.ascent() + swipeLabel.descent()) / 2f
+        }
+        val alignLeft = direction == SwipeDirection.LEFT ||
+            direction == SwipeDirection.UP_LEFT ||
+            direction == SwipeDirection.DOWN_LEFT
+        val alignRight = direction == SwipeDirection.RIGHT ||
+            direction == SwipeDirection.UP_RIGHT ||
+            direction == SwipeDirection.DOWN_RIGHT
+        swipeLabel.textAlign = when {
+            alignLeft -> Paint.Align.LEFT
+            alignRight -> Paint.Align.RIGHT
+            else -> Paint.Align.CENTER
+        }
+        val x = when {
+            alignLeft -> draw.left + pad
+            alignRight -> draw.right - pad
+            else -> draw.centerX()
+        }
+        if (armed) {
+            val left = when (swipeLabel.textAlign) {
+                Paint.Align.LEFT -> x
+                Paint.Align.RIGHT -> x - textWidth
+                else -> x - textWidth / 2f
+            }
+            val top = baseline + swipeLabel.ascent()
+            fill.color = palette.accent
+            canvas.drawRoundRect(
+                left - dp(1),
+                top,
+                left + textWidth + dp(1),
+                top + textHeight,
+                dp(2).toFloat(),
+                dp(2).toFloat(),
+                fill,
+            )
+        }
+        canvas.drawText(text, x, baseline, swipeLabel)
+    }
+
+    private fun swipeInk(): Int {
+        return if (isNightMode()) Color.parseColor("#8EB4F0") else Color.parseColor("#2F6FDB")
+    }
+
+    private fun swipeOnInk(): Int {
+        return if (isNightMode()) Color.parseColor("#1C1C1E") else Color.WHITE
     }
 
     private fun inset(rect: RectF): RectF {
@@ -926,6 +1079,7 @@ internal class KeyboardView(context: Context) : View(context) {
         removeCallbacks(repeat)
         removeCallbacks(longPress)
         removeCallbacks(holdSwipe)
+        removeCallbacks(voiceHold)
     }
 
     private fun sp(value: Float): Float {
@@ -936,7 +1090,8 @@ internal class KeyboardView(context: Context) : View(context) {
         )
     }
 
-    private data class KeyBox(val spec: KeySpec, val rect: RectF)
+    /** [rect] is the hit target. [face] is the drawn key, and matches [rect] until an edge grows. */
+    private data class KeyBox(val spec: KeySpec, val rect: RectF, val face: RectF = rect)
 
     private companion object {
         const val NO_POINTER = -1

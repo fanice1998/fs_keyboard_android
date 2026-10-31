@@ -5,26 +5,30 @@ package com.fskeyboard.ime.keyboard
  * landscape template. [SIDE] is the blank before the outer key. Letter keys
  * are [KEY] wide and [PITCH] apart. [ROW] is the row pitch and [KEY_FACE]
  * is the key height, both as fractions of that width. [SCALE] draws each
- * key at two thirds of that template size, around the same center, so the
- * side blank stays and the keys get smaller.
+ * key around the same center. [SCALE] is larger than [FORMER_SCALE], and
+ * [SIDE] is narrower, so the keys grow into the side blanks. The extra
+ * row height is taken back from the landscape navigation gap.
  */
 internal object SplitLayout {
-    const val SIDE = 0.117f
+    const val SIDE = 0.068f
     const val KEY = 0.040f
     const val PITCH = 0.050f
-    const val RIGHT = 0.643f
+    const val RIGHT = 0.692f
     const val INDENT = 0.0105f
     const val FUNCTION = 0.047f
     const val SPACE = 0.193f
     const val ROW = 0.041f
     const val KEY_FACE = 0.0368f
-    const val SCALE = 2f / 3f
+    const val SCALE = 0.84f
 
-    const val LEFT_SPACE_X = 0.234f
-    const val RIGHT_SPACE_X = 0.572f
-    const val RIGHT_SYMBOL_X = 0.777f
-    const val ENTER_X = 0.835f
-    const val GLOBE_X = 0.176f
+    /** Draw scale before the keys grew. The difference is the height to reclaim. */
+    const val FORMER_SCALE = 2f / 3f
+
+    const val LEFT_SPACE_X = 0.185f
+    const val RIGHT_SPACE_X = 0.621f
+    const val RIGHT_SYMBOL_X = 0.826f
+    const val ENTER_X = 0.884f
+    const val GLOBE_X = 0.127f
 
     fun leftOrigin(indent: Int): Float = SIDE + indent * INDENT
 
@@ -79,4 +83,11 @@ internal object SplitLayout {
     fun placedH(templateH: Float = KEY_FACE): Float = templateH * SCALE
 
     fun rowSpan(widthPx: Float): Float = widthPx * ROW * SCALE
+
+    /** Pixels the larger draw scale adds, so the spacer can give them back. */
+    fun growthPx(widthPx: Float, rows: Int): Int {
+        if (widthPx <= 0f || rows <= 0) return 0
+        val extra = widthPx * ROW * (SCALE - FORMER_SCALE) * rows
+        return extra.toInt().coerceAtLeast(0)
+    }
 }

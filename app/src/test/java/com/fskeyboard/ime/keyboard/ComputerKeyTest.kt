@@ -123,6 +123,7 @@ class ComputerKeyTest {
         assertEquals(ComputerKey.TAB, messy.swipes('q')[SwipeDirection.RIGHT])
         assertTrue(messy.swipes('z').isEmpty())
         assertEquals(ComputerKeyMap.DEFAULT, ComputerKeyMap.decode(ComputerKeyMap.DEFAULT.encode()))
+        assertEquals(ComputerKey.GRAVE, ComputerKeyMap.DEFAULT.swipes(',')[SwipeDirection.UP_LEFT])
         val punctuation = ComputerKeyMap.decode(
             "./left=left,del/up_right=forward_delete,comma/up_right=meta,comma/down_right=meta",
         )
@@ -133,6 +134,20 @@ class ComputerKeyTest {
         )
         assertEquals(ComputerKey.META, punctuation.swipes(',')[SwipeDirection.UP_RIGHT])
         assertEquals(ComputerKey.META, punctuation.swipes(',')[SwipeDirection.DOWN_RIGHT])
+    }
+
+    @Test
+    fun anEmptyCommaUpLeftGainsTheBacktickAndAChosenDirectionStays() {
+        val empty = ComputerKeyMap.decode("comma/down_right=meta")
+        val filled = ComputerKeyMap.ensuringGrave(empty)
+        assertEquals(ComputerKey.GRAVE, filled.swipes(',')[SwipeDirection.UP_LEFT])
+        assertEquals(ComputerKey.META, filled.swipes(',')[SwipeDirection.DOWN_RIGHT])
+        val chosen = ComputerKeyMap.EMPTY.assign(',', SwipeDirection.UP_LEFT, ComputerKey.ESC)!!
+        assertEquals(chosen, ComputerKeyMap.ensuringGrave(chosen))
+        val parked = ComputerKeyMap.EMPTY.assign('a', SwipeDirection.UP, ComputerKey.GRAVE)!!
+        val kept = ComputerKeyMap.ensuringGrave(parked)
+        assertNull(kept.swipes(',')[SwipeDirection.UP_LEFT])
+        assertEquals(ComputerKey.GRAVE, kept.swipes('a')[SwipeDirection.UP])
     }
 
     @Test
@@ -243,7 +258,13 @@ class ComputerKeyTest {
             ),
             swipes("."),
         )
-        assertEquals(mapOf(SwipeDirection.DOWN_RIGHT to ComputerKey.META), swipes(","))
+        assertEquals(
+            mapOf(
+                SwipeDirection.UP_LEFT to ComputerKey.GRAVE,
+                SwipeDirection.DOWN_RIGHT to ComputerKey.META,
+            ),
+            swipes(","),
+        )
         assertEquals(mapOf(SwipeDirection.UP_LEFT to ComputerKey.HOME), swipes("u"))
         assertEquals(mapOf(SwipeDirection.DOWN_RIGHT to ComputerKey.END), swipes("d"))
         assertEquals(

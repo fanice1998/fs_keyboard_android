@@ -1,5 +1,8 @@
 package com.fskeyboard.ime
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.Color
@@ -17,10 +20,12 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import com.fskeyboard.ime.candidate.Candidate
 import com.fskeyboard.ime.candidate.CandidateBarView
 import com.fskeyboard.ime.candidate.CandidateController
 import com.fskeyboard.ime.candidate.CandidatePanelView
 import com.fskeyboard.ime.candidate.CandidateSource
+import com.fskeyboard.ime.candidate.CandidateWeightMenu
 import com.fskeyboard.ime.candidate.ImeUiState
 import com.fskeyboard.ime.candidate.clearSystemClipboard
 import com.fskeyboard.ime.engine.RustZhuyinLexicon
@@ -31,6 +36,10 @@ import com.fskeyboard.ime.keyboard.KeyboardView
 import com.fskeyboard.ime.latency.FrameLatencyProbe
 import com.fskeyboard.ime.latency.KeyLatency
 import com.fskeyboard.ime.ui.KeyboardInsets
+import com.fskeyboard.ime.ui.KeyStage
+import com.fskeyboard.ime.voice.SystemSpeech
+import com.fskeyboard.ime.voice.VoiceInputView
+import com.fskeyboard.ime.voice.VoicePermissionActivity
 import com.fskeyboard.ime.rerank.CandidatePipeline
 import com.fskeyboard.ime.settings.KeyboardPreferences
 import com.fskeyboard.ime.rerank.ContextCandidateEncoder
@@ -49,7 +58,14 @@ class FsKeyboardService : InputMethodService() {
     private var keyboard: KeyboardView? = null
     private var candidateBar: CandidateBarView? = null
     private var candidatePanel: CandidatePanelView? = null
+    private var voiceView: VoiceInputView? = null
+    private var speech: SystemSpeech? = null
+    private var voiceOpen = false
     private var panelOpen = false
+    private var lastClearance = -1
+    private var lastNavigationBars = 0
+    private var loggedClearance = Int.MIN_VALUE
+    private var loggedDetail = ""
     private var inputRoot: LinearLayout? = null
     private var navigationSpacer: View? = null
     private var latestInsets: WindowInsets? = null
@@ -64,7 +80,10 @@ class FsKeyboardService : InputMethodService() {
     private var framesWatched = false
     private val relayoutInsets = ViewTreeObserver.OnGlobalLayoutListener {
         val insets = latestInsets ?: return@OnGlobalLayoutListener
-        if (insetStamp(insets) == appliedInsetStamp && navFrameResolved) return@OnGlobalLayoutListener
+        if (insetStamp(insets) == appliedInsetStamp && navFrameResolved) {
+            if (lastClearance >= 0) updateSpacer(lastClearance, lastNavigationBars)
+            return@OnGlobalLayoutListener
+        }
         applyNavigationInset(insets)
     }
 
@@ -97,6 +116,7 @@ class FsKeyboardService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        destroySpeech()
         if (framesWatched) {
             runCatching { window?.window?.removeOnFrameMetricsAvailableListener(latencyProbe) }
             framesWatched = false
@@ -115,6 +135,8 @@ class FsKeyboardService : InputMethodService() {
 
     override fun onCreateInputView(): View {
         configureWindow()
+        destroySpeech()
+        voiceOpen = false
         panelOpen = false
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -124,7 +146,8 @@ class FsKeyboardService : InputMethodService() {
         }
         candidateBar = CandidateBarView(this).apply {
             onCandidate = { controller.onCandidate(it) }
-            onExpand = { showPanel(!panelOpen) }
+            onExpand = { if (!voiceOpen) showPanel(!panelOpen) }
+            onCandidateHold = { anchor, candidate -> showWeightMenu(anchor, candidate) }
             onClearClipboard = {
                 if (clearSystemClipboard(this@FsKeyboardService)) controller.dismissClipboard()
             }
@@ -135,6 +158,7 @@ class FsKeyboardService : InputMethodService() {
                 showPanel(false)
                 controller.onCandidate(it)
             }
+            onCandidateHold = { anchor, candidate -> showWeightMenu(anchor, candidate) }
         }
         keyboard = KeyboardView(this).apply {
             val preferences = KeyboardPreferences(this@FsKeyboardService)
@@ -162,7 +186,13 @@ class FsKeyboardService : InputMethodService() {
                     controller.onKey(action)
                 }
             }
+            onVoice = { openVoice() }
             enterChoice = EnterActions.choose(currentInputEditorInfo)
+        }
+        voiceView = VoiceInputView(this).apply {
+            visibility = View.GONE
+            onMic = { toggleVoice() }
+            onButton = { if (listening) cancelVoice() else closeVoice() }
         }
         controller.onComputerModifiers = { armed ->
             keyboard?.armedComputerKeys = armed
@@ -187,8 +217,8 @@ class FsKeyboardService : InputMethodService() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ),
         )
-        // The panel lies over the keys, so opening it does not change the keyboard height.
-        val keys = FrameLayout(this).apply {
+        // The panel and the voice screen lie over the keys. The stage keeps the keyboard height.
+        val keys = KeyStage(this).apply {
             addView(
                 keyboard,
                 FrameLayout.LayoutParams(
@@ -198,6 +228,13 @@ class FsKeyboardService : InputMethodService() {
             )
             addView(
                 candidatePanel,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            addView(
+                voiceView,
                 FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT,
                     FrameLayout.LayoutParams.MATCH_PARENT,
@@ -326,16 +363,35 @@ class FsKeyboardService : InputMethodService() {
             )
             clearance
         }
-        val params = spacer.layoutParams
-        if (params.height != bottom) {
-            params.height = bottom
-            spacer.layoutParams = params
+        val navigationBars = if (Build.VERSION.SDK_INT >= 30) {
+            insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+        } else {
+            @Suppress("DEPRECATION")
+            insets.systemWindowInsetBottom
         }
+        lastClearance = bottom
+        lastNavigationBars = navigationBars
+        updateSpacer(bottom, navigationBars)
+    }
+
+    /** Landscape key growth comes out of this gap, down to the real navigation bar. */
+    private fun updateSpacer(clearance: Int, navigationBars: Int) {
+        val spacer = navigationSpacer ?: return
+        val height = if (isLandscape()) {
+            KeyboardInsets.landscapeSpacer(clearance, navigationBars, keyboard?.splitGrowthPx() ?: 0)
+        } else {
+            clearance
+        }
+        val params = spacer.layoutParams ?: return
+        if (params.height == height) return
+        params.height = height
+        spacer.layoutParams = params
     }
 
     private fun logClearance(clearance: Int, detail: String) {
-        val spacer = navigationSpacer ?: return
-        if (spacer.layoutParams?.height == clearance) return
+        if (clearance == loggedClearance && detail == loggedDetail) return
+        loggedClearance = clearance
+        loggedDetail = detail
         Log.i(TAG, "keyboard bottom clearance=$clearance $detail")
     }
 
@@ -435,6 +491,7 @@ class FsKeyboardService : InputMethodService() {
     }
 
     override fun onFinishInput() {
+        closeVoice()
         if (::controller.isInitialized) {
             controller.onFinishInput()
         }
@@ -503,6 +560,83 @@ class FsKeyboardService : InputMethodService() {
         if (panelOpen) candidatePanel?.render(candidates)
         candidatePanel?.visibility = if (panelOpen) View.VISIBLE else View.GONE
         candidateBar?.expanded = panelOpen
+    }
+
+    private fun showWeightMenu(anchor: View, candidate: Candidate) {
+        if (candidate.source == CandidateSource.CLIPBOARD) return
+        CandidateWeightMenu.show(anchor) { weight ->
+            controller.adjustCandidate(candidate, weight)
+        }
+    }
+
+    private fun openVoice() {
+        if (::controller.isInitialized) controller.revertLastSpaceTap()
+        showPanel(false)
+        voiceOpen = true
+        keyboard?.visibility = View.INVISIBLE
+        val view = voiceView ?: return
+        view.listening = false
+        view.partial = ""
+        view.message = if (!SystemSpeech.available(this)) getString(R.string.voice_unavailable) else ""
+        view.visibility = View.VISIBLE
+    }
+
+    private fun toggleVoice() {
+        val view = voiceView ?: return
+        if (view.listening) {
+            speech?.finish { text ->
+                view.post {
+                    if (!voiceOpen) return@post
+                    if (text.isNotBlank() && ::controller.isInitialized) controller.commitVoice(text)
+                    closeVoice()
+                }
+            }
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            view.message = getString(R.string.voice_permission)
+            val intent = Intent(this, VoicePermissionActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            return
+        }
+        if (!SystemSpeech.available(this)) {
+            view.message = getString(R.string.voice_unavailable)
+            return
+        }
+        view.message = ""
+        view.partial = ""
+        view.listening = true
+        val active = speech ?: SystemSpeech(this).also { speech = it }
+        active.start(
+            language = keyboard?.voiceLanguageTag() ?: "zh-TW",
+            onPartial = { text -> view.partial = text },
+            onFailure = {
+                view.listening = false
+                view.message = getString(R.string.voice_failed)
+            },
+        )
+    }
+
+    private fun cancelVoice() {
+        speech?.cancel()
+        voiceView?.listening = false
+        voiceView?.partial = ""
+    }
+
+    private fun closeVoice() {
+        destroySpeech()
+        voiceOpen = false
+        voiceView?.listening = false
+        voiceView?.partial = ""
+        voiceView?.message = ""
+        voiceView?.visibility = View.GONE
+        keyboard?.visibility = View.VISIBLE
+    }
+
+    private fun destroySpeech() {
+        speech?.destroy()
+        speech = null
     }
 
     private companion object {

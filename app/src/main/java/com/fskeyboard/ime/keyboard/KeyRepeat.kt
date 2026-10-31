@@ -10,11 +10,27 @@ internal object KeyRepeat {
     const val DELAY_MS = 320L
     const val DELETE_MS = 32L
     const val ARROW_MS = 50L
+    const val LETTER_MS = 50L
 
     fun interval(action: KeyAction): Long? = when {
         action == KeyAction.Backspace -> DELETE_MS
         action is KeyAction.Computer && action.key.repeats -> ARROW_MS
+        action is KeyAction.Character && action.value.repeatsWhenHeld() -> LETTER_MS
         else -> null
+    }
+
+    /**
+     * Letters repeat only on the English keyboard.
+     * A symbol page uses the same character action and must not run on.
+     */
+    fun schedules(mode: KeyboardMode, action: KeyAction): Boolean {
+        if (interval(action) == null) return false
+        if (action is KeyAction.Character) return mode == KeyboardMode.LATIN
+        return true
+    }
+
+    private fun Char.repeatsWhenHeld(): Boolean {
+        return isLetter() || isDigit() || this == ',' || this == '.'
     }
 
     /**

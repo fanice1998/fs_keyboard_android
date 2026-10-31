@@ -36,6 +36,9 @@ internal class CandidateStrip(context: Context) : View(context) {
     /** Long-press on the clipboard chip. A tap still pastes. */
     var onClipboardHold: () -> Unit = {}
 
+    /** Long-press on any other chip. A tap still chooses the word. */
+    var onCandidateHold: (Candidate) -> Unit = {}
+
     init {
         isClickable = true
         isLongClickable = true
@@ -55,15 +58,14 @@ internal class CandidateStrip(context: Context) : View(context) {
     private var holdArmed = false
     private var holdConsumed = false
     private var accessFocus = HOST
-    private val holdClipboard = Runnable {
+    private val holdCandidate = Runnable {
         holdArmed = false
-        val index = pressed
-        if (candidates.getOrNull(index)?.source != CandidateSource.CLIPBOARD) return@Runnable
+        val candidate = candidates.getOrNull(pressed) ?: return@Runnable
         holdConsumed = true
         pressed = NONE
         invalidate()
         performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
-        onClipboardHold()
+        if (candidate.source == CandidateSource.CLIPBOARD) onClipboardHold() else onCandidateHold(candidate)
     }
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
 
@@ -212,9 +214,9 @@ internal class CandidateStrip(context: Context) : View(context) {
                     invalidate()
                     if (candidates.getOrNull(pressed)?.source == CandidateSource.CLIPBOARD) {
                         parent?.requestDisallowInterceptTouchEvent(true)
-                        postDelayed(holdClipboard, ViewConfiguration.getLongPressTimeout().toLong())
-                        holdArmed = true
                     }
+                    postDelayed(holdCandidate, ViewConfiguration.getLongPressTimeout().toLong())
+                    holdArmed = true
                 }
                 return true
             }
@@ -254,7 +256,7 @@ internal class CandidateStrip(context: Context) : View(context) {
     private fun cancelHold() {
         if (!holdArmed) return
         holdArmed = false
-        removeCallbacks(holdClipboard)
+        removeCallbacks(holdCandidate)
     }
 
     override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = nodes
@@ -386,8 +388,8 @@ internal class CandidateStrip(context: Context) : View(context) {
             candidate.text
         }
         info.isClickable = true
-        info.isLongClickable = clipboard
-        if (clipboard) info.addAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+        info.isLongClickable = true
+        info.addAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
         info.isEnabled = true
         info.isFocusable = true
         info.isVisibleToUser = true
@@ -450,8 +452,7 @@ internal class CandidateStrip(context: Context) : View(context) {
                 }
                 AccessibilityNodeInfo.ACTION_LONG_CLICK -> {
                     val candidate = candidates.getOrNull(virtualViewId) ?: return false
-                    if (candidate.source != CandidateSource.CLIPBOARD) return false
-                    onClipboardHold()
+                    if (candidate.source == CandidateSource.CLIPBOARD) onClipboardHold() else onCandidateHold(candidate)
                     return true
                 }
                 AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS -> {

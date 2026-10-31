@@ -308,6 +308,21 @@ class KeyboardLayoutTest {
         val numbers = KeyboardLayouts.rows(KeyboardMode.SYMBOLS, base = KeyboardMode.LATIN)
         assertEquals("1234567890", numbers[0].keys.joinToString("") { it.label })
         assertEquals("-/:;()$&@\"", numbers[1].keys.joinToString("") { it.label })
+        val more = KeyboardLayouts.rows(KeyboardMode.SYMBOLS_MORE, base = KeyboardMode.LATIN)
+        assertEquals("_\\|~`<>€£¥", more[1].keys.joinToString("") { it.label })
+        assertTrue(more[2].keys.any { it.label == "•" })
+        val fullWidth = KeyboardLayouts.rows(KeyboardMode.SYMBOLS_MORE, base = KeyboardMode.ZHUYIN)
+        assertFalse(fullWidth.flatMap { it.keys }.any { it.label == "`" })
+    }
+
+    @Test
+    fun landscapeKeysGrowIntoTheSideBlanks() {
+        assertEquals(0.068f, SplitLayout.SIDE, 0.0001f)
+        assertEquals(0.84f, SplitLayout.SCALE, 0.0001f)
+        assertEquals(SplitLayout.SIDE, 1f - SplitLayout.rightEdge(), 0.001f)
+        assertTrue(SplitLayout.growthPx(800f, 5) > 0)
+        assertEquals(0, SplitLayout.growthPx(0f, 5))
+        assertEquals(0, SplitLayout.growthPx(800f, 0))
     }
 
     @Test

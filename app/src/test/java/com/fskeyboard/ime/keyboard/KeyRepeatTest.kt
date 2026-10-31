@@ -37,7 +37,22 @@ class KeyRepeatTest {
         assertNull(KeyRepeat.interval(KeyAction.Computer(ComputerKey.PAGE_DOWN)))
         assertNull(KeyRepeat.interval(KeyAction.Computer(ComputerKey.FORWARD_DELETE)))
         assertNull(KeyRepeat.interval(KeyAction.Computer(ComputerKey.BANG)))
-        assertNull(KeyRepeat.interval(KeyAction.Character('a')))
+        assertEquals(KeyRepeat.LETTER_MS, KeyRepeat.interval(KeyAction.Character('a')))
+        assertEquals(KeyRepeat.LETTER_MS, KeyRepeat.interval(KeyAction.Character('5')))
+        assertEquals(KeyRepeat.LETTER_MS, KeyRepeat.interval(KeyAction.Character(',')))
+        assertEquals(KeyRepeat.LETTER_MS, KeyRepeat.interval(KeyAction.Character('.')))
+        assertNull(KeyRepeat.interval(KeyAction.Character('!')))
+        assertTrue(KeyRepeat.schedules(KeyboardMode.LATIN, KeyAction.Character('a')))
+        assertFalse(KeyRepeat.schedules(KeyboardMode.SYMBOLS, KeyAction.Character('a')))
+        assertFalse(KeyRepeat.schedules(KeyboardMode.ZHUYIN, KeyAction.Character('a')))
+        assertTrue(KeyRepeat.schedules(KeyboardMode.ZHUYIN, KeyAction.Backspace))
+        assertTrue(
+            KeyRepeat.alreadyDelivered(
+                KeyAction.Character('a'),
+                repeating = KeyAction.Character('a'),
+                backspaceSent = false,
+            ),
+        )
         assertFalse(ComputerKey.HOME.isArrow)
         assertFalse(ComputerKey.CTRL.isArrow)
         assertTrue(ComputerKey.CTRL.repeats)

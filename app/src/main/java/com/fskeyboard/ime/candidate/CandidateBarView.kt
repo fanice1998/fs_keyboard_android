@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.drawable.GradientDrawable
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
@@ -28,6 +29,9 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
 
     /** Clears the system clipboard after the user confirms the long-press prompt. */
     var onClearClipboard: () -> Unit = {}
+
+    /** Long-press on a word opens the weight menu. The clipboard chip does not. */
+    var onCandidateHold: (View, Candidate) -> Unit = { _, _ -> }
 
     /** Whether the candidate panel is open; flips the arrow. */
     var expanded: Boolean = false
@@ -58,6 +62,7 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
 
         strip.onCandidate = { onCandidate(it) }
         strip.onClipboardHold = { showClipboardPrompt() }
+        strip.onCandidateHold = { candidate -> onCandidateHold(strip, candidate) }
         scroll.isHorizontalScrollBarEnabled = false
         scroll.addView(strip, FrameLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
         addView(scroll, LayoutParams(0, LayoutParams.MATCH_PARENT, 1f))

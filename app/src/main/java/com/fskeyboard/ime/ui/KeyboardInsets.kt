@@ -49,4 +49,14 @@ internal object KeyboardInsets {
         val frame = systemFrame.coerceAtLeast(0)
         return if (preferSystemFrame && !landscape) maxOf(measured, frame) else measured
     }
+
+    /**
+     * Landscape key growth comes out of the spacer first.
+     * [navigationBars] is the floor, so the buttons themselves stay clear.
+     */
+    fun landscapeSpacer(clearance: Int, navigationBars: Int, growth: Int): Int {
+        val room = clearance.coerceAtLeast(0)
+        val floor = navigationBars.coerceIn(0, room)
+        return (room - growth.coerceAtLeast(0)).coerceIn(floor, room)
+    }
 }

@@ -103,6 +103,25 @@ class EnglishLexiconTest {
     }
 
     @Test
+    fun demoteLowersALearnedWordAndForgetRemovesIt() {
+        val lexicon = EnglishLexicon()
+        lexicon.load(listOf("banana\t10"))
+        assertFalse(lexicon.demote("band"))
+        assertFalse(lexicon.forget("band"))
+        assertTrue(lexicon.learn("band"))
+        assertTrue(lexicon.learn("band"))
+        assertTrue(lexicon.demote("Band"))
+        assertEquals(listOf("band" to 1), lexicon.userEntries())
+        assertTrue(lexicon.demote("band"))
+        assertTrue(lexicon.userEntries().isEmpty())
+        assertEquals(listOf("banana"), lexicon.complete("ban", limit = 5).words)
+        assertTrue(lexicon.learn("band"))
+        assertTrue(lexicon.forget("band"))
+        assertFalse(lexicon.forget("band"))
+        assertEquals(listOf("banana"), lexicon.complete("ban", limit = 5).words)
+    }
+
+    @Test
     fun loadUserRestoresDynamicWords() {
         val lexicon = EnglishLexicon()
         lexicon.loadUser(listOf("gemini\t10", "claude\t5"))
