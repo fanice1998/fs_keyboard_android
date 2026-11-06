@@ -22,6 +22,8 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import com.fskeyboard.ime.candidate.Candidate
 import com.fskeyboard.ime.candidate.CandidateBarView
+import com.fskeyboard.ime.candidate.PartialLexicon
+import com.fskeyboard.ime.candidate.ReadingPreviewBar
 import com.fskeyboard.ime.candidate.CandidateController
 import com.fskeyboard.ime.candidate.CandidatePanelView
 import com.fskeyboard.ime.candidate.CandidateSource
@@ -29,6 +31,7 @@ import com.fskeyboard.ime.candidate.CandidateWeightMenu
 import com.fskeyboard.ime.candidate.ImeUiState
 import com.fskeyboard.ime.candidate.clearSystemClipboard
 import com.fskeyboard.ime.engine.ChiaKeySession
+import com.fskeyboard.ime.engine.ChiaKeyUnigramScan
 import com.fskeyboard.ime.engine.IdleZhuyinLexicon
 import com.fskeyboard.ime.engine.LexiconClient
 import com.fskeyboard.ime.engine.LexiconInstaller
@@ -58,10 +61,13 @@ import com.fskeyboard.ime.ui.isNightMode
 class FsKeyboardService : InputMethodService() {
     private var chiakey: ChiaKeySession? = null
     @Volatile private var downloadingLexicon = false
+    private val indexGate = Any()
+    private var indexGeneration = 0
     private lateinit var pipeline: CandidatePipeline
     private lateinit var controller: CandidateController
     private var keyboard: KeyboardView? = null
     private var candidateBar: CandidateBarView? = null
+    private var readingPreview: ReadingPreviewBar? = null
     private var candidatePanel: CandidatePanelView? = null
     private var voiceView: VoiceInputView? = null
     private var speech: SystemSpeech? = null
@@ -124,6 +130,7 @@ class FsKeyboardService : InputMethodService() {
         )
         controller.onLetterMode = { mode -> KeyboardPreferences(this).setLetterMode(mode) }
         controller.start()
+        startChiaKeyIndex()
     }
 
     override fun onDestroy() {
@@ -145,6 +152,31 @@ class FsKeyboardService : InputMethodService() {
         super.onDestroy()
     }
 
+    /**
+     * Builds sentence guesses from the downloaded ChiaKey unigrams.
+     * A newer scan replaces an older one. A missing database leaves the previous index.
+     */
+    private fun startChiaKeyIndex() {
+        val generation = synchronized(indexGate) { ++indexGeneration }
+        val root = File(filesDir, "chiakey")
+        Thread({
+            try {
+                if (!File(root, "ChiaKeySource.db").isFile) return@Thread
+                val builder = PartialLexicon.Builder()
+                ChiaKeyUnigramScan.read(root) { qstring, text, probability ->
+                    builder.add(qstring, text, probability)
+                }
+                val index = builder.build()
+                val current = synchronized(indexGate) { indexGeneration }
+                if (generation != current || !::controller.isInitialized) return@Thread
+                Log.i(TAG, "chiakey unigram index ready: ${index.wordCount} words")
+                controller.publishPartialLexicon(index)
+            } catch (error: Exception) {
+                Log.w(TAG, "chiakey unigram index failed", error)
+            }
+        }, "fskeyboard-chiakey-index").start()
+    }
+
     /** Consent already happened. A failed download leaves the previous file. */
     private fun downloadLexicon() {
         if (downloadingLexicon) return
@@ -157,6 +189,7 @@ class FsKeyboardService : InputMethodService() {
                 if (installed) {
                     chiakey?.close()
                     chiakey?.open()
+                    startChiaKeyIndex()
                 }
             } catch (error: Exception) {
                 Log.w(TAG, "lexicon download failed", error)
@@ -177,6 +210,7 @@ class FsKeyboardService : InputMethodService() {
             clipChildren = false
             clipToPadding = false
         }
+        readingPreview = ReadingPreviewBar(this)
         candidateBar = CandidateBarView(this).apply {
             onCandidate = { controller.onCandidate(it) }
             onExpand = { if (!voiceOpen) showPanel(!panelOpen) }
@@ -209,7 +243,9 @@ class FsKeyboardService : InputMethodService() {
             onTrackpadStart = { controller.beginCursor() }
             onCursorGlide = { dx, dy -> controller.moveCursor(dx, dy) }
             onTrackpadActive = { active ->
-                candidateBar?.alpha = if (active) 0.35f else 1f
+                val faded = if (active) 0.35f else 1f
+                candidateBar?.alpha = faded
+                readingPreview?.alpha = faded
                 if (!active) controller.endCursor()
             }
             onKey = { action ->
@@ -242,6 +278,13 @@ class FsKeyboardService : InputMethodService() {
             right = 0,
             reportedBottom = null,
             fallbackBottom = initialBottomClearance(),
+        )
+        root.addView(
+            readingPreview,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ),
         )
         root.addView(
             candidateBar,
@@ -577,6 +620,7 @@ class FsKeyboardService : InputMethodService() {
                 EnterActions.choose(currentInputEditorInfo)
             }
             keyboard?.enterChoice = enterChoice
+            readingPreview?.render(state.preview)
             candidateBar?.render(state.candidates)
             val clipboardOnly = state.candidates.candidates.singleOrNull()?.source == CandidateSource.CLIPBOARD
             when {

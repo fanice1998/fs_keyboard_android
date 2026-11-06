@@ -115,6 +115,45 @@ class ChiaKeyTypingTest {
         assertEquals("", engine.asciiLog.toString())
     }
 
+    @Test
+    fun anUntonedSentenceStaysSeveralSyllablesAndTheFirstGuessCommits() {
+        val engine = ScriptedEngine()
+        val field = StringBuilder()
+        val composing = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(
+            engine,
+            field,
+            composing,
+            states,
+            partial = sampleLexicon(),
+        )
+        controller.onStartInput(false)
+        type(controller, "ㄋㄧㄏㄠ")
+        assertEquals("", engine.asciiLog.toString())
+        assertEquals(listOf(8, 8), engine.codes)
+        assertEquals("ㄋㄧㄏㄠ", composing.toString())
+        assertEquals(listOf("ㄋ", "ㄧ", "ㄏ", "ㄠ"), states.last().preview)
+        assertEquals("你好", states.last().candidates.candidates.first().text)
+        controller.onKey(KeyAction.Enter)
+        assertEquals("你好", field.toString())
+        assertEquals("", composing.toString())
+        assertTrue(engine.codes.none { it == 13 })
+    }
+
+    @Test
+    fun aToneStillGoesToTheEngineBeforeTheNextSyllable() {
+        val engine = ScriptedEngine()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(engine, StringBuilder(), StringBuilder(), states)
+        controller.onStartInput(false)
+        type(controller, "ㄋㄧ")
+        assertEquals(listOf("ㄋ", "ㄧ"), states.last().preview)
+        type(controller, "ˇㄏㄠˇ")
+        assertEquals("su3cl3", engine.asciiLog.toString())
+        assertEquals(listOf("你", "好"), states.last().preview)
+    }
+
     private fun type(controller: CandidateController, glyphs: String) {
         val spelling = ZhuyinSpelling.keysOf(glyphs)
         for (index in glyphs.indices) {
@@ -122,6 +161,14 @@ class ChiaKeyTypingTest {
         }
     }
 }
+
+private fun sampleLexicon(): PartialLexicon = PartialLexicon.index(
+    listOf(
+        UnigramRow.of("你好", listOf("ㄋㄧˇ", "ㄏㄠˇ"), -0.5),
+        UnigramRow.of("你", listOf("ㄋㄧˇ"), -2.0),
+        UnigramRow.of("好", listOf("ㄏㄠˇ"), -2.0),
+    ),
+)
 
 private const val MISSING = "詞庫尚未下載"
 private const val CONSENT =
@@ -168,6 +215,7 @@ private fun chiakeyController(
     field: StringBuilder,
     composing: StringBuilder,
     states: MutableList<ImeUiState>,
+    partial: PartialLexicon = PartialLexicon.EMPTY,
     onRequestLexicon: () -> Unit = {},
 ): CandidateController {
     val connection = Proxy.newProxyInstance(
@@ -214,5 +262,6 @@ private fun chiakeyController(
         zhuyinEngine = engine,
         chiakey = true,
         onRequestLexicon = onRequestLexicon,
+        partialLexicon = partial,
     )
 }

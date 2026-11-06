@@ -17,7 +17,7 @@ import com.fskeyboard.ime.ui.dp
 import com.fskeyboard.ime.ui.isNightMode
 
 /**
- * Candidates in one scrolling row. The zhuyin being typed shows only in the editor.
+ * Candidates in one scrolling row. The symbol-by-symbol preview sits above this bar.
  * The text on the left is a status message, shown only when there is one.
  * The arrow on the right opens every candidate over the keys.
  * The bar is at least 40dp tall; chips are 18sp with 4dp above and below.
