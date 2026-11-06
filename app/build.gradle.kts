@@ -9,6 +9,7 @@ val rimeEnabled = (findProperty("rime.enabled") as? String)?.toBoolean() ?: fals
 android {
     namespace = "com.fskeyboard.ime"
     compileSdk = 36
+    ndkVersion = "27.2.12479018"
 
     val commitCount = providers.exec {
         commandLine("git", "rev-list", "--count", "HEAD")
@@ -27,6 +28,15 @@ android {
         versionName = (findProperty("versionName") as? String) ?: "0.1.$commitCount"
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+        externalNativeBuild {
+            cmake {
+                arguments += "-DANDROID_STL=c++_shared"
+                arguments += if (rimeEnabled) "-DRIME_ENABLED=ON" else "-DRIME_ENABLED=OFF"
+                if (rimeEnabled) {
+                    arguments += "-DRIME_ROOT=${rootProject.projectDir}/third_party/librime"
+                }
+            }
         }
     }
 
@@ -81,19 +91,10 @@ android {
         jniLibs.directories.add("${rootProject.projectDir}/third_party/librime/jniLibs")
     }
 
-    if (rimeEnabled) {
-        defaultConfig {
-            externalNativeBuild {
-                cmake {
-                    arguments += "-DRIME_ROOT=${rootProject.projectDir}/third_party/librime"
-                }
-            }
-        }
-        externalNativeBuild {
-            cmake {
-                path = file("src/main/cpp/CMakeLists.txt")
-                version = "3.22.1"
-            }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
         }
     }
 }

@@ -1,0 +1,97 @@
+diff --git a/ChiaKey-Source/Frameworks/OpenVanilla/Headers/OVFileHelper.h b/ChiaKey-Source/Frameworks/OpenVanilla/Headers/OVFileHelper.h
+index 68f18d7..590404a 100644
+--- a/ChiaKey-Source/Frameworks/OpenVanilla/Headers/OVFileHelper.h
++++ b/ChiaKey-Source/Frameworks/OpenVanilla/Headers/OVFileHelper.h
+@@ -28,18 +28,19 @@
+ #ifndef OVFileHelper_h
+ #define OVFileHelper_h
+ 
+-#if defined(__APPLE__)
+-#include <dirent.h>
++#if defined(_WIN32) || defined(WIN32)
++#include <shlobj.h>
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include <string.h>
+-#include <unistd.h>
++#include <windows.h>
+ #else
+-#include <shlobj.h>
++#include <dirent.h>
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include <string.h>
+-#include <windows.h>
++#include <time.h>
++#include <unistd.h>
+ #endif
+ 
+ #include <sys/stat.h>
+@@ -127,10 +128,8 @@ class OVFileTimestamp {
+  public:
+ #if defined(__APPLE__)
+   OVFileTimestamp(__darwin_time_t timestamp = 0, long subtimestamp = 0)
+-#elif defined(WIN32)
+-  OVFileTimestamp(time_t timestamp = 0, time_t subtimestamp = 0)
+ #else
+-#error We don't know about Linux yet, sorry.
++  OVFileTimestamp(time_t timestamp = 0, time_t subtimestamp = 0)
+ #endif
+       : m_timestamp(timestamp), m_subtimestamp(subtimestamp) {
+   }
+@@ -138,7 +137,7 @@ class OVFileTimestamp {
+ #if defined(__APPLE__)
+   __darwin_time_t timestamp() const { return m_timestamp; }
+   long subtimestamp() const { return m_subtimestamp; }
+-#elif defined(WIN32)
++#else
+   time_t timestamp() const { return m_timestamp; }
+   time_t subtimestamp() const { return m_subtimestamp; }
+ #endif
+@@ -179,11 +178,9 @@ class OVFileTimestamp {
+ #if defined(__APPLE__)
+   __darwin_time_t m_timestamp;
+   long m_subtimestamp;
+-#elif defined(WIN32)
+-  time_t m_timestamp;
+-  time_t m_subtimestamp;
+ #else
+-#error We don't know about Linux yet, sorry.
++  time_t m_timestamp;
++  long m_subtimestamp;
+ #endif
+ };
+ 
+@@ -341,7 +338,7 @@ class OVPathHelper {
+       timestamp =
+           OVFileTimestamp(buf.st_mtimespec.tv_sec, buf.st_mtimespec.tv_nsec);
+     }
+-#elif defined(WIN32)
++#elif defined(_WIN32) || defined(WIN32)
+     // _wstat has whole seconds only, so a second save within that second went unseen
+     WIN32_FILE_ATTRIBUTE_DATA data;
+     wstring wpath = OVUTF16::FromUTF8(path);
+@@ -356,7 +353,10 @@ class OVPathHelper {
+                                   static_cast<time_t>(unixTicks % 10000000ULL));
+     }
+ #else
+-#error Sorry, no idea for Linux yet.
++    struct stat buf;
++    if (!stat(path.c_str(), &buf)) {
++      timestamp = OVFileTimestamp(buf.st_mtim.tv_sec, buf.st_mtim.tv_nsec);
++    }
+ #endif
+     return timestamp;
+   }
+diff --git a/ChiaKey-Source/Frameworks/PlainVanilla/Headers/PVLoaderPolicy.h b/ChiaKey-Source/Frameworks/PlainVanilla/Headers/PVLoaderPolicy.h
+index 8e6dbb2..0b62a36 100644
+--- a/ChiaKey-Source/Frameworks/PlainVanilla/Headers/PVLoaderPolicy.h
++++ b/ChiaKey-Source/Frameworks/PlainVanilla/Headers/PVLoaderPolicy.h
+@@ -93,7 +93,6 @@ inline const vector<string> PVLoaderPolicy::modulePackageFilePatterns() {
+ #elif defined(WIN32)
+   result.push_back("*.dll");
+ #else
+-#error Should be so on Linux and FreeBSD--check it out.
+   result.push_back("*.so");
+ #endif
+ 

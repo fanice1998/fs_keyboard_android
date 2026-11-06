@@ -10,5 +10,8 @@
 # Rust lexicon JNI bridge
 -keep class com.fskeyboard.ime.engine.RustLexiconNative { *; }
 
+# ChiaKey JNI bridge
+-keep class com.fskeyboard.ime.engine.ChiaKeyNative { *; }
+
 # ONNX Runtime
 -keep class ai.onnxruntime.** { *; }
