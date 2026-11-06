@@ -28,7 +28,11 @@ import com.fskeyboard.ime.candidate.CandidateSource
 import com.fskeyboard.ime.candidate.CandidateWeightMenu
 import com.fskeyboard.ime.candidate.ImeUiState
 import com.fskeyboard.ime.candidate.clearSystemClipboard
-import com.fskeyboard.ime.engine.RustZhuyinLexicon
+import com.fskeyboard.ime.engine.ChiaKeySession
+import com.fskeyboard.ime.engine.IdleZhuyinLexicon
+import com.fskeyboard.ime.engine.LexiconClient
+import com.fskeyboard.ime.engine.LexiconInstaller
+import java.io.File
 import com.fskeyboard.ime.keyboard.EnterActions
 import com.fskeyboard.ime.keyboard.EnterChoice
 import com.fskeyboard.ime.keyboard.KeyAction
@@ -52,7 +56,8 @@ import com.fskeyboard.ime.ui.KeyboardPalette
 import com.fskeyboard.ime.ui.isNightMode
 
 class FsKeyboardService : InputMethodService() {
-    private val lexicon = RustZhuyinLexicon()
+    private var chiakey: ChiaKeySession? = null
+    @Volatile private var downloadingLexicon = false
     private lateinit var pipeline: CandidatePipeline
     private lateinit var controller: CandidateController
     private var keyboard: KeyboardView? = null
@@ -102,14 +107,20 @@ class FsKeyboardService : InputMethodService() {
         )
         ranker.load()
         pipeline = CandidatePipeline(reranker = ranker)
+        val session = ChiaKeySession(File(filesDir, "chiakey"))
+        chiakey = session
+        session.open()
         controller = CandidateController(
             context = this,
-            lexicon = lexicon,
+            lexicon = IdleZhuyinLexicon,
             pipeline = pipeline,
             connection = { currentInputConnection },
             editorInfo = { currentInputEditorInfo },
             onUi = ::render,
             letterMode = { KeyboardPreferences(this).letterMode() },
+            zhuyinEngine = session,
+            chiakey = true,
+            onRequestLexicon = { downloadLexicon() },
         )
         controller.onLetterMode = { mode -> KeyboardPreferences(this).setLetterMode(mode) }
         controller.start()
@@ -124,6 +135,7 @@ class FsKeyboardService : InputMethodService() {
         window?.window?.decorView?.viewTreeObserver?.let { observer ->
             if (observer.isAlive) observer.removeOnGlobalLayoutListener(relayoutInsets)
         }
+        chiakey?.close()
         if (::controller.isInitialized) {
             controller.close()
         }
@@ -131,6 +143,27 @@ class FsKeyboardService : InputMethodService() {
             pipeline.close()
         }
         super.onDestroy()
+    }
+
+    /** Consent already happened. A failed download leaves the previous file. */
+    private fun downloadLexicon() {
+        if (downloadingLexicon) return
+        downloadingLexicon = true
+        val root = File(filesDir, "chiakey")
+        Thread({
+            try {
+                val release = LexiconClient.latestReleaseJson()
+                val installed = LexiconInstaller(root) { url -> LexiconClient.bytes(url) }.install(release)
+                if (installed) {
+                    chiakey?.close()
+                    chiakey?.open()
+                }
+            } catch (error: Exception) {
+                Log.w(TAG, "lexicon download failed", error)
+            } finally {
+                downloadingLexicon = false
+            }
+        }, "fskeyboard-lexicon").start()
     }
 
     override fun onCreateInputView(): View {

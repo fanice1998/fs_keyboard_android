@@ -7,10 +7,22 @@ import android.os.Trace
  * Sections: ime.dispatch, ime.lookup, ime.render, ime.setComposing, ime.contextBefore.
  */
 internal inline fun <T> traced(name: String, block: () -> T): T {
-    Trace.beginSection(name)
+    // The unit-test Android jar throws from Trace. A trace failure must not drop the key.
+    val opened = try {
+        Trace.beginSection(name)
+        true
+    } catch (_: RuntimeException) {
+        false
+    }
     try {
         return block()
     } finally {
-        Trace.endSection()
+        if (opened) {
+            try {
+                Trace.endSection()
+            } catch (_: RuntimeException) {
+                // The section was opened and then the process lost the tracer.
+            }
+        }
     }
 }

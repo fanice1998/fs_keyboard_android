@@ -98,3 +98,48 @@ into app/src/main/assets/lexicon/lexicon.bin at build time.
 
 ONNX Runtime for Android (com.microsoft.onnxruntime:onnxruntime-android) is
 MIT. The neural reranker calls its public Java API. No model file is vendored.
+
+ChiaKeyCore (https://github.com/chiakich/ChiaKey) is BSD-3-Clause. The app
+links it as libfs_chiakey.so and calls only the public C API in
+ChiaKeyCoreC.h. A small Android patch, third_party/patches/chiakey-android.patch,
+lets the same sources build with the NDK. The copyright notice and the
+conditions follow. The name Yahoo is not used to endorse FsKeyboard.
+
+Copyright (c) 2012, Yahoo! Inc.  All rights reserved.
+Copyright (c) 2026, Chiaki.C.  All rights reserved.
+
+Redistribution and use of this software in source and binary forms,
+with or without modification, are permitted provided that the following
+conditions are met:
+
+* Redistributions of source code must retain the above copyright notice,
+  this list of conditions and the following disclaimer.
+* Redistributions in binary form must reproduce the above copyright
+  notice, this list of conditions and the following disclaimer in the
+  documentation and/or other materials provided with the distribution.
+* Neither the name of Yahoo! Inc. nor the names of its contributors may
+  be used to endorse or promote products derived from this software
+  without specific prior written permission of Yahoo! Inc.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+The zhuyin lexicon is not in this repository and not in the APK. After
+the user agrees, the app downloads one published ChiaKeySource.db from
+chiakich/ChiaKey-Lexicon and installs that file whole. That release
+already contains the layers ChiaKey folded in, including libchewing
+data (LGPL-2.1-or-later), rime-essay (LGPL-3.0), Ministry of Education
+reading supplements, and Chiaki bigram tables under CC BY-NC 4.0. Those
+terms travel with the downloaded file. The database is not a
+commercial license, and typed text is not uploaded. Learning stays in
+the app-private SmartMandarinUserData.db, which a later lexicon
+download does not delete.

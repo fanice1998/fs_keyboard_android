@@ -13,9 +13,12 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import com.fskeyboard.ime.R
+import com.fskeyboard.ime.engine.ChiaKeyFrame
 import com.fskeyboard.ime.engine.EngineSnapshot
 import com.fskeyboard.ime.engine.EngineStatus
 import com.fskeyboard.ime.engine.KeyPolicy
+import com.fskeyboard.ime.engine.UnavailableZhuyinEngine
+import com.fskeyboard.ime.engine.ZhuyinEngine
 import com.fskeyboard.ime.engine.ZhuyinLexicon
 import com.fskeyboard.ime.keyboard.ComputerKey
 import com.fskeyboard.ime.keyboard.ComputerModifiers
@@ -49,6 +52,9 @@ internal class CandidateController(
     private val letterMode: () -> KeyboardMode = { KeyboardMode.ZHUYIN },
     private val clipboard: () -> ClipOffer? = { readClipboard(context) },
     continuations: WordContinuations? = null,
+    private val zhuyinEngine: ZhuyinEngine = UnavailableZhuyinEngine,
+    private val chiakey: Boolean = false,
+    private val onRequestLexicon: () -> Unit = {},
 ) {
     /** Ctrl, Alt, and Meta chosen from an English swipe, until the next key. */
     var onComputerModifiers: (Set<ComputerKey>) -> Unit = {}
@@ -69,6 +75,8 @@ internal class CandidateController(
     private var numberPad = NumberPad.NONE
     private var presented: List<Candidate> = emptyList()
     private val composition = ZhuyinComposition()
+    private var frame = ChiaKeyFrame.parse("")
+    private var lexiconPrompt = LexiconPrompt.HIDDEN
 
     /** The last characters this keyboard committed, for choosing particles. */
     private val recent = StringBuilder()
@@ -125,7 +133,7 @@ internal class CandidateController(
     private var clipVisible = false
 
     private val hasComposition: Boolean
-        get() = !composition.isEmpty
+        get() = if (chiakey) frame.active else !composition.isEmpty
 
     fun start() {
         applySavedLetterMode()
@@ -150,6 +158,7 @@ internal class CandidateController(
     }
 
     fun onStartInput(restarting: Boolean) {
+        if (chiakey) zhuyinEngine.reset()
         val info = editorInfo()
         selStart = info?.initialSelStart ?: -1
         selEnd = info?.initialSelEnd ?: -1
@@ -157,6 +166,10 @@ internal class CandidateController(
             recent.setLength(0)
         }
         cancelComposition()
+        if (chiakey) {
+            frame = ChiaKeyFrame.parse("")
+            lexiconPrompt = LexiconPrompt.HIDDEN
+        }
         clearModifiers()
         refreshClipboard()
         applySavedLetterMode()
@@ -345,14 +358,14 @@ internal class CandidateController(
             dismissSuggestions()
             hideClipboard()
             if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
-            if (mode == KeyboardMode.ZHUYIN && hasComposition) finishComposition(convertAll())
+            if (mode == KeyboardMode.ZHUYIN && hasComposition) finishZhuyinComposition()
             sendKeyEvent(key.keyCode, modifiers.metaState() or key.metaState)
             return
         }
         dismissSuggestions()
         hideClipboard()
         if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
-        if (mode == KeyboardMode.ZHUYIN && hasComposition) finishComposition(convertAll())
+        if (mode == KeyboardMode.ZHUYIN && hasComposition) finishZhuyinComposition()
         sendKeyEvent(key.keyCode, modifiers.metaState())
         clearLatched()
     }
@@ -377,7 +390,7 @@ internal class CandidateController(
         dismissSuggestions()
         hideClipboard()
         if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
-        if (mode == KeyboardMode.ZHUYIN && hasComposition) finishComposition(convertAll())
+        if (mode == KeyboardMode.ZHUYIN && hasComposition) finishZhuyinComposition()
         sendKeyEvent(keyCode, modifiers.metaState(shift))
         clearLatched()
         return true
@@ -437,6 +450,15 @@ internal class CandidateController(
             pasteClipboard()
             return
         }
+        if (candidate.source == CandidateSource.LEXICON) {
+            onLexiconPrompt()
+            return
+        }
+        if (chiakey && frame.active && candidate.engineIndex >= 0) {
+            frame = zhuyinEngine.select(candidate.engineIndex)
+            showFrame()
+            return
+        }
         if (mode == KeyboardMode.LATIN && english.isNotEmpty()) {
             val isEmail = isEmailContext()
             val text = candidate.text
@@ -485,7 +507,7 @@ internal class CandidateController(
         }
         clearModifiers()
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
-            finishComposition(convertAll())
+            finishZhuyinComposition()
         }
         if (next.isLetters && next != base) onLetterMode(next)
         if (next.isLetters) base = next
@@ -498,6 +520,15 @@ internal class CandidateController(
         hideClipboard()
         if (mode != KeyboardMode.ZHUYIN) {
             commit(action.label)
+            return
+        }
+        if (chiakey) {
+            if (!zhuyinEngine.ready) {
+                showLexiconPrompt()
+                return
+            }
+            frame = zhuyinEngine.handleAscii(action.key)
+            showFrame()
             return
         }
         if (!composition.append(action.label, action.nearby)) return
@@ -546,7 +577,7 @@ internal class CandidateController(
             return
         }
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
-            finishComposition(convertAll())
+            finishZhuyinComposition()
         }
         commit(text)
         if (isSymbol(text)) learnSymbol(textBeforeCursor(), text)
@@ -559,6 +590,11 @@ internal class CandidateController(
             val typed = english.toString()
             val committed = finishEnglish(trailing = " ", takePrediction = false)
             if (committed != null) spaceUndo = SpaceUndo.English(typed, committed)
+            return
+        }
+        if (chiakey && mode == KeyboardMode.ZHUYIN && frame.active) {
+            frame = zhuyinEngine.handleAscii(' ')
+            showFrame()
             return
         }
         when (KeyPolicy.space(mode, composing = hasComposition)) {
@@ -599,6 +635,11 @@ internal class CandidateController(
             }
             return
         }
+        if (chiakey && mode == KeyboardMode.ZHUYIN && frame.active) {
+            frame = zhuyinEngine.handleKey(8)
+            showFrame()
+            return
+        }
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
             composition.backspace()
             apply(refresh())
@@ -630,7 +671,12 @@ internal class CandidateController(
             return
         }
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
-            finishComposition(convertAll())
+            if (chiakey) {
+                frame = zhuyinEngine.handleKey(13)
+                showFrame()
+            } else {
+                finishComposition(convertAll())
+            }
             return
         }
         performEnter()
@@ -789,6 +835,7 @@ internal class CandidateController(
     /** Caret inside the underlined text. The end means setComposingText already placed it. */
     private fun visualCaret(inline: String): Int {
         val caret = when {
+            chiakey -> inline.length
             english.isNotEmpty() -> englishCaret
             hasComposition -> composition.chosenText.length + composition.pending.caret
             else -> inline.length
@@ -1304,7 +1351,7 @@ internal class CandidateController(
         if (trimmed.isEmpty() || closed) return
         if (english.isNotEmpty()) finishEnglish(trailing = " ", takePrediction = false)
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
-            finishComposition(convertAll())
+            finishZhuyinComposition()
             commit(" ")
         }
         commit(trimmed)
@@ -1320,7 +1367,7 @@ internal class CandidateController(
 
     private fun reloadCandidates() {
         when {
-            hasComposition -> apply(refresh())
+            hasComposition -> if (chiakey) showFrame() else apply(refresh())
             english.isNotEmpty() -> showEnglish()
             else -> {
                 presented = emptyList()
@@ -1391,11 +1438,84 @@ internal class CandidateController(
         const val SYMBOL_FILE = "lexicon/symbol_freq.tsv"
         const val LEXICON_BIN = "lexicon/lexicon.bin"
         const val EMAIL_DOMAINS_FILE = "lexicon/email_domains.tsv"
+        const val LEXICON_MISSING = "詞庫尚未下載"
+        const val LEXICON_CONSENT =
+            "詞庫來自千秋輸入法綜合詞庫，含 CC BY-NC 資料，僅供非商業使用，打過的字不會上傳。點此下載"
     }
+
+    private enum class LexiconPrompt { HIDDEN, MISSING, CONSENT }
 
     private class CursorSession(val text: String, val startOffset: Int, var cursor: Int)
 
-    private fun statusMessage(): String = when (lexicon.status) {
+    private fun showFrame() {
+        lexiconPrompt = LexiconPrompt.HIDDEN
+        if (frame.committed.isNotEmpty()) {
+            val text = frame.committed
+            frame = ChiaKeyFrame.parse("")
+            commit(text)
+            zhuyinEngine.acknowledge()
+            apply(EngineSnapshot())
+            return
+        }
+        val candidates = frame.candidates.mapIndexed { index, text ->
+            Candidate(text = text, engineIndex = index, source = CandidateSource.RIME)
+        }
+        apply(
+            EngineSnapshot(
+                preedit = frame.display,
+                composingPreview = frame.display,
+                candidates = candidates,
+            ),
+        )
+    }
+
+    /** Commits the Hanzi already chosen. The punctuation or mode change is not an engine key. */
+    private fun finishZhuyinComposition() {
+        if (!chiakey) {
+            finishComposition(convertAll())
+            return
+        }
+        val text = frame.composing
+        frame = ChiaKeyFrame.parse("")
+        zhuyinEngine.reset()
+        if (text.isNotEmpty()) commit(text)
+        apply(EngineSnapshot())
+    }
+
+    private fun showLexiconPrompt() {
+        lexiconPrompt = LexiconPrompt.MISSING
+        frame = ChiaKeyFrame.parse("")
+        val chip = lexiconChip(LEXICON_MISSING)
+        presented = listOf(chip)
+        publish(EngineSnapshot(candidates = presented))
+    }
+
+    private fun onLexiconPrompt() {
+        if (lexiconPrompt == LexiconPrompt.CONSENT) {
+            onRequestLexicon()
+            return
+        }
+        lexiconPrompt = LexiconPrompt.CONSENT
+        val chip = lexiconChip(LEXICON_CONSENT)
+        presented = listOf(chip)
+        publish(EngineSnapshot(candidates = presented))
+    }
+
+    private fun lexiconChip(text: String): Candidate {
+        return Candidate(
+            text = text,
+            engineIndex = -1,
+            source = CandidateSource.LEXICON,
+            span = 0,
+        )
+    }
+
+    private fun statusMessage(): String = when {
+        chiakey -> ""
+        else -> lexiconStatus()
+    }
+
+    private fun lexiconStatus(): String = when (lexicon.status) {
         EngineStatus.READY -> ""
         EngineStatus.LOADING -> context.getString(R.string.status_loading)
         EngineStatus.MISSING_LIBRARY -> context.getString(R.string.status_missing_rime)

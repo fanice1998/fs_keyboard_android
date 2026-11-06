@@ -15,6 +15,9 @@ internal enum class CandidateSource {
      * The paste uses the offer cached by the controller.
      */
     CLIPBOARD,
+
+    /** A prompt to download the ChiaKey lexicon. It is not a phrase. */
+    LEXICON,
 }
 
 /**

@@ -5,6 +5,8 @@
     <string name="subtype_zhuyin">中文（臺灣注音）</string>
     <string name="status_loading">正在載入注音詞庫…</string>
     <string name="status_missing_rime">尚未載入注音詞庫，仍可組字</string>
+    <string name="lexicon_missing">詞庫尚未下載</string>
+    <string name="lexicon_consent">詞庫來自千秋輸入法綜合詞庫，含 CC BY-NC 資料，僅供非商業使用，打過的字不會上傳。點此下載</string>
     <string name="status_failed">詞庫載入失敗：%1$s</string>
     <string name="clipboard_description">剪貼簿，%1$s</string>
     <string name="clipboard_prompt_title">剪貼簿</string>
