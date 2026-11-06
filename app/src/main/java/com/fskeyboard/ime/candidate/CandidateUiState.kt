@@ -16,6 +16,8 @@ internal data class ImeUiState(
     val hasUnconfirmedText: Boolean = false,
     /** Digit-pad extras for [KeyboardMode.NUMBER]. Empty on every other keyboard. */
     val numberPad: NumberPad = NumberPad.NONE,
+    /** Hanzi and bopomofo blocks for the preview above the candidate row. */
+    val preview: List<String> = emptyList(),
 )
 
 /** Symbol pages keep the row clear. Zhuyin and Latin both show what was just looked up. */

@@ -55,6 +55,7 @@ internal class CandidateController(
     private val zhuyinEngine: ZhuyinEngine = UnavailableZhuyinEngine,
     private val chiakey: Boolean = false,
     private val onRequestLexicon: () -> Unit = {},
+    @Volatile private var partialLexicon: PartialLexicon = PartialLexicon.EMPTY,
 ) {
     /** Ctrl, Alt, and Meta chosen from an English swipe, until the next key. */
     var onComputerModifiers: (Set<ComputerKey>) -> Unit = {}
@@ -77,6 +78,18 @@ internal class CandidateController(
     private val composition = ZhuyinComposition()
     private var frame = ChiaKeyFrame.parse("")
     private var lexiconPrompt = LexiconPrompt.HIDDEN
+
+    /**
+     * Syllables typed without a tone between them.
+     * While [holdingSentence] is set, this chain is the reading and the engine
+     * no longer owns those symbols. One open syllable still goes to the engine,
+     * so a tone there composes the way it does today.
+     */
+    private val chain = BopomofoChain()
+    private var holdingSentence = false
+    private var mirrored = 0
+    private var previewComposing = ""
+    private var previewReading = ""
 
     /** The last characters this keyboard committed, for choosing particles. */
     private val recent = StringBuilder()
@@ -133,7 +146,7 @@ internal class CandidateController(
     private var clipVisible = false
 
     private val hasComposition: Boolean
-        get() = if (chiakey) frame.active else !composition.isEmpty
+        get() = if (chiakey) frame.active || holdingSentence || !chain.isEmpty else !composition.isEmpty
 
     fun start() {
         applySavedLetterMode()
@@ -210,6 +223,7 @@ internal class CandidateController(
             }
             if (hasComposition) {
                 composition.clear()
+                clearChain()
                 changed = true
             }
             if (changed) {
@@ -454,6 +468,12 @@ internal class CandidateController(
             onLexiconPrompt()
             return
         }
+        if (chiakey && candidate.source == CandidateSource.SYNTHETIC &&
+            (holdingSentence || !chain.isEmpty)
+        ) {
+            acceptPartial(candidate)
+            return
+        }
         if (chiakey && frame.active && candidate.engineIndex >= 0) {
             frame = zhuyinEngine.select(candidate.engineIndex)
             showFrame()
@@ -527,7 +547,31 @@ internal class CandidateController(
                 showLexiconPrompt()
                 return
             }
+            val glyph = action.label.firstOrNull() ?: return
+            if (holdingSentence) {
+                if (!chain.append(glyph)) return
+                showHeld()
+                return
+            }
+            val lengthBefore = chain.text.length
+            val syllablesBefore = chain.size
+            val toned = chain.lastToneChosen()
+            if (!chain.append(glyph)) return
+            val startedNext = chain.size > syllablesBefore && syllablesBefore > 0 && !toned
+            if (startedNext) {
+                holdingSentence = true
+                repeat(lengthBefore) { frame = zhuyinEngine.handleKey(8) }
+                mirrored = 0
+                showHeld()
+                return
+            }
             frame = zhuyinEngine.handleAscii(action.key)
+            if (chain.lastToneChosen() && chain.size == 1) {
+                chain.clear()
+                mirrored = 0
+            } else {
+                mirrored = chain.text.length
+            }
             showFrame()
             return
         }
@@ -592,8 +636,15 @@ internal class CandidateController(
             if (committed != null) spaceUndo = SpaceUndo.English(typed, committed)
             return
         }
+        if (chiakey && mode == KeyboardMode.ZHUYIN && holdingSentence) {
+            chain.markLevel()
+            showHeld()
+            return
+        }
         if (chiakey && mode == KeyboardMode.ZHUYIN && frame.active) {
             frame = zhuyinEngine.handleAscii(' ')
+            chain.clear()
+            mirrored = 0
             showFrame()
             return
         }
@@ -635,8 +686,20 @@ internal class CandidateController(
             }
             return
         }
+        if (chiakey && mode == KeyboardMode.ZHUYIN && holdingSentence) {
+            chain.backspace()
+            if (chain.isEmpty) {
+                holdingSentence = false
+                showFrame()
+            } else {
+                showHeld()
+            }
+            return
+        }
         if (chiakey && mode == KeyboardMode.ZHUYIN && frame.active) {
             frame = zhuyinEngine.handleKey(8)
+            if (!chain.isEmpty) chain.backspace()
+            mirrored = chain.text.length
             showFrame()
             return
         }
@@ -671,6 +734,14 @@ internal class CandidateController(
             return
         }
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
+            if (chiakey && !chain.isEmpty && !chain.lastToneChosen()) {
+                val first = presented.firstOrNull { it.source == CandidateSource.SYNTHETIC && it.span > 0 }
+                if (first != null) {
+                    acceptPartial(first)
+                    return
+                }
+                if (holdingSentence || chain.size > 1) return
+            }
             if (chiakey) {
                 frame = zhuyinEngine.handleKey(13)
                 showFrame()
@@ -1203,6 +1274,11 @@ internal class CandidateController(
             ),
             hasUnconfirmedText = hasUnconfirmed,
             numberPad = if (mode == KeyboardMode.NUMBER) numberPad else NumberPad.NONE,
+            preview = if (mode == KeyboardMode.ZHUYIN) {
+                previewBlocks(previewComposing, previewReading)
+            } else {
+                emptyList()
+            },
         )
     }
 
@@ -1452,14 +1528,21 @@ internal class CandidateController(
         if (frame.committed.isNotEmpty()) {
             val text = frame.committed
             frame = ChiaKeyFrame.parse("")
+            clearChain()
             commit(text)
             zhuyinEngine.acknowledge()
             apply(EngineSnapshot())
             return
         }
-        val candidates = frame.candidates.mapIndexed { index, text ->
+        val engineCandidates = frame.candidates.mapIndexed { index, text ->
             Candidate(text = text, engineIndex = index, source = CandidateSource.RIME)
         }
+        val candidates = if (engineCandidates.isEmpty() && !chain.isEmpty && !chain.lastToneChosen()) {
+            partialLexicon.candidates(chain.readings())
+        } else {
+            engineCandidates
+        }
+        rememberPreview(frame.composing, if (chain.isEmpty) frame.reading else chain.text)
         apply(
             EngineSnapshot(
                 preedit = frame.display,
@@ -1469,13 +1552,69 @@ internal class CandidateController(
         )
     }
 
+    /** The held sentence, drawn above the candidate row and underlined in the editor. */
+    private fun showHeld() {
+        val reading = chain.text
+        val composing = frame.composing
+        val inline = composing + reading
+        rememberPreview(composing, reading)
+        apply(
+            EngineSnapshot(
+                preedit = inline,
+                composingPreview = inline,
+                candidates = partialLexicon.candidates(chain.readings()),
+            ),
+        )
+    }
+
+    /** Commits a word found for the untoned reading and leaves any syllables it did not cover. */
+    private fun acceptPartial(candidate: Candidate) {
+        val span = candidate.span.coerceAtLeast(1)
+        if (!holdingSentence) {
+            repeat(mirrored) { frame = zhuyinEngine.handleKey(8) }
+            mirrored = 0
+            chain.clear()
+        } else {
+            chain.dropFront(span.coerceAtMost(chain.size))
+            if (chain.isEmpty) holdingSentence = false
+        }
+        commit(candidate.text)
+        if (holdingSentence) showHeld() else showFrame()
+    }
+
+    private fun rememberPreview(composing: String, reading: String) {
+        previewComposing = composing
+        previewReading = reading
+    }
+
+    /** Replaces sentence guesses after the ChiaKey unigram index is published. */
+    fun publishPartialLexicon(next: PartialLexicon) {
+        post {
+            partialLexicon = next
+            if (!chiakey || mode != KeyboardMode.ZHUYIN || chain.isEmpty) return@post
+            if (holdingSentence) showHeld() else if (!chain.lastToneChosen()) showFrame()
+        }
+    }
+
+    private fun clearChain() {
+        chain.clear()
+        holdingSentence = false
+        mirrored = 0
+        previewComposing = ""
+        previewReading = ""
+    }
+
     /** Commits the Hanzi already chosen. The punctuation or mode change is not an engine key. */
     private fun finishZhuyinComposition() {
         if (!chiakey) {
             finishComposition(convertAll())
             return
         }
-        val text = frame.composing
+        val pending = presented.firstOrNull {
+            it.source == CandidateSource.SYNTHETIC && it.span == chain.size && chain.size > 0
+        }?.text.orEmpty()
+        val text = frame.composing + pending
+        clearChain()
         frame = ChiaKeyFrame.parse("")
         zhuyinEngine.reset()
         if (text.isNotEmpty()) commit(text)
