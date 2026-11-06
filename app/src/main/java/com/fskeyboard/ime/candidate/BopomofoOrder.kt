@@ -74,6 +74,7 @@ internal object BopomofoOrder {
             appendGlyph(syllable and VOWEL)
         }
         if (body.isEmpty()) return null
+        val shared = share(body)
         val tone = when (syllable and TONE) {
             0 -> ZhuyinTone.LEVEL
             TONE2 -> ZhuyinTone.SECOND
@@ -82,7 +83,12 @@ internal object BopomofoOrder {
             TONE5 -> ZhuyinTone.NEUTRAL
             else -> return null
         }
-        return SyllableReading(body, tone)
+        return SyllableReading(shared, tone)
+    }
+
+    /** Bopomofo bodies repeat across the lexicon. One copy per spelling. */
+    private fun share(body: String): String = synchronized(sharedBodies) {
+        sharedBodies.getOrPut(body) { body }
     }
 
     private fun StringBuilder.appendGlyph(component: Int) {
@@ -123,4 +129,5 @@ internal object BopomofoOrder {
     )
 
     private val GLYPH = COMPONENT.entries.associate { (glyph, component) -> component to glyph }
+    private val sharedBodies = HashMap<String, String>(512)
 }

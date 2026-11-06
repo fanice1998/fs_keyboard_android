@@ -17,7 +17,8 @@ import com.fskeyboard.ime.ui.dp
 import com.fskeyboard.ime.ui.isNightMode
 
 /**
- * Candidates in one scrolling row. The symbol-by-symbol preview sits above this bar.
+ * Candidates in one scrolling row. The composition stays underlined in the field,
+ * and a separate bubble hangs on this bar's top-left corner.
  * The text on the left is a status message, shown only when there is one.
  * The arrow on the right opens every candidate over the keys.
  * The bar is at least 40dp tall; chips are 18sp with 4dp above and below.

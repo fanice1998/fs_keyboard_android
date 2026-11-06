@@ -1275,9 +1275,9 @@ internal class CandidateController(
             hasUnconfirmedText = hasUnconfirmed,
             numberPad = if (mode == KeyboardMode.NUMBER) numberPad else NumberPad.NONE,
             preview = if (mode == KeyboardMode.ZHUYIN) {
-                previewBlocks(previewComposing, previewReading)
+                compositionText(previewComposing, previewReading)
             } else {
-                emptyList()
+                ""
             },
         )
     }
@@ -1552,7 +1552,7 @@ internal class CandidateController(
         )
     }
 
-    /** The held sentence, drawn above the candidate row and underlined in the editor. */
+    /** The held sentence, underlined in the editor and shown in the bubble. */
     private fun showHeld() {
         val reading = chain.text
         val composing = frame.composing

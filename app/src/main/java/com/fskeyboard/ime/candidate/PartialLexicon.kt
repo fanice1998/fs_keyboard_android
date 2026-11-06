@@ -126,6 +126,7 @@ internal class PartialLexicon private constructor(
         fun add(row: UnigramRow) = add(row.qstring, row.text, row.probability)
 
         fun build(): PartialLexicon {
+            identity.clear()
             val buckets = HashMap<String, Top>()
             for (word in words) {
                 for ((key, extra) in keysOf(word.syllables)) {
@@ -185,6 +186,12 @@ internal class PartialLexicon private constructor(
         }
 
         private fun keysOf(syllables: List<SyllableReading>): List<Pair<String, Int>> {
+            // Three- and four-syllable words keep only the full reading. Expanding
+            // every bopomofo prefix of those words exhausts the process heap on the
+            // real unigram table, and an error on this thread restarts the IME.
+            if (syllables.size > 2) {
+                return listOf(queryKey(syllables.map { it.body }, 0, syllables.size) to 0)
+            }
             val prefixes = syllables.map { prefixesOf(it.body) }
             val out = ArrayList<Pair<String, Int>>()
             val key = StringBuilder()

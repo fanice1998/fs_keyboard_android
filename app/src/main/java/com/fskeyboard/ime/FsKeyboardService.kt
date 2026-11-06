@@ -22,8 +22,8 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import com.fskeyboard.ime.candidate.Candidate
 import com.fskeyboard.ime.candidate.CandidateBarView
+import com.fskeyboard.ime.candidate.CompositionPreviewPopup
 import com.fskeyboard.ime.candidate.PartialLexicon
-import com.fskeyboard.ime.candidate.ReadingPreviewBar
 import com.fskeyboard.ime.candidate.CandidateController
 import com.fskeyboard.ime.candidate.CandidatePanelView
 import com.fskeyboard.ime.candidate.CandidateSource
@@ -67,7 +67,7 @@ class FsKeyboardService : InputMethodService() {
     private lateinit var controller: CandidateController
     private var keyboard: KeyboardView? = null
     private var candidateBar: CandidateBarView? = null
-    private var readingPreview: ReadingPreviewBar? = null
+    private var compositionPreview: CompositionPreviewPopup? = null
     private var candidatePanel: CandidatePanelView? = null
     private var voiceView: VoiceInputView? = null
     private var speech: SystemSpeech? = null
@@ -134,6 +134,8 @@ class FsKeyboardService : InputMethodService() {
     }
 
     override fun onDestroy() {
+        compositionPreview?.release()
+        compositionPreview = null
         destroySpeech()
         if (framesWatched) {
             runCatching { window?.window?.removeOnFrameMetricsAvailableListener(latencyProbe) }
@@ -171,7 +173,7 @@ class FsKeyboardService : InputMethodService() {
                 if (generation != current || !::controller.isInitialized) return@Thread
                 Log.i(TAG, "chiakey unigram index ready: ${index.wordCount} words")
                 controller.publishPartialLexicon(index)
-            } catch (error: Exception) {
+            } catch (error: Throwable) {
                 Log.w(TAG, "chiakey unigram index failed", error)
             }
         }, "fskeyboard-chiakey-index").start()
@@ -210,8 +212,8 @@ class FsKeyboardService : InputMethodService() {
             clipChildren = false
             clipToPadding = false
         }
-        readingPreview = ReadingPreviewBar(this)
-        candidateBar = CandidateBarView(this).apply {
+        compositionPreview?.release()
+        val bar = CandidateBarView(this).apply {
             onCandidate = { controller.onCandidate(it) }
             onExpand = { if (!voiceOpen) showPanel(!panelOpen) }
             onCandidateHold = { anchor, candidate -> showWeightMenu(anchor, candidate) }
@@ -219,6 +221,8 @@ class FsKeyboardService : InputMethodService() {
                 if (clearSystemClipboard(this@FsKeyboardService)) controller.dismissClipboard()
             }
         }
+        candidateBar = bar
+        compositionPreview = CompositionPreviewPopup(bar)
         candidatePanel = CandidatePanelView(this).apply {
             visibility = View.GONE
             onCandidate = {
@@ -245,7 +249,7 @@ class FsKeyboardService : InputMethodService() {
             onTrackpadActive = { active ->
                 val faded = if (active) 0.35f else 1f
                 candidateBar?.alpha = faded
-                readingPreview?.alpha = faded
+                compositionPreview?.faded = active
                 if (!active) controller.endCursor()
             }
             onKey = { action ->
@@ -280,14 +284,7 @@ class FsKeyboardService : InputMethodService() {
             fallbackBottom = initialBottomClearance(),
         )
         root.addView(
-            readingPreview,
-            LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ),
-        )
-        root.addView(
-            candidateBar,
+            bar,
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -566,6 +563,11 @@ class FsKeyboardService : InputMethodService() {
         latestInsets?.let(::applyNavigationInset)
     }
 
+    override fun onWindowHidden() {
+        compositionPreview?.dismiss()
+        super.onWindowHidden()
+    }
+
     override fun onFinishInput() {
         closeVoice()
         if (::controller.isInitialized) {
@@ -620,8 +622,8 @@ class FsKeyboardService : InputMethodService() {
                 EnterActions.choose(currentInputEditorInfo)
             }
             keyboard?.enterChoice = enterChoice
-            readingPreview?.render(state.preview)
             candidateBar?.render(state.candidates)
+            compositionPreview?.show(state.preview)
             val clipboardOnly = state.candidates.candidates.singleOrNull()?.source == CandidateSource.CLIPBOARD
             when {
                 state.candidates.candidates.isEmpty() || clipboardOnly -> showPanel(false)

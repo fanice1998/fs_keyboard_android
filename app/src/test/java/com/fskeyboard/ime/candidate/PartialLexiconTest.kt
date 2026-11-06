@@ -1,7 +1,6 @@
 package com.fskeyboard.ime.candidate
 
 import com.fskeyboard.ime.keyboard.ZhuyinTone
-import com.fskeyboard.ime.ui.CompositionPreviewStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -113,12 +112,10 @@ class PartialLexiconTest {
     }
 
     @Test
-    fun previewBlocksAreOneSymbolEachAndTheStyleIsADarkTranslucentChip() {
-        assertEquals(listOf("你", "ㄏ", "ㄠ"), previewBlocks("你", "ㄏㄠ"))
-        assertEquals(listOf("ㄋ", "ㄧ", "ˇ", "ㄏ", "ㄠ", "ˇ"), previewBlocks("", "ㄋㄧˇㄏㄠˇ"))
-        val style = CompositionPreviewStyle.standard()
-        assertEquals(0xFFFFFFFF.toInt(), style.text)
-        assertEquals(0xB32C2C2E.toInt(), style.block)
+    fun compositionTextKeepsHanziThenBopomofoAsOneString() {
+        assertEquals("你ㄏㄠ", compositionText("你", "ㄏㄠ"))
+        assertEquals("ㄋㄧˇㄏㄠˇ", compositionText("", "ㄋㄧˇㄏㄠˇ"))
+        assertEquals("去ㄋㄧㄚˋ", compositionText("去", "ㄋㄧㄚˋ"))
     }
 
     private fun row(text: String, syllables: List<String>, probability: Double): UnigramRow {

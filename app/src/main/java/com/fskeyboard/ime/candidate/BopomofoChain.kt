@@ -128,11 +128,8 @@ internal class BopomofoChain {
     }
 }
 
-/** One block per Hanzi and per bopomofo symbol, composing first, then the reading. */
-internal fun previewBlocks(composing: String, reading: String): List<String> {
-    if (composing.isEmpty() && reading.isEmpty()) return emptyList()
-    val blocks = ArrayList<String>(composing.length + reading.length)
-    composing.forEach { blocks += it.toString() }
-    reading.forEach { blocks += it.toString() }
-    return blocks
-}
+/**
+ * One composition string: chosen Hanzi, then the bopomofo still being typed.
+ * The editor underlines it, and the bubble on the candidate bar shows the same text.
+ */
+internal fun compositionText(composing: String, reading: String): String = composing + reading
