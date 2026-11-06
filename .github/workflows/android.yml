@@ -26,6 +26,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      # This repository's token cannot read the public ChiaKey repo, so drop it
+      # for this fetch. CMake needs the pinned submodule before configure.
+      - name: Checkout ChiaKey
+        run: |
+          git -c http.https://github.com/.extraheader= \
+            submodule update --init --depth 1 third_party/chiakey
+
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
