@@ -520,6 +520,61 @@ class ChiaKeyTypingTest {
     }
 
     @Test
+    fun aTonedSyllableAfterAChosenPrefixStaysOnTheChain() {
+        val engine = ScriptedEngine()
+        val field = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(
+            engine,
+            field,
+            StringBuilder(),
+            states,
+            partial = levelToneLexicon(),
+        )
+        controller.onStartInput(false)
+        type(controller, "ㄊㄧㄢ")
+        controller.onKey(KeyAction.Space)
+        controller.onCandidate(states.last().candidates.candidates.first { it.text == "天" })
+        assertEquals("天", states.last().preview)
+        assertEquals("", field.toString())
+        val ascii = engine.asciiLog.toString()
+        type(controller, "ㄚˇ")
+        assertEquals("天ㄚˇ", states.last().preview)
+        assertEquals("", field.toString())
+        assertEquals(ascii, engine.asciiLog.toString())
+        controller.onKey(KeyAction.Enter)
+        assertEquals("", field.toString())
+        assertEquals("天ㄚˇ", states.last().preview)
+        assertTrue(engine.codes.none { it == 13 })
+    }
+
+    @Test
+    fun aNonHoldingTapBackspacesEnginePrefixKeys() {
+        val engine = ScriptedEngine(answered = setOf("su3"))
+        val field = StringBuilder()
+        val composing = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(
+            engine,
+            field,
+            composing,
+            states,
+            partial = levelToneLexicon(),
+        )
+        controller.onStartInput(false)
+        type(controller, "ㄋㄧˇ")
+        assertEquals("su3", engine.asciiLog.toString())
+        type(controller, "ㄊㄧㄢ")
+        val tian = states.last().candidates.candidates.first { it.text == "天" }
+        assertEquals(CandidateSource.SYNTHETIC, tian.source)
+        controller.onCandidate(tian)
+        assertEquals("", field.toString())
+        assertEquals("天", states.last().preview)
+        assertEquals("天", composing.toString())
+        assertEquals("", engine.asciiLog.toString())
+    }
+
+    @Test
     fun aChosenPrefixStaysAheadOfTheTail() {
         val reading = "ㄋㄧㄘㄞㄏㄨㄟㄗㄠㄊㄧㄢㄑㄧㄢˇ"
         val engine = ScriptedEngine()

@@ -579,6 +579,15 @@ internal class CandidateController(
                 showHeld()
                 return
             }
+            // A chosen Hanzi keeps every later key, including a tone mark, on the chain.
+            // holdingSentence flips only once that glyph arrives, so an empty chain
+            // still commits on space.
+            if (chosenPrefix.isNotEmpty()) {
+                if (!chain.append(glyph)) return
+                holdingSentence = true
+                showHeld()
+                return
+            }
             val lengthBefore = chain.text.length
             val syllablesBefore = chain.size
             val toned = chain.lastToneChosen()
@@ -813,12 +822,14 @@ internal class CandidateController(
                     val first = presented.firstOrNull { it.source == CandidateSource.SYNTHETIC && it.span > 0 }
                     if (first != null) {
                         acceptPartial(first)
-                        if (chain.isEmpty) commitChosenPrefix()
+                        if (chain.isEmpty && !parkedEngineSyllable()) commitChosenPrefix()
                         return
                     }
                     if (holdingSentence || chain.size > 1 || chosenPrefix.isNotEmpty()) return
                 } else if (chosenPrefix.isNotEmpty()) {
-                    commitChosenPrefix()
+                    // A syllable still in pendingTone or the frame is on screen.
+                    // Committing the prefix here would drop it.
+                    if (!parkedEngineSyllable()) commitChosenPrefix()
                     return
                 }
                 frame = zhuyinEngine.handleKey(13)
@@ -1679,6 +1690,11 @@ internal class CandidateController(
         return holdingSentence || !chain.isEmpty || pendingTone.isNotEmpty() || frame.active
     }
 
+    /** A toned syllable the engine still holds, not yet on [chain]. */
+    private fun parkedEngineSyllable(): Boolean {
+        return pendingTone.isNotEmpty() || frame.reading.isNotEmpty()
+    }
+
     /**
      * Appends [candidate] to the chosen Hanzi and drops the syllables it covers.
      * The field stays empty while this composition is open, including when the
@@ -1687,8 +1703,12 @@ internal class CandidateController(
     private fun acceptPartial(candidate: Candidate) {
         val span = candidate.span.coerceAtLeast(1)
         if (!holdingSentence) {
-            repeat(mirrored) { frame = zhuyinEngine.handleKey(8) }
+            // enginePrefixKeys are already in the engine and are not part of mirrored.
+            // Leaving them makes the next frame show that spelling again.
+            repeat(mirrored + enginePrefixKeys) { frame = zhuyinEngine.handleKey(8) }
             mirrored = 0
+            enginePrefix.clear()
+            enginePrefixKeys = 0
             clearPendingTone()
             if (frame.reading.isEmpty()) frame = ChiaKeyFrame.parse("")
         }
