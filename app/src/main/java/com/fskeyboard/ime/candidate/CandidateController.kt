@@ -499,9 +499,14 @@ internal class CandidateController(
             return
         }
         if (chiakey && frame.active && candidate.engineIndex >= 0) {
+            frame = zhuyinEngine.select(candidate.engineIndex)
+            // The chain still holds the syllable select just consumed.
             enginePrefix.clear()
             enginePrefixKeys = 0
-            frame = zhuyinEngine.select(candidate.engineIndex)
+            chain.clear()
+            mirrored = 0
+            holdingSentence = false
+            clearPendingTone()
             showFrame()
             return
         }
@@ -817,15 +822,23 @@ internal class CandidateController(
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
             if (chiakey) {
                 // 平聲 counts as chosen, so a tone check here would skip the partial
-                // candidate and send key 13. This composition does not send key 13.
-                if (!chain.isEmpty) {
+                // candidate and send key 13. A tone parked off the chain is the same
+                // accept, and that fallback does not send key 13.
+                if (!chain.isEmpty || pendingTone.isNotEmpty()) {
                     val first = presented.firstOrNull { it.source == CandidateSource.SYNTHETIC && it.span > 0 }
                     if (first != null) {
                         acceptPartial(first)
-                        if (chain.isEmpty && !parkedEngineSyllable()) commitChosenPrefix()
+                        if (chain.isEmpty && pendingTone.isEmpty() && frame.reading.isEmpty()) {
+                            commitChosenPrefix()
+                        }
                         return
                     }
-                    if (holdingSentence || chain.size > 1 || chosenPrefix.isNotEmpty()) return
+                    if (
+                        holdingSentence || chain.size > 1 || chosenPrefix.isNotEmpty() ||
+                        pendingTone.isNotEmpty()
+                    ) {
+                        return
+                    }
                 } else if (chosenPrefix.isNotEmpty()) {
                     // A syllable still in pendingTone or the frame is on screen.
                     // Committing the prefix here would drop it.
@@ -1817,21 +1830,28 @@ internal class CandidateController(
         previewReading = ""
     }
 
-    /** Commits the Hanzi already chosen. The punctuation or mode change is not an engine key. */
+    /** Commits the segment on screen. The punctuation or mode change is not an engine key. */
     private fun finishZhuyinComposition() {
         if (!chiakey) {
             finishComposition(convertAll())
             return
         }
-        val pending = presented.firstOrNull {
+        val fullSpan = presented.firstOrNull {
             it.source == CandidateSource.SYNTHETIC && it.span == chain.size && chain.size > 0
-        }?.text.orEmpty()
-        val text = chosenPrefix.toString() + frame.composing + pending
+        }?.text
+        val text = if (fullSpan != null) {
+            chosenPrefix.toString() + frame.composing + fullSpan
+        } else if (!chain.isEmpty || pendingToneText.isNotEmpty()) {
+            val reading = if (!chain.isEmpty) chain.text else pendingToneText
+            chosenPrefix.toString() + reading
+        } else {
+            chosenPrefix.toString() + frame.composing
+        }
         edit {
             clearChain()
             frame = ChiaKeyFrame.parse("")
-            zhuyinEngine.reset()
             if (text.isNotEmpty()) commit(text)
+            zhuyinEngine.reset()
             apply(EngineSnapshot())
         }
     }

@@ -185,6 +185,33 @@ class ChiaKeyTypingTest {
     }
 
     @Test
+    fun selectingAnEngineCandidateDropsTheOpenChainSyllable() {
+        val glyphs = "ㄋㄧˇㄍ"
+        val engine = ScriptedEngine(
+            answered = setOf(ZhuyinSpelling.keysOf("ㄋㄧˇ")),
+            openOffer = OpenOffer(
+                ascii = ZhuyinSpelling.keysOf(glyphs),
+                reading = "ㄍ",
+                composing = "你",
+                candidates = listOf("功能"),
+                selected = "功能",
+            ),
+        )
+        val composing = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(engine, StringBuilder(), composing, states)
+        controller.onStartInput(false)
+        type(controller, glyphs)
+        assertEquals("你ㄍ", states.last().preview)
+        val chip = states.last().candidates.candidates.first()
+        assertTrue(chip.engineIndex >= 0)
+        controller.onCandidate(chip)
+        assertEquals(listOf(0), engine.selects)
+        assertEquals("功能", composing.toString())
+        assertEquals("功能", states.last().preview)
+    }
+
+    @Test
     fun punctuationIsNotAnEngineKey() {
         val engine = ScriptedEngine()
         val field = StringBuilder()
@@ -645,6 +672,47 @@ class ChiaKeyTypingTest {
     }
 
     @Test
+    fun punctuationKeepsTheReadingStillOnScreen() {
+        val parked = ScriptedEngine()
+        val parkedField = StringBuilder()
+        val parkedStates = mutableListOf<ImeUiState>()
+        val parkedController = chiakeyController(
+            parked,
+            parkedField,
+            StringBuilder(),
+            parkedStates,
+            partial = toneLexicon(),
+        )
+        parkedController.onStartInput(false)
+        type(parkedController, "ㄇㄨˋ")
+        assertEquals("ㄇㄨˋ", parkedStates.last().preview)
+        parkedController.onKey(KeyAction.Punctuation("。"))
+        val parkedText = parkedField.toString()
+        assertTrue(parkedText, parkedText == "ㄇㄨˋ。" || parkedText == "木。")
+        assertEquals(emptyList<Int>(), parked.codes)
+
+        val tail = ScriptedEngine()
+        val tailField = StringBuilder()
+        val tailStates = mutableListOf<ImeUiState>()
+        val tailController = chiakeyController(
+            tail,
+            tailField,
+            StringBuilder(),
+            tailStates,
+            partial = levelToneLexicon(),
+        )
+        tailController.onStartInput(false)
+        type(tailController, "ㄊㄧㄢ")
+        tailController.onKey(KeyAction.Space)
+        tailController.onCandidate(tailStates.last().candidates.candidates.first { it.text == "天" })
+        type(tailController, "ㄚˇ")
+        assertEquals("天ㄚˇ", tailStates.last().preview)
+        tailController.onKey(KeyAction.Punctuation("。"))
+        assertEquals("天ㄚˇ。", tailField.toString())
+        assertEquals("", tailStates.last().preview)
+    }
+
+    @Test
     fun enterAfterLevelToneSelectsThePartialWithoutSendingKey13() {
         val engine = ScriptedEngine()
         val field = StringBuilder()
@@ -664,6 +732,30 @@ class ChiaKeyTypingTest {
         assertEquals("", states.last().preview)
         assertTrue(engine.codes.none { it == 13 })
         assertFalse(engine.asciiLog.toString().contains(' '))
+    }
+
+    @Test
+    fun enterOnAnUnansweredToneCommitsThePartialWithoutSendingKey13() {
+        val engine = ScriptedEngine()
+        val field = StringBuilder()
+        val composing = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(
+            engine,
+            field,
+            composing,
+            states,
+            partial = toneLexicon(),
+        )
+        controller.onStartInput(false)
+        type(controller, "ㄇㄨˋ")
+        assertEquals("ㄇㄨˋ", states.last().preview)
+        assertEquals("木", states.last().candidates.candidates.first().text)
+        controller.onKey(KeyAction.Enter)
+        assertEquals("木", field.toString())
+        assertEquals("", composing.toString())
+        assertEquals("", states.last().preview)
+        assertTrue(engine.codes.none { it == 13 })
     }
 
     private fun openSentence(): Sentence {
@@ -764,10 +856,19 @@ private const val MISSING = "詞庫尚未下載"
 private const val CONSENT =
     "詞庫來自千秋輸入法綜合詞庫，含 CC BY-NC 資料，僅供非商業使用，打過的字不會上傳。點此下載"
 
+private data class OpenOffer(
+    val ascii: String,
+    val reading: String,
+    val composing: String,
+    val candidates: List<String>,
+    val selected: String,
+)
+
 private class ScriptedEngine(
     override val ready: Boolean = true,
     private val stickyComposing: String = "",
     private val answered: Set<String> = emptySet(),
+    private val openOffer: OpenOffer? = null,
 ) : ZhuyinEngine {
     val asciiLog = StringBuilder()
     val codes = mutableListOf<Int>()
@@ -781,7 +882,10 @@ private class ScriptedEngine(
     override fun handleAscii(key: Char): ChiaKeyFrame {
         asciiLog.append(key)
         val typed = asciiLog.toString()
+        val offer = openOffer
         val frame = when {
+            offer != null && typed == offer.ascii ->
+                ChiaKeyFrame(offer.reading, offer.composing, "", true, offer.candidates)
             typed == "su3cl3" -> ChiaKeyFrame("", "你好", "", true, listOf("你好", "妳好"))
             typed in answered -> ChiaKeyFrame("", "你", "", true, listOf("你"))
             else -> ChiaKeyFrame(typed, stickyComposing, "", false, emptyList())
@@ -801,6 +905,10 @@ private class ScriptedEngine(
 
     override fun select(index: Int): ChiaKeyFrame {
         selects += index
+        val offer = openOffer
+        if (offer != null && asciiLog.toString() == offer.ascii) {
+            return ChiaKeyFrame("", offer.selected, "", false, emptyList())
+        }
         return ChiaKeyFrame("", "妳好", "", false, emptyList())
     }
 
