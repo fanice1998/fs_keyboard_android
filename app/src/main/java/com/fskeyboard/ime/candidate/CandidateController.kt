@@ -81,16 +81,19 @@ internal class CandidateController(
 
     /**
      * Syllables typed without a tone between them.
-     * While [holdingSentence] is set, this chain is the reading and the engine
-     * no longer owns those symbols. One open syllable still goes to the engine,
-     * so the next initial continues in that walker.
-     * A finished one-syllable tone is copied into [pendingTone] before the chain
-     * is released. [mirrored] is how many engine keys to take back if the user
-     * picks a character for that reading.
+     * While [holdingSentence] is set, this chain is the whole reading and the engine
+     * no longer owns those keys. One open syllable still goes to the engine, so the
+     * next initial continues in that walker.
+     * A finished one-syllable tone is copied into [pendingTone] before its chain is
+     * released. The next syllable keeps that tone on [enginePrefix] until the whole
+     * composition is held. [mirrored] is the open chain's engine keys.
+     * [enginePrefixKeys] counts keys already in the engine for [enginePrefix].
      */
     private val chain = BopomofoChain()
     private var holdingSentence = false
     private var mirrored = 0
+    private val enginePrefix = ArrayList<SyllableReading>()
+    private var enginePrefixKeys = 0
     private var pendingTone: List<SyllableReading> = emptyList()
     private var pendingToneText = ""
 
@@ -575,12 +578,10 @@ internal class CandidateController(
             val toned = chain.lastToneChosen()
             val releasingTone = pendingTone.isNotEmpty()
             if (!chain.append(glyph)) return
-            if (releasingTone) clearPendingTone()
+            if (releasingTone) releasePendingTone()
             val startedNext = chain.size > syllablesBefore && syllablesBefore > 0 && !toned
             if (startedNext) {
-                holdingSentence = true
-                repeat(lengthBefore) { frame = zhuyinEngine.handleKey(8) }
-                mirrored = 0
+                holdComposition(lengthBefore)
                 showHeld()
                 return
             }
@@ -592,6 +593,8 @@ internal class CandidateController(
                     mirrored = chain.text.length
                 } else {
                     clearPendingTone()
+                    enginePrefix.clear()
+                    enginePrefixKeys = 0
                     mirrored = 0
                 }
                 chain.clear()
@@ -665,10 +668,8 @@ internal class CandidateController(
         }
         // An open composition never sends ASCII space. A tone already offered stays on screen.
         if (chiakey && mode == KeyboardMode.ZHUYIN && hasComposition) {
-            if (!holdingSentence && !chain.isEmpty && frame.active && mirrored > 0) {
-                repeat(mirrored) { frame = zhuyinEngine.handleKey(8) }
-                holdingSentence = true
-                mirrored = 0
+            if (!holdingSentence && !chain.isEmpty && !chain.lastToneChosen()) {
+                holdComposition(mirrored)
             }
             if (holdingSentence) {
                 chain.markLevel()
@@ -1677,10 +1678,34 @@ internal class CandidateController(
         pendingToneText = ""
     }
 
+    /** The syllable just released into the engine stays part of this composition. */
+    private fun releasePendingTone() {
+        enginePrefix.addAll(pendingTone)
+        enginePrefixKeys += mirrored
+        clearPendingTone()
+    }
+
+    /**
+     * Backspaces every engine key in this composition and leaves the reading on [chain].
+     * [tailKeys] are the open chain's keys. [enginePrefixKeys] are the toned syllables
+     * already in the engine. [showHeld] is only valid after this, when the chain is whole.
+     */
+    private fun holdComposition(tailKeys: Int) {
+        if (enginePrefix.isNotEmpty()) chain.insertFront(enginePrefix)
+        val keys = enginePrefixKeys + tailKeys
+        enginePrefix.clear()
+        enginePrefixKeys = 0
+        repeat(keys) { frame = zhuyinEngine.handleKey(8) }
+        mirrored = 0
+        holdingSentence = true
+    }
+
     private fun clearChain() {
         chain.clear()
         holdingSentence = false
         mirrored = 0
+        enginePrefix.clear()
+        enginePrefixKeys = 0
         clearPendingTone()
         previewComposing = ""
         previewReading = ""

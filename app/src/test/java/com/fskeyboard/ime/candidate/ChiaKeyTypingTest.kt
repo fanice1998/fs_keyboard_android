@@ -91,6 +91,30 @@ class ChiaKeyTypingTest {
     }
 
     @Test
+    fun spaceAfterATonedPrefixHoldsTheWholeReading() {
+        val reading = "ㄋㄧˇㄊㄧㄢ"
+        val engine = ScriptedEngine()
+        val field = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(engine, field, StringBuilder(), states)
+        controller.onStartInput(false)
+        type(controller, reading)
+        controller.onKey(KeyAction.Space)
+        assertEquals("", field.toString())
+        assertEquals(reading, states.last().preview)
+        val log = engine.asciiLog.toString()
+        assertFalse(log.contains(' '))
+        assertFalse(log.endsWith("su3"))
+        // 平聲 has no glyph, and backspace clears it before a symbol.
+        repeat(reading.length + 1) {
+            controller.onKey(KeyAction.Backspace)
+            assertFalse(states.last().preview.contains("su3"))
+        }
+        assertEquals("", states.last().preview)
+        assertEquals("", field.toString())
+    }
+
+    @Test
     fun spaceDropsAPredictionStuckOnHeldBopomofo() {
         val reading = "ㄋㄧㄏㄠ"
         val engine = ScriptedEngine(stickyComposing = "預測")
