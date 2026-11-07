@@ -663,17 +663,17 @@ internal class CandidateController(
             if (committed != null) spaceUndo = SpaceUndo.English(typed, committed)
             return
         }
-        if (chiakey && mode == KeyboardMode.ZHUYIN && holdingSentence) {
-            chain.markLevel()
-            showHeld()
-            return
-        }
-        if (chiakey && mode == KeyboardMode.ZHUYIN && (frame.active || pendingTone.isNotEmpty())) {
-            if (frame.active) frame = zhuyinEngine.handleAscii(' ')
-            chain.clear()
-            mirrored = 0
-            clearPendingTone()
-            showFrame()
+        // An open composition never sends ASCII space. A tone already offered stays on screen.
+        if (chiakey && mode == KeyboardMode.ZHUYIN && hasComposition) {
+            if (!holdingSentence && !chain.isEmpty && frame.active && mirrored > 0) {
+                repeat(mirrored) { frame = zhuyinEngine.handleKey(8) }
+                holdingSentence = true
+                mirrored = 0
+            }
+            if (holdingSentence) {
+                chain.markLevel()
+                showHeld()
+            }
             return
         }
         when (KeyPolicy.space(mode, composing = hasComposition)) {

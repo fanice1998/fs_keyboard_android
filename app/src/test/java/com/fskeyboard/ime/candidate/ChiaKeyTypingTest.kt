@@ -37,13 +37,57 @@ class ChiaKeyTypingTest {
     }
 
     @Test
-    fun spaceIsSentToTheEngine() {
+    fun spaceMarksLevelToneWithoutSelecting() {
         val engine = ScriptedEngine()
-        val controller = chiakeyController(engine, StringBuilder(), StringBuilder(), mutableListOf())
+        val field = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(
+            engine,
+            field,
+            StringBuilder(),
+            states,
+            partial = levelToneLexicon(),
+        )
+        controller.onStartInput(false)
+        type(controller, "ㄊㄧㄢ")
+        assertEquals("ㄊㄧㄢ", states.last().preview)
+        val open = states.last().candidates.candidates.map { it.text }
+        assertTrue(open.contains("天"))
+        assertTrue(open.contains("甜"))
+        controller.onKey(KeyAction.Space)
+        assertEquals("", field.toString())
+        assertEquals("ㄊㄧㄢ", states.last().preview)
+        val marked = states.last().candidates.candidates.map { it.text }
+        assertTrue(marked.contains("天"))
+        assertFalse(marked.contains("甜"))
+        assertFalse(engine.asciiLog.toString().contains(' '))
+        type(controller, "ㄚ")
+        assertEquals("ㄊㄧㄢㄚ", states.last().preview)
+        assertEquals("", field.toString())
+    }
+
+    @Test
+    fun spaceOnATonedSyllableIsNotSentToTheEngine() {
+        val engine = ScriptedEngine()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(engine, StringBuilder(), StringBuilder(), states)
         controller.onStartInput(false)
         type(controller, "ㄋㄧˇ")
         controller.onKey(KeyAction.Space)
-        assertEquals("su3 ", engine.asciiLog.toString())
+        assertEquals("su3", engine.asciiLog.toString())
+        assertTrue(states.last().preview.endsWith("ㄋㄧˇ"))
+    }
+
+    @Test
+    fun spaceWithNoCompositionInsertsASpace() {
+        val engine = ScriptedEngine()
+        val field = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(engine, field, StringBuilder(), states)
+        controller.onStartInput(false)
+        controller.onKey(KeyAction.Space)
+        assertEquals(" ", field.toString())
+        assertEquals("", states.last().preview)
     }
 
     @Test
@@ -409,6 +453,14 @@ private fun sampleLexicon(): PartialLexicon = PartialLexicon.index(
         UnigramRow.of("你好", listOf("ㄋㄧˇ", "ㄏㄠˇ"), -0.5),
         UnigramRow.of("你", listOf("ㄋㄧˇ"), -2.0),
         UnigramRow.of("好", listOf("ㄏㄠˇ"), -2.0),
+    ),
+)
+
+/** 天 is 平聲. 甜 is second tone. An unmarked syllable matches both. */
+private fun levelToneLexicon(): PartialLexicon = PartialLexicon.index(
+    listOf(
+        UnigramRow.of("天", listOf("ㄊㄧㄢ"), -1.0),
+        UnigramRow.of("甜", listOf("ㄊㄧㄢˊ"), -1.2),
     ),
 )
 
