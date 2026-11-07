@@ -115,6 +115,23 @@ class ChiaKeyTypingTest {
     }
 
     @Test
+    fun spaceAfterAnAnsweredToneHoldsTheWholeReading() {
+        val reading = "ㄋㄧˇㄊㄧㄢ"
+        val engine = ScriptedEngine(answered = setOf("su3"))
+        val field = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(engine, field, StringBuilder(), states)
+        controller.onStartInput(false)
+        type(controller, reading)
+        controller.onKey(KeyAction.Space)
+        assertEquals("", field.toString())
+        assertEquals(reading, states.last().preview)
+        val log = engine.asciiLog.toString()
+        assertFalse(log.contains(' '))
+        assertFalse(log.endsWith("su3"))
+    }
+
+    @Test
     fun spaceDropsAPredictionStuckOnHeldBopomofo() {
         val reading = "ㄋㄧㄏㄠ"
         val engine = ScriptedEngine(stickyComposing = "預測")
@@ -540,6 +557,7 @@ private const val CONSENT =
 private class ScriptedEngine(
     override val ready: Boolean = true,
     private val stickyComposing: String = "",
+    private val answered: Set<String> = emptySet(),
 ) : ZhuyinEngine {
     val asciiLog = StringBuilder()
     val codes = mutableListOf<Int>()
@@ -553,8 +571,9 @@ private class ScriptedEngine(
     override fun handleAscii(key: Char): ChiaKeyFrame {
         asciiLog.append(key)
         val typed = asciiLog.toString()
-        val frame = when (typed) {
-            "su3cl3" -> ChiaKeyFrame("", "你好", "", true, listOf("你好", "妳好"))
+        val frame = when {
+            typed == "su3cl3" -> ChiaKeyFrame("", "你好", "", true, listOf("你好", "妳好"))
+            typed in answered -> ChiaKeyFrame("", "你", "", true, listOf("你"))
             else -> ChiaKeyFrame(typed, stickyComposing, "", false, emptyList())
         }
         lastCandidates = frame.candidates

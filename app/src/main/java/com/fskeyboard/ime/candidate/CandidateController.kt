@@ -495,6 +495,8 @@ internal class CandidateController(
             return
         }
         if (chiakey && frame.active && candidate.engineIndex >= 0) {
+            enginePrefix.clear()
+            enginePrefixKeys = 0
             frame = zhuyinEngine.select(candidate.engineIndex)
             showFrame()
             return
@@ -587,10 +589,17 @@ internal class CandidateController(
             }
             frame = zhuyinEngine.handleAscii(action.key)
             if (chain.lastToneChosen() && chain.size == 1) {
+                val keys = chain.text.length
+                val readings = chain.readings()
                 if (frame.candidates.isEmpty()) {
-                    pendingTone = chain.readings()
+                    pendingTone = readings
                     pendingToneText = chain.text
-                    mirrored = chain.text.length
+                    mirrored = keys
+                } else if (enginePrefix.isEmpty()) {
+                    enginePrefix.addAll(readings)
+                    enginePrefixKeys += keys
+                    clearPendingTone()
+                    mirrored = 0
                 } else {
                     clearPendingTone()
                     enginePrefix.clear()
@@ -728,7 +737,12 @@ internal class CandidateController(
         if (chiakey && mode == KeyboardMode.ZHUYIN && frame.active) {
             frame = zhuyinEngine.handleKey(8)
             clearPendingTone()
-            if (!chain.isEmpty) chain.backspace()
+            if (chain.isEmpty) {
+                enginePrefix.clear()
+                enginePrefixKeys = 0
+            } else {
+                chain.backspace()
+            }
             mirrored = chain.text.length
             showFrame()
             return
