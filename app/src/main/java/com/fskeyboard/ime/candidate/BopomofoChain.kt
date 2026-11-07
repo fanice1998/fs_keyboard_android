@@ -65,9 +65,13 @@ internal class BopomofoChain {
         return true
     }
 
-    /** Marks the open syllable as 平聲. A leading space, with nothing typed, does nothing. */
+    /**
+     * Marks the open syllable as 平聲. A leading space, with nothing typed, does nothing.
+     * A tone already on that syllable stays, so space does not strip it.
+     */
     fun markLevel(): Boolean {
         if (syllables.isEmpty() || syllables.last().isEmpty()) return false
+        if (tones.last() != ZhuyinTone.NONE) return false
         tones[tones.lastIndex] = ZhuyinTone.LEVEL
         return true
     }

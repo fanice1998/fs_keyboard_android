@@ -11,6 +11,7 @@ import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.ZhuyinSpelling
 import com.fskeyboard.ime.rerank.CandidatePipeline
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Proxy
@@ -43,6 +44,34 @@ class ChiaKeyTypingTest {
         type(controller, "ㄋㄧˇ")
         controller.onKey(KeyAction.Space)
         assertEquals("su3 ", engine.asciiLog.toString())
+    }
+
+    @Test
+    fun spaceDropsAPredictionStuckOnHeldBopomofo() {
+        val reading = "ㄋㄧㄏㄠ"
+        val engine = ScriptedEngine(stickyComposing = "預測")
+        val field = StringBuilder()
+        val composing = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(
+            engine,
+            field,
+            composing,
+            states,
+            partial = sampleLexicon(),
+        )
+        controller.onStartInput(false)
+        type(controller, reading)
+        controller.onKey(KeyAction.Space)
+        assertEquals("", field.toString())
+        assertEquals(reading, states.last().preview)
+        assertEquals(reading, composing.toString())
+        assertFalse(states.last().preview.contains("預測"))
+        assertFalse(states.last().candidates.candidates.any { it.text == "預測" })
+        type(controller, "ㄉ")
+        assertEquals("", field.toString())
+        assertEquals(reading + "ㄉ", states.last().preview)
+        assertFalse(states.last().preview.startsWith("預測"))
     }
 
     @Test
@@ -154,6 +183,219 @@ class ChiaKeyTypingTest {
         assertEquals("你好", states.last().preview)
     }
 
+    @Test
+    fun aTonedSingleOffersTheUnigramWhenTheEngineListsNothing() {
+        val cases = listOf(
+            "ㄇㄨˋ" to "木",
+            "ㄨㄛˇ" to "我",
+            "ㄓㄨˋ" to "住",
+            "ㄌㄨㄢˋ" to "亂",
+        )
+        for ((reading, hanzi) in cases) {
+            val engine = ScriptedEngine()
+            val field = StringBuilder()
+            val composing = StringBuilder()
+            val states = mutableListOf<ImeUiState>()
+            val controller = chiakeyController(
+                engine,
+                field,
+                composing,
+                states,
+                partial = toneLexicon(),
+            )
+            controller.onStartInput(false)
+            type(controller, reading)
+            assertEquals("$reading must not be answered by the engine", emptyList<String>(), engine.candidatesOfLastFrame())
+            val offered = states.last().candidates.candidates
+            val chip = offered.find { it.text == hanzi }
+            assertTrue(
+                "$reading should offer $hanzi from the unigram, got ${offered.map { it.text }}",
+                chip != null && chip.source == CandidateSource.SYNTHETIC && chip.engineIndex < 0,
+            )
+            controller.onCandidate(chip!!)
+            assertEquals(emptyList<Int>(), engine.selects)
+            assertEquals(hanzi, field.toString())
+            assertEquals("", composing.toString())
+            assertEquals("", states.last().preview)
+        }
+    }
+
+    @Test
+    fun aFiveSyllableSentenceCommitsInTypedOrder() {
+        val reading = "ㄐㄧㄣㄊㄧㄢㄏㄠㄎㄞㄒㄧㄣ"
+        val full = openSentence()
+        type(full.controller, reading)
+        assertEquals(reading, full.states.last().preview)
+        assertEquals("今天好開心", full.states.last().candidates.candidates.first().text)
+        full.controller.onKey(KeyAction.Enter)
+        assertEquals("今天好開心", full.field.toString())
+        assertEquals("", full.composing.toString())
+        assertEquals("", full.states.last().preview)
+        assertTrue(full.engine.codes.none { it == 13 })
+
+        val prefix = openSentence()
+        type(prefix.controller, reading)
+        val today = prefix.states.last().candidates.candidates.first { it.text == "今天" }
+        assertEquals(CandidateSource.SYNTHETIC, today.source)
+        prefix.controller.onCandidate(today)
+        assertEquals("今天", prefix.field.toString())
+        assertEquals("ㄏㄠㄎㄞㄒㄧㄣ", prefix.states.last().preview)
+        assertEquals("好開心", prefix.states.last().candidates.candidates.first().text)
+        prefix.controller.onKey(KeyAction.Enter)
+        assertEquals("今天好開心", prefix.field.toString())
+        assertEquals("", prefix.states.last().preview)
+
+        val hello = openSentence()
+        type(hello.controller, "ㄋㄧㄏㄠ")
+        assertEquals("ㄋㄧㄏㄠ", hello.states.last().preview)
+        hello.controller.onKey(KeyAction.Enter)
+        assertEquals("你好", hello.field.toString())
+        assertEquals("", hello.states.last().preview)
+    }
+
+    @Test
+    fun selectingAPrefixKeepsTheTonedTailSelectable() {
+        val reading = "ㄋㄧㄘㄞㄏㄨㄟㄗㄠㄊㄧㄢㄑㄧㄢˇ"
+        val engine = ScriptedEngine()
+        val field = StringBuilder()
+        val composing = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        lateinit var controller: CandidateController
+        controller = chiakeyController(
+            engine,
+            field,
+            composing,
+            states,
+            partial = condemnationLexicon(),
+            onEditorSelection = { candidatesStart, candidatesEnd ->
+                controller.onUpdateSelection(
+                    oldSelStart = 0,
+                    oldSelEnd = 0,
+                    newSelStart = field.length,
+                    newSelEnd = field.length,
+                    candidatesStart = candidatesStart,
+                    candidatesEnd = candidatesEnd,
+                )
+            },
+        )
+        controller.onStartInput(false)
+        type(controller, reading)
+        val prefix = states.last().candidates.candidates.first { it.text == "你才" }
+        assertEquals(2, prefix.span)
+        assertEquals(CandidateSource.SYNTHETIC, prefix.source)
+        controller.onCandidate(prefix)
+        assertEquals("你才", field.toString())
+        assertEquals("ㄏㄨㄟㄗㄠㄊㄧㄢㄑㄧㄢˇ", states.last().preview)
+        val hui = states.last().candidates.candidates.first { it.text == "會" }
+        assertEquals(CandidateSource.SYNTHETIC, hui.source)
+        controller.onCandidate(hui)
+        assertEquals("你才會", field.toString())
+        assertEquals("ㄗㄠㄊㄧㄢㄑㄧㄢˇ", states.last().preview)
+        val rest = states.last().candidates.candidates.first { it.text == "遭天譴" }
+        controller.onCandidate(rest)
+        assertEquals("你才會遭天譴", field.toString())
+        assertEquals("", states.last().preview)
+        assertEquals("", composing.toString())
+    }
+
+    @Test
+    fun spaceAfterAChosenPrefixDoesNotGlueItToTheTail() {
+        val reading = "ㄋㄧㄘㄞㄏㄨㄟㄗㄠㄊㄧㄢㄑㄧㄢˇ"
+        val tail = "ㄏㄨㄟㄗㄠㄊㄧㄢㄑㄧㄢˇ"
+        val engine = ScriptedEngine(stickyComposing = "你才")
+        val field = StringBuilder()
+        val composing = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        lateinit var controller: CandidateController
+        controller = chiakeyController(
+            engine,
+            field,
+            composing,
+            states,
+            partial = condemnationLexicon(),
+            onEditorSelection = { candidatesStart, candidatesEnd ->
+                controller.onUpdateSelection(
+                    oldSelStart = 0,
+                    oldSelEnd = 0,
+                    newSelStart = field.length,
+                    newSelEnd = field.length,
+                    candidatesStart = candidatesStart,
+                    candidatesEnd = candidatesEnd,
+                )
+            },
+        )
+        controller.onStartInput(false)
+        type(controller, reading)
+        val prefix = states.last().candidates.candidates.first { it.text == "你才" }
+        controller.onCandidate(prefix)
+        assertEquals("你才", field.toString())
+        controller.onKey(KeyAction.Space)
+        assertEquals("你才", field.toString())
+        assertEquals(tail, states.last().preview)
+        assertEquals(tail, composing.toString())
+        assertFalse(states.last().preview.contains("你才"))
+        type(controller, "ㄉ")
+        assertEquals("你才", field.toString())
+        assertEquals(tail + "ㄉ", states.last().preview)
+        assertFalse(states.last().preview.startsWith("你才"))
+    }
+
+    @Test
+    fun movingTheCaretAwayDropsAHeldTail() {
+        val engine = ScriptedEngine()
+        val field = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        lateinit var controller: CandidateController
+        controller = chiakeyController(
+            engine,
+            field,
+            StringBuilder(),
+            states,
+            partial = condemnationLexicon(),
+            onEditorSelection = { candidatesStart, candidatesEnd ->
+                controller.onUpdateSelection(
+                    oldSelStart = 0,
+                    oldSelEnd = 0,
+                    newSelStart = field.length,
+                    newSelEnd = field.length,
+                    candidatesStart = candidatesStart,
+                    candidatesEnd = candidatesEnd,
+                )
+            },
+        )
+        controller.onStartInput(false)
+        type(controller, "ㄋㄧㄘㄞㄏㄨㄟㄗㄠㄊㄧㄢㄑㄧㄢˇ")
+        controller.onCandidate(states.last().candidates.candidates.first { it.text == "你才" })
+        assertEquals("ㄏㄨㄟㄗㄠㄊㄧㄢㄑㄧㄢˇ", states.last().preview)
+        controller.onUpdateSelection(2, 2, 0, 0, -1, -1)
+        assertEquals("", states.last().preview)
+        assertTrue(states.last().candidates.candidates.none { it.text == "會" })
+    }
+
+    private fun openSentence(): Sentence {
+        val engine = ScriptedEngine()
+        val field = StringBuilder()
+        val composing = StringBuilder()
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(
+            engine,
+            field,
+            composing,
+            states,
+            partial = sentenceLexicon(),
+        )
+        controller.onStartInput(false)
+        return Sentence(engine, field, composing, states, controller)
+    }
+
+    private class Sentence(
+        val engine: ScriptedEngine,
+        val field: StringBuilder,
+        val composing: StringBuilder,
+        val states: MutableList<ImeUiState>,
+        val controller: CandidateController,
+    )
+
     private fun type(controller: CandidateController, glyphs: String) {
         val spelling = ZhuyinSpelling.keysOf(glyphs)
         for (index in glyphs.indices) {
@@ -170,23 +412,77 @@ private fun sampleLexicon(): PartialLexicon = PartialLexicon.index(
     ),
 )
 
+/** Small 千秋 unigram fixture. The engine double does not know these rows. */
+private fun toneLexicon(): PartialLexicon = PartialLexicon.index(
+    listOf(
+        UnigramRow.of("木", listOf("ㄇㄨˋ"), -1.0),
+        UnigramRow.of("母", listOf("ㄇㄨˇ"), -1.1),
+        UnigramRow.of("我", listOf("ㄨㄛˇ"), -0.8),
+        UnigramRow.of("住", listOf("ㄓㄨˋ"), -1.2),
+        UnigramRow.of("注", listOf("ㄓㄨˋ"), -1.3),
+        UnigramRow.of("亂", listOf("ㄌㄨㄢˋ"), -1.4),
+    ),
+)
+
+/** 你才會遭天譴. The last syllable is the only one with a tone, as typed. */
+private fun condemnationLexicon(): PartialLexicon = PartialLexicon.index(
+    listOf(
+        UnigramRow.of("你才", listOf("ㄋㄧˇ", "ㄘㄞˊ"), -0.4),
+        UnigramRow.of("你", listOf("ㄋㄧˇ"), -2.0),
+        UnigramRow.of("才", listOf("ㄘㄞˊ"), -2.0),
+        UnigramRow.of("會遭天譴", listOf("ㄏㄨㄟˋ", "ㄗㄠ", "ㄊㄧㄢ", "ㄑㄧㄢˇ"), -0.9),
+        UnigramRow.of("會", listOf("ㄏㄨㄟˋ"), -1.5),
+        UnigramRow.of("遭", listOf("ㄗㄠ"), -2.0),
+        UnigramRow.of("天", listOf("ㄊㄧㄢ"), -2.0),
+        UnigramRow.of("遭天譴", listOf("ㄗㄠ", "ㄊㄧㄢ", "ㄑㄧㄢˇ"), -1.0),
+        UnigramRow.of("譴", listOf("ㄑㄧㄢˇ"), -1.6),
+    ),
+)
+
+/** Five syllables need more than one indexed word. 你好 stays in the same table. */
+private fun sentenceLexicon(): PartialLexicon = PartialLexicon.index(
+    listOf(
+        UnigramRow.of("今天", listOf("ㄐㄧㄣ", "ㄊㄧㄢ"), -1.0),
+        UnigramRow.of("好開心", listOf("ㄏㄠˇ", "ㄎㄞ", "ㄒㄧㄣ"), -1.2),
+        UnigramRow.of("開心", listOf("ㄎㄞ", "ㄒㄧㄣ"), -1.1),
+        UnigramRow.of("好", listOf("ㄏㄠˇ"), -1.8),
+        UnigramRow.of("號", listOf("ㄏㄠˋ"), -1.4),
+        UnigramRow.of("開", listOf("ㄎㄞ"), -3.0),
+        UnigramRow.of("心", listOf("ㄒㄧㄣ"), -3.0),
+        UnigramRow.of("今", listOf("ㄐㄧㄣ"), -3.0),
+        UnigramRow.of("天", listOf("ㄊㄧㄢ"), -3.0),
+        UnigramRow.of("你好", listOf("ㄋㄧˇ", "ㄏㄠˇ"), -0.5),
+        UnigramRow.of("你", listOf("ㄋㄧˇ"), -2.0),
+        UnigramRow.of("好", listOf("ㄏㄠˇ"), -2.0),
+    ),
+)
+
 private const val MISSING = "詞庫尚未下載"
 private const val CONSENT =
     "詞庫來自千秋輸入法綜合詞庫，含 CC BY-NC 資料，僅供非商業使用，打過的字不會上傳。點此下載"
 
-private class ScriptedEngine(override val ready: Boolean = true) : ZhuyinEngine {
+private class ScriptedEngine(
+    override val ready: Boolean = true,
+    private val stickyComposing: String = "",
+) : ZhuyinEngine {
     val asciiLog = StringBuilder()
     val codes = mutableListOf<Int>()
     val selects = mutableListOf<Int>()
     var acks = 0
+    private var lastCandidates: List<String> = emptyList()
+
+    /** What the engine itself last published. Empty unless the scripted phrase is `su3cl3`. */
+    fun candidatesOfLastFrame(): List<String> = lastCandidates
 
     override fun handleAscii(key: Char): ChiaKeyFrame {
         asciiLog.append(key)
         val typed = asciiLog.toString()
-        return when (typed) {
+        val frame = when (typed) {
             "su3cl3" -> ChiaKeyFrame("", "你好", "", true, listOf("你好", "妳好"))
-            else -> ChiaKeyFrame(typed, "", "", false, emptyList())
+            else -> ChiaKeyFrame(typed, stickyComposing, "", false, emptyList())
         }
+        lastCandidates = frame.candidates
+        return frame
     }
 
     override fun handleKey(code: Int): ChiaKeyFrame {
@@ -195,7 +491,7 @@ private class ScriptedEngine(override val ready: Boolean = true) : ZhuyinEngine 
         if (code == 13 && asciiLog.toString() == "su3cl3") {
             return ChiaKeyFrame("", "", "你好", false, emptyList())
         }
-        return ChiaKeyFrame(asciiLog.toString(), "", "", asciiLog.isNotEmpty(), emptyList())
+        return ChiaKeyFrame(asciiLog.toString(), stickyComposing, "", asciiLog.isNotEmpty(), emptyList())
     }
 
     override fun select(index: Int): ChiaKeyFrame {
@@ -216,16 +512,36 @@ private fun chiakeyController(
     composing: StringBuilder,
     states: MutableList<ImeUiState>,
     partial: PartialLexicon = PartialLexicon.EMPTY,
+    onEditorSelection: ((candidatesStart: Int, candidatesEnd: Int) -> Unit)? = null,
     onRequestLexicon: () -> Unit = {},
 ): CandidateController {
+    var batch = 0
+    var reportAfterBatch = false
+    fun reportSelection() {
+        val hook = onEditorSelection ?: return
+        if (composing.isNotEmpty()) hook(0, composing.length) else hook(-1, -1)
+    }
     val connection = Proxy.newProxyInstance(
         InputConnection::class.java.classLoader,
         arrayOf(InputConnection::class.java),
     ) { _, method, args ->
         when (method.name) {
+            "beginBatchEdit" -> {
+                batch += 1
+                true
+            }
+            "endBatchEdit" -> {
+                if (batch > 0) batch -= 1
+                if (batch == 0 && reportAfterBatch) {
+                    reportAfterBatch = false
+                    reportSelection()
+                }
+                true
+            }
             "commitText" -> {
                 field.append(args?.get(0)?.toString().orEmpty())
                 composing.setLength(0)
+                if (batch > 0) reportAfterBatch = true else reportSelection()
                 true
             }
             "setComposingText" -> {
