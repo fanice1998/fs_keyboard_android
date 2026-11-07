@@ -22,6 +22,9 @@ third_party/librime/jniLibs/**
 
 # Text corpora for the bigram model; tools/fetch-corpus.sh downloads them.
 /data/corpus/
+
+# Published ChiaKey lexicon. Downloaded for local research. Do not commit.
+/data/chiakey/
 /engine/corpus_tools/target/
 
 # Keystore & Signing

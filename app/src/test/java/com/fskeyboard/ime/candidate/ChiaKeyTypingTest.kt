@@ -133,7 +133,7 @@ class ChiaKeyTypingTest {
         assertEquals("", engine.asciiLog.toString())
         assertEquals(listOf(8, 8), engine.codes)
         assertEquals("ㄋㄧㄏㄠ", composing.toString())
-        assertEquals(listOf("ㄋ", "ㄧ", "ㄏ", "ㄠ"), states.last().preview)
+        assertEquals("ㄋㄧㄏㄠ", states.last().preview)
         assertEquals("你好", states.last().candidates.candidates.first().text)
         controller.onKey(KeyAction.Enter)
         assertEquals("你好", field.toString())
@@ -148,10 +148,10 @@ class ChiaKeyTypingTest {
         val controller = chiakeyController(engine, StringBuilder(), StringBuilder(), states)
         controller.onStartInput(false)
         type(controller, "ㄋㄧ")
-        assertEquals(listOf("ㄋ", "ㄧ"), states.last().preview)
+        assertEquals("ㄋㄧ", states.last().preview)
         type(controller, "ˇㄏㄠˇ")
         assertEquals("su3cl3", engine.asciiLog.toString())
-        assertEquals(listOf("你", "好"), states.last().preview)
+        assertEquals("你好", states.last().preview)
     }
 
     private fun type(controller: CandidateController, glyphs: String) {
