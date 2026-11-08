@@ -129,6 +129,11 @@ class ImeSettingsActivity : Activity() {
             keyboardPreferences.setKeyPreviewEnabled(checked)
             previewKeyboard.keyPreviewEnabled = checked
         }
+        val unusedHabit = findViewById<Switch>(R.id.unused_habit_switch)
+        unusedHabit.isChecked = keyboardPreferences.forgetUnusedPredictions()
+        unusedHabit.setOnCheckedChangeListener { _, checked ->
+            keyboardPreferences.setForgetUnusedPredictions(checked)
+        }
         heightValue = findViewById(R.id.keyboard_height_value)
         heightSeek = findViewById(R.id.keyboard_height)
         heightSeek.min = KeyboardHeight.MIN_ROW_DP

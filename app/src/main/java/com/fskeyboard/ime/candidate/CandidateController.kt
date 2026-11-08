@@ -31,6 +31,7 @@ import com.fskeyboard.ime.keyboard.NumberPad
 import com.fskeyboard.ime.keyboard.computerKeyCode
 import com.fskeyboard.ime.keyboard.ZhuyinComposer
 import com.fskeyboard.ime.rerank.CandidatePipeline
+import com.fskeyboard.ime.settings.KeyboardPreferences
 import com.fskeyboard.ime.rerank.RerankFallback
 import com.fskeyboard.ime.rerank.RerankLimits
 import com.fskeyboard.ime.rerank.RerankTrace
@@ -88,8 +89,10 @@ internal class CandidateController(
      * released. The next syllable keeps that tone on [enginePrefix] until the whole
      * composition is held. [mirrored] is the open chain's engine keys.
      * [enginePrefixKeys] counts keys already in the engine for [enginePrefix].
-     * [chosenPrefix] is Hanzi already tapped. It stays in front of [chain] and is
-     * not written until Enter, a space with no syllable open, or punctuation.
+     * [chosenPrefix] is Hanzi already tapped while bopomofo is still open. It stays
+     * in front of [chain]. A tap that leaves only Hanzi writes them at once.
+     * [chosenSpans] records the bopomofo that produced each of those Hanzi, latest last,
+     * so backspace can put that reading back in front of whatever is still open.
      */
     private val chain = BopomofoChain()
     private var holdingSentence = false
@@ -99,6 +102,7 @@ internal class CandidateController(
     private var pendingTone: List<SyllableReading> = emptyList()
     private var pendingToneText = ""
     private val chosenPrefix = StringBuilder()
+    private val chosenSpans = ArrayList<ChosenSpan>()
 
     /**
      * Non-zero while a commit and the composing text that replaces it are one edit.
@@ -579,57 +583,10 @@ internal class CandidateController(
                 return
             }
             val glyph = action.label.firstOrNull() ?: return
-            if (holdingSentence) {
-                if (!chain.append(glyph)) return
-                showHeld()
-                return
-            }
-            // A chosen Hanzi keeps every later key, including a tone mark, on the chain.
-            // holdingSentence flips only once that glyph arrives, so an empty chain
-            // still commits on space.
-            if (chosenPrefix.isNotEmpty()) {
-                if (!chain.append(glyph)) return
-                holdingSentence = true
-                showHeld()
-                return
-            }
-            val lengthBefore = chain.text.length
-            val syllablesBefore = chain.size
-            val toned = chain.lastToneChosen()
-            val releasingTone = pendingTone.isNotEmpty()
+            // The preview keeps the typed bopomofo and tone marks until a candidate is tapped.
             if (!chain.append(glyph)) return
-            if (releasingTone) releasePendingTone()
-            val startedNext = chain.size > syllablesBefore && syllablesBefore > 0 && !toned
-            if (startedNext) {
-                holdComposition(lengthBefore)
-                showHeld()
-                return
-            }
-            frame = zhuyinEngine.handleAscii(action.key)
-            if (chain.lastToneChosen() && chain.size == 1) {
-                val keys = chain.text.length
-                val readings = chain.readings()
-                if (frame.candidates.isEmpty()) {
-                    pendingTone = readings
-                    pendingToneText = chain.text
-                    mirrored = keys
-                } else if (enginePrefix.isEmpty()) {
-                    enginePrefix.addAll(readings)
-                    enginePrefixKeys += keys
-                    clearPendingTone()
-                    mirrored = 0
-                } else {
-                    clearPendingTone()
-                    enginePrefix.clear()
-                    enginePrefixKeys = 0
-                    mirrored = 0
-                }
-                chain.clear()
-            } else {
-                clearPendingTone()
-                mirrored = chain.text.length
-            }
-            showFrame()
+            holdingSentence = true
+            showHeld()
             return
         }
         if (!composition.append(action.label, action.nearby)) return
@@ -747,11 +704,15 @@ internal class CandidateController(
             }
             return
         }
+        if (chiakey && mode == KeyboardMode.ZHUYIN && chosenSpans.isNotEmpty() && !chain.isEmpty) {
+            restoreLatestChosen()
+            return
+        }
         if (chiakey && mode == KeyboardMode.ZHUYIN && holdingSentence) {
             chain.backspace()
             if (chain.isEmpty) {
                 holdingSentence = false
-                showFrame()
+                if (chosenPrefix.isNotEmpty()) commitChosenPrefix() else showFrame()
             } else {
                 showHeld()
             }
@@ -821,32 +782,16 @@ internal class CandidateController(
         }
         if (mode == KeyboardMode.ZHUYIN && hasComposition) {
             if (chiakey) {
-                // 平聲 counts as chosen, so a tone check here would skip the partial
-                // candidate and send key 13. A tone parked off the chain is the same
-                // accept, and that fallback does not send key 13.
-                if (!chain.isEmpty || pendingTone.isNotEmpty()) {
-                    val first = presented.firstOrNull { it.source == CandidateSource.SYNTHETIC && it.span > 0 }
-                    if (first != null) {
-                        acceptPartial(first)
-                        if (chain.isEmpty && pendingTone.isEmpty() && frame.reading.isEmpty()) {
-                            commitChosenPrefix()
-                        }
-                        return
-                    }
-                    if (
-                        holdingSentence || chain.size > 1 || chosenPrefix.isNotEmpty() ||
-                        pendingTone.isNotEmpty()
-                    ) {
-                        return
-                    }
-                } else if (chosenPrefix.isNotEmpty()) {
-                    // A syllable still in pendingTone or the frame is on screen.
-                    // Committing the prefix here would drop it.
-                    if (!parkedEngineSyllable()) commitChosenPrefix()
-                    return
+                // Enter writes the preview itself. It does not replace the tail with a guess.
+                val reading = if (!chain.isEmpty) chain.text else pendingToneText
+                val text = chosenPrefix.toString() + reading
+                edit {
+                    clearChain()
+                    frame = ChiaKeyFrame.parse("")
+                    if (text.isNotEmpty()) commit(text)
+                    zhuyinEngine.reset()
+                    apply(EngineSnapshot())
                 }
-                frame = zhuyinEngine.handleKey(13)
-                showFrame()
             } else {
                 finishComposition(convertAll())
             }
@@ -1323,6 +1268,9 @@ internal class CandidateController(
             else -> emptyList()
         }
         if (snapshot != null) {
+            if (mode == KeyboardMode.ZHUYIN && preference.remembersAny()) {
+                if (preference.noteShown(shown, dropUnusedHabits())) savePreference()
+            }
             presented = preference.apply(shown)
             // logd is a binder call. A line on every key holds the frame that shows that key.
             if (snapshot.decodeMillis >= SLOW_LOOKUP_MS) {
@@ -1469,7 +1417,16 @@ internal class CandidateController(
         }
     }
 
-    /** One step up or down, or hide this word. The text in the editor stays. */
+    /**
+     * Delete is for a phrase the user assembled, and for an English suggestion.
+     * A base zhuyin row only moves up or down.
+     */
+    fun canForgetCandidate(candidate: Candidate): Boolean {
+        if (adjustsEnglish(candidate)) return true
+        return preference.isCreated(candidate)
+    }
+
+    /** One step up or down, or forget a word the user added. The text in the editor stays. */
     fun adjustCandidate(candidate: Candidate, weight: CandidateWeight) {
         if (closed || candidate.source == CandidateSource.CLIPBOARD) return
         val englishWord = adjustsEnglish(candidate)
@@ -1483,8 +1440,13 @@ internal class CandidateController(
                 preference.demote(candidate)
             }
             CandidateWeight.HIDE -> {
-                if (englishWord) englishLexicon.forget(candidate.text)
-                preference.hide(candidate)
+                if (englishWord) {
+                    englishLexicon.forget(candidate.text)
+                    preference.hide(candidate)
+                } else if (preference.forget(candidate)) {
+                    // Drop the assembled phrase, including the same text composed again from pieces.
+                    preference.hide(candidate)
+                }
             }
         }
         savePreference()
@@ -1545,7 +1507,11 @@ internal class CandidateController(
 
     private fun reloadCandidates() {
         when {
-            hasComposition -> if (chiakey) showFrame() else apply(refresh())
+            hasComposition -> if (chiakey) {
+                if (holdingSentence || !chain.isEmpty) showHeld() else showFrame()
+            } else {
+                apply(refresh())
+            }
             english.isNotEmpty() -> showEnglish()
             else -> {
                 presented = emptyList()
@@ -1625,6 +1591,32 @@ internal class CandidateController(
 
     private class CursorSession(val text: String, val startOffset: Int, var cursor: Int)
 
+    /** Hanzi the user picked, and the syllables they had typed for it. */
+    private class ChosenSpan(val text: String, val reading: List<SyllableReading>)
+
+    /** Puts the latest picked Hanzi back into the bopomofo that produced it. */
+    private fun restoreLatestChosen() {
+        val span = chosenSpans.removeAt(chosenSpans.lastIndex)
+        val prefix = chosenPrefix.toString()
+        if (span.text.isNotEmpty() && prefix.endsWith(span.text)) {
+            chosenPrefix.setLength(prefix.length - span.text.length)
+        } else if (chosenPrefix.isNotEmpty()) {
+            chosenPrefix.deleteCharAt(chosenPrefix.lastIndex)
+        }
+        if (span.reading.isNotEmpty()) chain.insertFront(span.reading)
+        holdingSentence = true
+        edit { showHeld() }
+    }
+
+    /** On unless the settings screen turns it off, or the preference store cannot be read. */
+    private fun dropUnusedHabits(): Boolean {
+        return try {
+            KeyboardPreferences(context).forgetUnusedPredictions()
+        } catch (_: Exception) {
+            true
+        }
+    }
+
     private fun showFrame() {
         lexiconPrompt = LexiconPrompt.HIDDEN
         if (frame.committed.isNotEmpty()) {
@@ -1634,6 +1626,18 @@ internal class CandidateController(
             commit(text)
             zhuyinEngine.acknowledge()
             apply(EngineSnapshot())
+            return
+        }
+        val typedReading = when {
+            !chain.isEmpty -> chain.text
+            pendingToneText.isNotEmpty() -> pendingToneText
+            else -> ""
+        }
+        if (typedReading.isNotEmpty() || chosenPrefix.isNotEmpty()) {
+            if (frame.composing.isNotEmpty()) frame = frame.copy(composing = "")
+            val readings = if (!chain.isEmpty) chain.readings() else pendingTone
+            val offered = if (readings.isEmpty()) emptyList() else partialLexicon.candidates(readings)
+            presentComposition(typedReading, offered)
             return
         }
         val engineCandidates = frame.candidates.mapIndexed { index, text ->
@@ -1693,9 +1697,56 @@ internal class CandidateController(
             EngineSnapshot(
                 preedit = shown,
                 composingPreview = shown,
-                candidates = candidates,
+                candidates = withCreated(reading, candidates),
             ),
         )
+    }
+
+    /** Puts a phrase the user assembled ahead of the lexicon rows for this reading. */
+    private fun withCreated(reading: String, candidates: List<Candidate>): List<Candidate> {
+        val extra = preference.createdMatching(reading)
+        if (extra.isEmpty()) return candidates
+        val known = HashSet<String>(candidates.size)
+        for (candidate in candidates) known += candidate.reading + "\t" + candidate.text
+        val added = ArrayList<Candidate>()
+        for (candidate in extra) {
+            val id = candidate.reading + "\t" + candidate.text
+            if (!known.add(id)) continue
+            added += candidate.copy(span = syllableCount(candidate.reading))
+        }
+        return if (added.isEmpty()) candidates else added + candidates
+    }
+
+    private fun syllableCount(reading: String): Int {
+        val parsed = BopomofoChain()
+        for (ch in reading) parsed.append(ch)
+        return parsed.size.coerceAtLeast(1)
+    }
+
+    /** Several picks joined into one phrase. One lexicon row is not a created word. */
+    private fun rememberAssembledPhrase() {
+        if (chosenSpans.size < 2) return
+        val text = chosenPrefix.toString()
+        if (text.isEmpty()) return
+        val reading = buildString {
+            for (span in chosenSpans) {
+                for (syllable in span.reading) {
+                    append(syllable.body)
+                    append(syllable.tone.mark)
+                }
+            }
+        }
+        if (reading.isEmpty()) return
+        preference.remember(
+            Candidate(
+                text = text,
+                engineIndex = -1,
+                source = CandidateSource.SYNTHETIC,
+                span = chosenSpans.sumOf { it.reading.size }.coerceAtLeast(1),
+                reading = reading,
+            ),
+        )
+        savePreference()
     }
 
     /** A syllable is still open, so space marks 平聲 instead of committing. */
@@ -1703,18 +1754,17 @@ internal class CandidateController(
         return holdingSentence || !chain.isEmpty || pendingTone.isNotEmpty() || frame.active
     }
 
-    /** A toned syllable the engine still holds, not yet on [chain]. */
-    private fun parkedEngineSyllable(): Boolean {
-        return pendingTone.isNotEmpty() || frame.reading.isNotEmpty()
-    }
-
     /**
      * Appends [candidate] to the chosen Hanzi and drops the syllables it covers.
-     * The field stays empty while this composition is open, including when the
-     * candidate covers every syllable.
+     * Bopomofo still open stays in this composition, ahead of the field.
+     * When the preview is only Hanzi, those characters are written immediately.
      */
     private fun acceptPartial(candidate: Candidate) {
         val span = candidate.span.coerceAtLeast(1)
+        val covered = when {
+            !chain.isEmpty -> chain.readings().take(span.coerceAtMost(chain.size))
+            else -> pendingTone.take(span.coerceAtMost(pendingTone.size))
+        }
         if (!holdingSentence) {
             // enginePrefixKeys are already in the engine and are not part of mirrored.
             // Leaving them makes the next frame show that spelling again.
@@ -1730,7 +1780,16 @@ internal class CandidateController(
             holdingSentence = false
             if (frame.reading.isEmpty()) frame = ChiaKeyFrame.parse("")
         }
+        if (covered.isNotEmpty()) chosenSpans.add(ChosenSpan(candidate.text, covered))
         chosenPrefix.append(candidate.text)
+        if (candidate.source != CandidateSource.CLIPBOARD && candidate.source != CandidateSource.LEXICON) {
+            preference.promote(candidate)
+            savePreference()
+        }
+        if (chain.isEmpty && pendingTone.isEmpty() && frame.reading.isEmpty()) {
+            commitChosenPrefix()
+            return
+        }
         // Replacing the underline can report an empty composing span. Ignore that
         // report so the syllables still open are not dropped.
         edit {
@@ -1742,6 +1801,7 @@ internal class CandidateController(
     private fun commitChosenPrefix(trailing: String = "") {
         val text = chosenPrefix.toString()
         if (text.isEmpty() && trailing.isEmpty()) return
+        rememberAssembledPhrase()
         edit {
             clearChain()
             frame = ChiaKeyFrame.parse("")
@@ -1796,13 +1856,6 @@ internal class CandidateController(
         pendingToneText = ""
     }
 
-    /** The syllable just released into the engine stays part of this composition. */
-    private fun releasePendingTone() {
-        enginePrefix.addAll(pendingTone)
-        enginePrefixKeys += mirrored
-        clearPendingTone()
-    }
-
     /**
      * Backspaces every engine key in this composition and leaves the reading on [chain].
      * [tailKeys] are the open chain's keys. [enginePrefixKeys] are the toned syllables
@@ -1826,6 +1879,7 @@ internal class CandidateController(
         enginePrefixKeys = 0
         clearPendingTone()
         chosenPrefix.setLength(0)
+        chosenSpans.clear()
         previewComposing = ""
         previewReading = ""
     }
@@ -1836,17 +1890,8 @@ internal class CandidateController(
             finishComposition(convertAll())
             return
         }
-        val fullSpan = presented.firstOrNull {
-            it.source == CandidateSource.SYNTHETIC && it.span == chain.size && chain.size > 0
-        }?.text
-        val text = if (fullSpan != null) {
-            chosenPrefix.toString() + frame.composing + fullSpan
-        } else if (!chain.isEmpty || pendingToneText.isNotEmpty()) {
-            val reading = if (!chain.isEmpty) chain.text else pendingToneText
-            chosenPrefix.toString() + reading
-        } else {
-            chosenPrefix.toString() + frame.composing
-        }
+        val reading = if (!chain.isEmpty) chain.text else pendingToneText
+        val text = chosenPrefix.toString() + reading
         edit {
             clearChain()
             frame = ChiaKeyFrame.parse("")

@@ -28,6 +28,9 @@ third_party/librime/jniLibs/**
 
 # Local Telegram inbox. The file contains a bot token.
 /tools/telegram_inbox.py
+# Sends the edit summary. Reads the token from telegram_inbox.py.
+/tools/telegram_notify.py
+/.grok/telegram-notify.state
 /engine/corpus_tools/target/
 
 # Keystore & Signing
