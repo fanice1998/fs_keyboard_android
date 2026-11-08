@@ -41,6 +41,23 @@ internal class BopomofoChain {
         tones.clear()
     }
 
+    /** Puts [earlier] ahead of the syllables already typed. */
+    fun insertFront(earlier: List<SyllableReading>) {
+        if (earlier.isEmpty()) return
+        val bodies = ArrayList<StringBuilder>(earlier.size + syllables.size)
+        val marked = ArrayList<ZhuyinTone>(earlier.size + tones.size)
+        for (reading in earlier) {
+            bodies += StringBuilder(reading.body)
+            marked += reading.tone
+        }
+        bodies.addAll(syllables)
+        marked.addAll(tones)
+        syllables.clear()
+        syllables.addAll(bodies)
+        tones.clear()
+        tones.addAll(marked)
+    }
+
     /** Drops the first [count] syllables after the user accepts a candidate that covers them. */
     fun dropFront(count: Int) {
         repeat(count.coerceAtMost(syllables.size)) {
@@ -65,9 +82,13 @@ internal class BopomofoChain {
         return true
     }
 
-    /** Marks the open syllable as 平聲. A leading space, with nothing typed, does nothing. */
+    /**
+     * Marks the open syllable as 平聲. A leading space, with nothing typed, does nothing.
+     * A tone already on that syllable stays, so space does not strip it.
+     */
     fun markLevel(): Boolean {
         if (syllables.isEmpty() || syllables.last().isEmpty()) return false
+        if (tones.last() != ZhuyinTone.NONE) return false
         tones[tones.lastIndex] = ZhuyinTone.LEVEL
         return true
     }

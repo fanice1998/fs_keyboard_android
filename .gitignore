@@ -25,6 +25,9 @@ third_party/librime/jniLibs/**
 
 # Published ChiaKey lexicon. Downloaded for local research. Do not commit.
 /data/chiakey/
+
+# Local Telegram inbox. The file contains a bot token.
+/tools/telegram_inbox.py
 /engine/corpus_tools/target/
 
 # Keystore & Signing
