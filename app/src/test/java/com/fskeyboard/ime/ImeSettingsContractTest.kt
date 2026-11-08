@@ -53,6 +53,23 @@ class ImeSettingsContractTest {
     }
 
     @Test
+    fun settingsPageOffersAnUnusedHabitSwitch() {
+        val layout = readProjectFile("src/main/res/layout/activity_ime_settings.xml")
+        val strings = readProjectFile("src/main/res/values/strings.xml")
+        val activity = readProjectFile("src/main/java/com/fskeyboard/ime/settings/ImeSettingsActivity.kt")
+        val preferences = readProjectFile("src/main/java/com/fskeyboard/ime/settings/KeyboardPreferences.kt")
+        val controller = readProjectFile("src/main/java/com/fskeyboard/ime/candidate/CandidateController.kt")
+        assertTrue(layout.contains("@+id/unused_habit_switch"))
+        assertTrue(strings.contains("name=\"unused_habit_switch\""))
+        assertTrue(strings.contains("二十次"))
+        assertTrue(activity.contains("unused_habit_switch"))
+        assertTrue(activity.contains("setForgetUnusedPredictions"))
+        assertTrue(preferences.contains("forget_unused_predictions"))
+        assertTrue(preferences.contains("getBoolean(KEY_FORGET_UNUSED, true)"))
+        assertTrue(controller.contains("forgetUnusedPredictions()"))
+    }
+
+    @Test
     fun settingsPageOffersTheZhuyinComputerLayout() {
         val layout = readProjectFile("src/main/res/layout/activity_ime_settings.xml")
         val strings = readProjectFile("src/main/res/values/strings.xml")

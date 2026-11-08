@@ -50,6 +50,8 @@
     <string name="vibration_summary">開啟時，按下按鍵或滑動游標時會產生觸覺震動回饋。關閉後不震動。</string>
     <string name="key_preview_switch">按鍵懸浮提示</string>
     <string name="key_preview_summary">開啟時，按下注音、字母或符號，會在按鍵上方短暫浮出放大的字。空白鍵、刪除和功能鍵不會出現。</string>
+    <string name="unused_habit_switch">未使用的慣用詞自動忘掉</string>
+    <string name="unused_habit_summary">同一個慣用詞累積出現二十次都沒被選到，就忘掉這個習慣。預設開啟。</string>
     <string name="key_latency_label">按鍵延遲</string>
     <string name="key_latency_value">最近 %1$d 次按鍵\n一般（p50）%2$.1f ms\n偏慢（p95）%3$.1f ms\n很慢（p99）%4$.1f ms\n最慢 %5$.1f ms</string>
     <string name="key_latency_empty">還沒有資料。先用鍵盤打幾個字，再回來看。</string>

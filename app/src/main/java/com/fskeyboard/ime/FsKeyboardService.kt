@@ -643,7 +643,7 @@ class FsKeyboardService : InputMethodService() {
 
     private fun showWeightMenu(anchor: View, candidate: Candidate) {
         if (candidate.source == CandidateSource.CLIPBOARD) return
-        CandidateWeightMenu.show(anchor) { weight ->
+        CandidateWeightMenu.show(anchor, controller.canForgetCandidate(candidate)) { weight ->
             controller.adjustCandidate(candidate, weight)
         }
     }

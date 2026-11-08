@@ -86,6 +86,16 @@ internal class KeyboardPreferences(context: Context) {
     }
 
     /**
+     * Whether a remembered word that has been offered twenty times without being
+     * chosen is dropped. On unless the user turns it off.
+     */
+    fun forgetUnusedPredictions(): Boolean = prefs.getBoolean(KEY_FORGET_UNUSED, true)
+
+    fun setForgetUnusedPredictions(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_FORGET_UNUSED, enabled).apply()
+    }
+
+    /**
      * The letter keyboard last chosen by the user. Missing or unknown values are zhuyin.
      * Symbol pages are not stored. An email field must not call [setLetterMode].
      */
@@ -112,6 +122,7 @@ internal class KeyboardPreferences(context: Context) {
         const val KEY_COMPUTER_KEY_MAP = "latin_computer_key_map"
         const val KEY_VIBRATION = "keyboard_vibration_enabled"
         const val KEY_PREVIEW = "key_preview_enabled"
+        const val KEY_FORGET_UNUSED = "forget_unused_predictions"
         const val KEY_LETTER_MODE = "letter_mode"
     }
 }

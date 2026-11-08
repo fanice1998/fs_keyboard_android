@@ -16,9 +16,9 @@ import com.fskeyboard.ime.ui.KeyboardPalette
 import com.fskeyboard.ime.ui.dp
 import com.fskeyboard.ime.ui.isNightMode
 
-/** Up, down, and delete for one candidate. A tap outside closes it. */
+/** Up and down for one candidate. Delete is only for a word the user added. A tap outside closes it. */
 internal object CandidateWeightMenu {
-    fun show(anchor: View, onChoose: (CandidateWeight) -> Unit) {
+    fun show(anchor: View, allowDelete: Boolean, onChoose: (CandidateWeight) -> Unit) {
         if (anchor.windowToken == null) return
         val context = anchor.context
         val palette = KeyboardPalette.of(anchor.isNightMode())
@@ -43,7 +43,7 @@ internal object CandidateWeightMenu {
         }
         button(KeyIcon.UP, R.string.candidate_promote, CandidateWeight.PROMOTE)
         button(KeyIcon.DOWN, R.string.candidate_demote, CandidateWeight.DEMOTE)
-        button(KeyIcon.TRASH, R.string.candidate_forget, CandidateWeight.HIDE)
+        if (allowDelete) button(KeyIcon.TRASH, R.string.candidate_forget, CandidateWeight.HIDE)
         try {
             popup.showAsDropDown(anchor)
         } catch (_: Exception) {

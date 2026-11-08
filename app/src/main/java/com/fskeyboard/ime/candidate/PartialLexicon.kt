@@ -38,10 +38,38 @@ internal class PartialLexicon private constructor(
         for (slot in spansFromStart(bodies, tones)) {
             val word = slot.word
             if (out.any { it.text == word.text && it.span == word.syllables.size }) continue
-            out += candidate(word, word.syllables.size)
+            out += candidate(word, word.syllables.size, typedReading(bodies, tones, word.syllables.size))
             if (out.size == DISPLAY) break
         }
-        return out
+        return rankSentenceWordCharacter(out, bodies.size)
+    }
+
+    /**
+     * A full-reading phrase, then a shorter multi-character word, then one character.
+     * One syllable has no sentence to separate from the character.
+     */
+    private fun rankSentenceWordCharacter(items: List<Candidate>, syllables: Int): List<Candidate> {
+        if (syllables <= 1) return items
+        val sentence = ArrayList<Candidate>()
+        val word = ArrayList<Candidate>()
+        val character = ArrayList<Candidate>()
+        for (item in items) {
+            when {
+                item.span >= syllables -> sentence += item
+                item.span > 1 -> word += item
+                else -> character += item
+            }
+        }
+        return sentence + word + character
+    }
+
+    private fun typedReading(bodies: List<String>, tones: List<ZhuyinTone>, span: Int): String {
+        return buildString {
+            for (index in 0 until span) {
+                append(bodies[index])
+                append(tones[index].mark)
+            }
+        }
     }
 
     private fun coverAll(bodies: List<String>, tones: List<ZhuyinTone>): Candidate? {
@@ -71,7 +99,13 @@ internal class PartialLexicon private constructor(
         }
         val phrase = text[count] ?: return null
         if (phrase.isEmpty() || score[count] == Double.NEGATIVE_INFINITY) return null
-        return Candidate(text = phrase, engineIndex = -1, source = CandidateSource.SYNTHETIC, span = count)
+        return Candidate(
+            text = phrase,
+            engineIndex = -1,
+            source = CandidateSource.SYNTHETIC,
+            span = count,
+            reading = typedReading(bodies, tones, count),
+        )
     }
 
     /** Single lexicon words that start at the first typed syllable. Longer spans come first. */
@@ -97,8 +131,14 @@ internal class PartialLexicon private constructor(
         return true
     }
 
-    private fun candidate(word: Word, span: Int): Candidate {
-        return Candidate(text = word.text, engineIndex = -1, source = CandidateSource.SYNTHETIC, span = span)
+    private fun candidate(word: Word, span: Int, reading: String): Candidate {
+        return Candidate(
+            text = word.text,
+            engineIndex = -1,
+            source = CandidateSource.SYNTHETIC,
+            span = span,
+            reading = reading,
+        )
     }
 
     private class Word(val text: String, val syllables: List<SyllableReading>, var probability: Double)
