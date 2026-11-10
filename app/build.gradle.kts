@@ -91,6 +91,10 @@ android {
         buildConfig = false
     }
 
+    androidResources {
+        noCompress += listOf("bin", "onnx")
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -108,6 +112,17 @@ kotlin {
 dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.microsoft.onnxruntime:onnxruntime:1.31.0")
+}
+
+configurations.configureEach {
+    if (name.contains("UnitTest", ignoreCase = true) && name.endsWith("RuntimeClasspath")) {
+        exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
+    }
+}
+
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    maxHeapSize = "3g"
 }
 
 // Personal packages copy data/chiakey/ChiaKeySource.db into generated assets.
@@ -130,6 +145,29 @@ if (bundleChiaKeyLexicon) {
         variant.sources.assets?.addGeneratedSourceDirectory(
             copyChiaKeyLexicon,
             CopyChiaKeyLexiconTask::outputDirectory,
+        )
+    }
+}
+
+// The public 靈犀 pack is local. -PbundleLingxi=false skips the copy so CI can build without it.
+val bundleLingxiFlag = (
+    findProperty("bundleLingxi") ?: rootProject.findProperty("bundleLingxi")
+)?.toString()
+val bundleLingxi = !bundleLingxiFlag.orEmpty().equals("false", ignoreCase = true)
+
+if (bundleLingxi) {
+    val copyLingxiPack = tasks.register<CopyLingxiPackTask>("copyLingxiPack") {
+        val root = rootProject.layout.projectDirectory.dir("data/lingxi")
+        sourceDirectory.set(root)
+        outputDirectory.set(layout.buildDirectory.dir("generated/lingxiAssets"))
+        val lexicon = root.file("data/lexicon.bin").asFile
+        sourcePresent.set(lexicon.isFile)
+        if (lexicon.isFile) sourceStamp.set("${lexicon.length()}:${lexicon.lastModified()}")
+    }
+    androidComponents.onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(
+            copyLingxiPack,
+            CopyLingxiPackTask::outputDirectory,
         )
     }
 }
@@ -160,6 +198,47 @@ abstract class CopyChiaKeyLexiconTask : DefaultTask() {
         if (!partial.renameTo(dest)) {
             partial.copyTo(dest, overwrite = true)
             partial.delete()
+        }
+    }
+}
+
+/** Copies the local 靈犀 dictionary and select weights into build/generated assets. */
+abstract class CopyLingxiPackTask : DefaultTask() {
+    @get:Internal
+    abstract val sourceDirectory: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @get:Input
+    abstract val sourcePresent: Property<Boolean>
+
+    @get:Optional
+    @get:Input
+    abstract val sourceStamp: Property<String>
+
+    @TaskAction
+    fun copyPack() {
+        val root = sourceDirectory.get().asFile
+        val files = listOf(
+            "data/lexicon.bin" to "lingxi/lexicon.bin",
+            "data/lm.bin" to "lingxi/lm.bin",
+            "data/english/words.bin" to "lingxi/english/words.bin",
+            "select/model.onnx" to "lingxi/select/model.onnx",
+            "select/vocab.json" to "lingxi/select/vocab.json",
+            "select/manifest.json" to "lingxi/select/manifest.json",
+        )
+        for ((relative, destRelative) in files) {
+            val source = File(root, relative)
+            if (!source.isFile) error("Missing data/lingxi/$relative")
+            val dest = outputDirectory.get().asFile.resolve(destRelative)
+            dest.parentFile?.mkdirs()
+            val partial = File(dest.parentFile, "${dest.name}.partial")
+            source.copyTo(partial, overwrite = true)
+            if (!partial.renameTo(dest)) {
+                partial.copyTo(dest, overwrite = true)
+                partial.delete()
+            }
         }
     }
 }

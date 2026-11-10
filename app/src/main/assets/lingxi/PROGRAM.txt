@@ -1,0 +1,13 @@
+靈犀注音選字
+
+選字步驟（詞庫提案、unigram／bigram、Viterbi、N-best、前文重排）依
+靈犀注音 0c-ime 0.2.10（https://github.com/0c-biggo/0c-ime）實作。
+該程式以 GNU Affero General Public License v3.0 only 授權。
+本鍵盤用 Kotlin 重新實作讀檔與選字，沒有收錄上游 Go 原始碼。
+與本程式結合並散布時，組合著作仍受 AGPL-3.0-only 約束，除非另取得商業授權。
+
+詞庫資料（lexicon、語言模型、英文子包）依各來源授權，見同目錄 NOTICE.txt
+與 english/NOTICE.txt。整理後的 0c_collect 統計為 CC BY-SA 4.0。
+
+選字模型 Funmula/0c-sequence-d512 為 MIT，見 select/LICENSE。
+模型只重排詞庫提出的候選，不產生新詞。

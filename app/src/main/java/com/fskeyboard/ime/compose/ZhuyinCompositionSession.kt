@@ -2,6 +2,9 @@ package com.fskeyboard.ime.compose
 
 import com.fskeyboard.ime.candidate.BopomofoChain
 import com.fskeyboard.ime.candidate.Candidate
+import com.fskeyboard.ime.lingxi.LINGXI_CANDIDATE
+import com.fskeyboard.ime.lingxi.LINGXI_KEY_BUDGET_NS
+import com.fskeyboard.ime.lingxi.LingxiSlot
 import com.fskeyboard.ime.candidate.CandidateSource
 import com.fskeyboard.ime.candidate.SyllableReading
 import com.fskeyboard.ime.candidate.ZhuyinComposition
@@ -29,6 +32,12 @@ internal interface ZhuyinHost {
     fun savePreference()
     fun createdMatching(reading: String): List<Candidate>
     fun refreshIdleSuggestions()
+
+    /** Committed text before the caret, for the select model. Empty in tests that do not type into a field. */
+    fun committedContext(): String = ""
+
+    /** Device log for the key-to-row clock. Tests leave this empty. */
+    fun lingxiLine(message: String) {}
 }
 
 /**
@@ -40,6 +49,7 @@ internal class ZhuyinCompositionSession(
     private val engine: ZhuyinEngine,
     private val lexicon: Lexicon,
     private val host: ZhuyinHost,
+    private val lingxi: LingxiSlot? = null,
 ) : Composer {
     private val composition = ZhuyinComposition()
     private var frame = ChiaKeyFrame.parse("")
@@ -67,6 +77,10 @@ internal class ZhuyinCompositionSession(
     private var pendingToneText = ""
     private val chosenPrefix = StringBuilder()
     private val chosenSpans = ArrayList<ChosenSpan>()
+    private val remembered = HashMap<String, String>()
+    private var keyStartedNs = 0L
+    private var servedByLingxi = false
+    private var lastReorder = "skip"
 
     var previewComposing: String = ""
         private set
@@ -107,6 +121,7 @@ internal class ZhuyinCompositionSession(
         if (action !is KeyAction.Bopomofo) return false
         if (host.mode() != KeyboardMode.ZHUYIN) return false
         if (!engine.ready) return true
+        keyStartedNs = System.nanoTime()
         val glyph = action.label.firstOrNull() ?: return true
         // The preview keeps the typed bopomofo and tone marks until a candidate is tapped.
         // The router gap stops here so compose is only the append.
@@ -115,7 +130,10 @@ internal class ZhuyinCompositionSession(
         val held = chain.append(glyph)
         if (held) holdingSentence = true
         KeyStages.noteCompose(System.nanoTime() - composeStart)
-        if (!held) return true
+        if (!held) {
+            keyStartedNs = 0L
+            return true
+        }
         showHeld()
         return true
     }
@@ -277,7 +295,7 @@ internal class ZhuyinCompositionSession(
         if (typedReading.isNotEmpty() || chosenPrefix.isNotEmpty()) {
             if (frame.composing.isNotEmpty()) frame = frame.copy(composing = "")
             val readings = if (!chain.isEmpty) chain.readings() else pendingTone
-            val offered = if (readings.isEmpty()) emptyList() else lexicon.partialCandidates(readings)
+            val offered = if (readings.isEmpty()) emptyList() else offer(readings)
             presentComposition(typedReading, offered)
             return
         }
@@ -287,8 +305,8 @@ internal class ZhuyinCompositionSession(
         val toneOffer = engineCandidates.isEmpty() && pendingTone.isNotEmpty()
         val candidates = when {
             engineCandidates.isNotEmpty() -> engineCandidates
-            toneOffer -> lexicon.partialCandidates(pendingTone)
-            !chain.isEmpty && !chain.lastToneChosen() -> lexicon.partialCandidates(chain.readings())
+            toneOffer -> offer(pendingTone)
+            !chain.isEmpty && !chain.lastToneChosen() -> offer(chain.readings())
             else -> emptyList()
         }
         if (chosenPrefix.isNotEmpty()) {
@@ -327,7 +345,7 @@ internal class ZhuyinCompositionSession(
         if (frame.composing.isNotEmpty()) frame = frame.copy(composing = "")
         val readings = chain.readings()
         val lookupStart = System.nanoTime()
-        val found = lexicon.partialCandidates(readings)
+        val found = offer(readings)
         KeyStages.noteLookup(System.nanoTime() - lookupStart)
         presentComposition(chain.text, found)
     }
@@ -349,8 +367,50 @@ internal class ZhuyinCompositionSession(
                 composingPreview = shown,
                 candidates = rows,
                 readingSyllables = chain.size,
+                rankLocked = servedByLingxi,
             ),
         )
+        finishKeyClock()
+        servedByLingxi = false
+    }
+
+    /** 靈犀 rows when the pack is resident. Otherwise the partial lexicon. */
+    private fun offer(readings: List<SyllableReading>): List<Candidate> {
+        val engine = lingxi?.engine
+        if (engine == null || readings.isEmpty()) return lexicon.partialCandidates(readings)
+        val syllables = readings.map { it.body + it.tone.mark }
+        val readingKey = buildString { for (syllable in syllables) append(syllable) }
+        val started = keyStartedNs
+        val deadline = if (started == 0L) System.nanoTime() + LINGXI_KEY_BUDGET_NS else started + LINGXI_KEY_BUDGET_NS
+        val result = try {
+            engine.select(syllables, host.committedContext(), remembered[readingKey], deadline)
+        } catch (_: Exception) {
+            com.fskeyboard.ime.lingxi.LingxiResult(emptyList(), "miss")
+        }
+        servedByLingxi = true
+        lastReorder = result.reorder
+        return result.candidates.map { text ->
+            Candidate(
+                text = text,
+                engineIndex = LINGXI_CANDIDATE,
+                source = CandidateSource.SYNTHETIC,
+                span = readings.size,
+                reading = readingKey,
+            )
+        }
+    }
+
+    private fun finishKeyClock() {
+        val started = keyStartedNs
+        if (started == 0L || !servedByLingxi) return
+        keyStartedNs = 0L
+        servedByLingxi = false
+        val ms = ((System.nanoTime() - started) / 1_000_000L).coerceAtLeast(0L)
+        val reorder = when (lastReorder) {
+            "ok", "miss" -> lastReorder
+            else -> "skip"
+        }
+        host.lingxiLine("lingxi key-to-row ms=$ms reorder=$reorder")
     }
 
     /** Puts a phrase the user assembled ahead of the lexicon rows for this reading. */
@@ -430,6 +490,9 @@ internal class ZhuyinCompositionSession(
         if (chain.isEmpty) {
             holdingSentence = false
             if (frame.reading.isEmpty()) frame = ChiaKeyFrame.parse("")
+        }
+        if (candidate.engineIndex == LINGXI_CANDIDATE && candidate.reading.isNotEmpty()) {
+            remembered[candidate.reading] = candidate.text
         }
         if (covered.isNotEmpty()) chosenSpans.add(ChosenSpan(candidate.text, covered))
         chosenPrefix.append(candidate.text)

@@ -13,6 +13,8 @@ internal data class EngineSnapshot(
     val decodeMillis: Long = 0,
     /** Typed syllables. <= 0: LengthBand.order returns the list unchanged. */
     val readingSyllables: Int = 0,
+    /** 靈犀 already ordered this row. Preference, length bands, and the other reranker leave it alone. */
+    val rankLocked: Boolean = false,
 ) {
     val isComposing: Boolean
         get() = preedit.isNotEmpty() || composingPreview.isNotEmpty()

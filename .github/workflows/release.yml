@@ -77,7 +77,7 @@ jobs:
             VERSION_NAME="${VERSION_NAME#v}"
           fi
 
-          ./gradlew :app:assembleRelease :app:bundleRelease -PversionName="$VERSION_NAME" -PbundleChiaKeyLexicon=false
+          ./gradlew :app:assembleRelease :app:bundleRelease -PversionName="$VERSION_NAME" -PbundleChiaKeyLexicon=false -PbundleLingxi=false
 
       - name: Create GitHub Release
         env:

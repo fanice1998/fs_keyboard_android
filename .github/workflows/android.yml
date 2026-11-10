@@ -53,8 +53,8 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6
 
-      # The ChiaKey database is not in git. Skip the pack-time copy.
-      - run: ./gradlew :app:testDebugUnitTest :app:assembleDebug -PbundleChiaKeyLexicon=false
+      # The ChiaKey database and the 靈犀 pack are not in git. Skip the pack-time copies.
+      - run: ./gradlew :app:testDebugUnitTest :app:assembleDebug -PbundleChiaKeyLexicon=false -PbundleLingxi=false
 
       - uses: actions/upload-artifact@v7
         with:

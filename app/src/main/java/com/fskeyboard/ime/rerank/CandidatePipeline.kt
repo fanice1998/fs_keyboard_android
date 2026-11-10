@@ -10,7 +10,10 @@ internal class CandidatePipeline(
     private val script: OutputScript = OutputScript.IDENTITY,
 ) {
     /** Rime order with script conversion, before the model runs. */
-    fun preview(snapshot: EngineSnapshot): List<Candidate> = finish(snapshot.candidates)
+    fun preview(snapshot: EngineSnapshot): List<Candidate> {
+        if (snapshot.rankLocked) return snapshot.candidates
+        return finish(snapshot.candidates)
+    }
 
     /** False when the model is absent, so the key path can skip reading the editor. */
     fun willScore(candidateCount: Int): Boolean {

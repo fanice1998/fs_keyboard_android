@@ -65,6 +65,7 @@ internal class CandidateController(
     zhuyinEngine: ZhuyinEngine = UnavailableZhuyinEngine,
     partialLexicon: PartialLexicon = PartialLexicon.EMPTY,
     private val userLexicon: FsLexicon? = null,
+    lingxi: com.fskeyboard.ime.lingxi.LingxiSlot? = null,
 ) {
     /** Ctrl, Alt, Fn, and Meta chosen from an English swipe, until the next key. */
     var onComputerModifiers: (Set<ComputerKey>) -> Unit = {}
@@ -125,6 +126,7 @@ internal class CandidateController(
     private val zhuyin = ZhuyinCompositionSession(
         engine = zhuyinEngine,
         lexicon = lexiconStore,
+        lingxi = lingxi,
         host = object : ZhuyinHost {
             override fun mode(): KeyboardMode = this@CandidateController.mode
             override fun commit(text: String) = this@CandidateController.commit(text)
@@ -138,6 +140,16 @@ internal class CandidateController(
             override fun savePreference() = this@CandidateController.savePreference()
             override fun createdMatching(reading: String): List<Candidate> = preference.createdMatching(reading)
             override fun refreshIdleSuggestions() = this@CandidateController.refreshIdleSuggestions()
+            override fun committedContext(): String {
+                return try {
+                    editor.textBefore(64)?.toString().orEmpty()
+                } catch (_: Exception) {
+                    ""
+                }
+            }
+            override fun lingxiLine(message: String) {
+                if (message.startsWith("lingxi key-to-row ms=")) Log.i("FsKeyboard", message)
+            }
         },
     )
     private val englishHost = object : EnglishHost {

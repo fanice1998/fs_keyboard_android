@@ -119,6 +119,7 @@ class FsKeyboardService : InputMethodService() {
         val root = File(filesDir, "chiakey")
         val session = ChiaKeyRuntime.session(root)
         chiakey = session
+        val lingxi = com.fskeyboard.ime.lingxi.LingxiSlot()
         controller = CandidateController(
             context = this,
             pipeline = pipeline,
@@ -127,7 +128,13 @@ class FsKeyboardService : InputMethodService() {
             onUi = ::render,
             letterMode = { KeyboardPreferences(this).letterMode() },
             zhuyinEngine = session,
+            lingxi = lingxi,
         )
+        com.fskeyboard.ime.lingxi.LingxiRuntime.start(this, lingxi) { line ->
+            if (line.startsWith("lingxi resident kb=") || line.startsWith("lingxi pack refused")) {
+                Log.i(TAG, line)
+            }
+        }
         controller.onLetterMode = { mode -> KeyboardPreferences(this).setLetterMode(mode) }
         controller.start()
         val listener = { lexicon: PartialLexicon -> controller.publishPartialLexicon(lexicon) }

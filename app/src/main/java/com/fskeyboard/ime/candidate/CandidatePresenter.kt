@@ -51,7 +51,7 @@ internal class CandidatePresenter(
                 if (preference.noteShown(shown, dropUnusedHabits())) savePreference()
             }
             val rankStart = System.nanoTime()
-            presented = prefer(shown, snapshot.readingSyllables)
+            presented = if (snapshot.rankLocked) shown else prefer(shown, snapshot.readingSyllables)
             // logd is a binder call. A line on every key holds the frame that shows that key.
             if (snapshot.decodeMillis >= SLOW_LOOKUP_MS) {
                 Log.i(TAG, "latency lookup=${snapshot.decodeMillis}ms candidates=${snapshot.candidates.size}")
@@ -59,7 +59,7 @@ internal class CandidatePresenter(
             KeyStages.noteRank(System.nanoTime() - rankStart)
         }
         onPresented(presented)
-        if (snapshot != null && snapshot.isComposing && mode == KeyboardMode.ZHUYIN &&
+        if (snapshot != null && !snapshot.rankLocked && snapshot.isComposing && mode == KeyboardMode.ZHUYIN &&
             pipeline.willScore(snapshot.candidates.size)
         ) {
             val gapStart = System.nanoTime()

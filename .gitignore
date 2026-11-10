@@ -26,6 +26,9 @@ third_party/librime/jniLibs/**
 # Published ChiaKey lexicon. Packaged into the APK from here. Do not commit.
 /data/chiakey/
 
+# Public 靈犀 dictionary and select weights. Packaged into the APK from here. Do not commit.
+/data/lingxi/
+
 # Local Telegram inbox. The file contains a bot token.
 /tools/telegram_inbox.py
 # After an edit, builds the debug APK, copies it to Drive, and sends a text summary.
