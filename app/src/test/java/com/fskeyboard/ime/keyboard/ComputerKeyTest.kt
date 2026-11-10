@@ -59,6 +59,20 @@ class ComputerKeyTest {
     }
 
     @Test
+    fun fnPlusTheDigitRowIsF1ThroughF12() {
+        for (digit in 1..9) {
+            assertEquals(KeyEvent.KEYCODE_F1 + digit - 1, fnFunctionKeyCode('0' + digit))
+        }
+        assertEquals(KeyEvent.KEYCODE_F10, fnFunctionKeyCode('0'))
+        assertEquals(KeyEvent.KEYCODE_F11, fnFunctionKeyCode('o'))
+        assertEquals(KeyEvent.KEYCODE_F11, fnFunctionKeyCode('O'))
+        assertEquals(KeyEvent.KEYCODE_F12, fnFunctionKeyCode('p'))
+        assertEquals(KeyEvent.KEYCODE_F12, fnFunctionKeyCode('P'))
+        assertNull(fnFunctionKeyCode('a'))
+        assertNull(fnFunctionKeyCode('-'))
+    }
+
+    @Test
     fun symbolsCanBeAssignedOnce() {
         val symbols = ComputerKey.values().mapNotNull { it.symbol }
         assertEquals(

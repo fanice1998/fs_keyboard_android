@@ -11,6 +11,8 @@ internal data class EngineSnapshot(
     val highlighted: Int = 0,
     /** Milliseconds spent looking up candidates for this call. */
     val decodeMillis: Long = 0,
+    /** Typed syllables. <= 0: LengthBand.order returns the list unchanged. */
+    val readingSyllables: Int = 0,
 ) {
     val isComposing: Boolean
         get() = preedit.isNotEmpty() || composingPreview.isNotEmpty()

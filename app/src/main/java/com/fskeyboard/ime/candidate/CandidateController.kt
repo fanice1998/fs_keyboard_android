@@ -4,47 +4,56 @@ import android.content.Context
 import android.graphics.Paint
 import android.os.Handler
 import android.os.Looper
-import android.text.InputType
 import android.util.Log
 import android.util.TypedValue
-import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
-import com.fskeyboard.ime.R
-import com.fskeyboard.ime.engine.ChiaKeyFrame
+import com.fskeyboard.ime.compose.EnglishCompositionSession
+import com.fskeyboard.ime.compose.EnglishHost
+import com.fskeyboard.ime.compose.ZhuyinCompositionSession
+import com.fskeyboard.ime.compose.ZhuyinHost
 import com.fskeyboard.ime.engine.EngineSnapshot
-import com.fskeyboard.ime.engine.EngineStatus
-import com.fskeyboard.ime.engine.KeyPolicy
 import com.fskeyboard.ime.engine.UnavailableZhuyinEngine
 import com.fskeyboard.ime.engine.ZhuyinEngine
-import com.fskeyboard.ime.engine.ZhuyinLexicon
 import com.fskeyboard.ime.keyboard.ComputerKey
 import com.fskeyboard.ime.keyboard.ComputerModifiers
 import com.fskeyboard.ime.keyboard.CursorMotion
 import com.fskeyboard.ime.keyboard.EnterActions
 import com.fskeyboard.ime.keyboard.composingSelection
 import com.fskeyboard.ime.keyboard.KeyAction
+import com.fskeyboard.ime.keyboard.KeySignal
 import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.keyboard.NumberPad
+import com.fskeyboard.ime.keyboard.ShiftMode
+import com.fskeyboard.ime.keyboard.SignalKey
 import com.fskeyboard.ime.keyboard.computerKeyCode
-import com.fskeyboard.ime.keyboard.ZhuyinComposer
+import com.fskeyboard.ime.keyboard.fnFunctionKeyCode
+import com.fskeyboard.ime.keyboard.keySignal
+import com.fskeyboard.ime.keyboard.signalKey
+import com.fskeyboard.ime.latency.KeyStages
+import com.fskeyboard.ime.lexicon.AssetLexicon
+import com.fskeyboard.ime.lexicon.FsLexicon
 import com.fskeyboard.ime.rerank.CandidatePipeline
-import com.fskeyboard.ime.settings.KeyboardPreferences
-import com.fskeyboard.ime.rerank.RerankFallback
 import com.fskeyboard.ime.rerank.RerankLimits
-import com.fskeyboard.ime.rerank.RerankTrace
-import com.fskeyboard.ime.rerank.acceptRerankUpdate
+import com.fskeyboard.ime.session.EditorSession
+import com.fskeyboard.ime.settings.KeyboardPreferences
+import com.fskeyboard.ime.state.CompositionLeave
+import com.fskeyboard.ime.state.KeyFate
+import com.fskeyboard.ime.state.KeyState
+import com.fskeyboard.ime.state.LatinStateController
+import com.fskeyboard.ime.state.NumberStateController
+import com.fskeyboard.ime.state.SymbolStateController
+import com.fskeyboard.ime.state.ZhuyinStateController
+import com.fskeyboard.ime.state.modeLeave
 import com.fskeyboard.ime.traced
 import java.io.File
 import java.util.concurrent.Executors
 
 internal class CandidateController(
     private val context: Context,
-    private val lexicon: ZhuyinLexicon,
-    private val pipeline: CandidatePipeline,
-    private val connection: () -> InputConnection?,
+    pipeline: CandidatePipeline,
+    connection: () -> InputConnection?,
     private val editorInfo: () -> EditorInfo?,
     private val onUi: (ImeUiState) -> Unit,
     private val post: (Runnable) -> Unit = { runnable ->
@@ -53,12 +62,11 @@ internal class CandidateController(
     private val letterMode: () -> KeyboardMode = { KeyboardMode.ZHUYIN },
     private val clipboard: () -> ClipOffer? = { readClipboard(context) },
     continuations: WordContinuations? = null,
-    private val zhuyinEngine: ZhuyinEngine = UnavailableZhuyinEngine,
-    private val chiakey: Boolean = false,
-    private val onRequestLexicon: () -> Unit = {},
-    @Volatile private var partialLexicon: PartialLexicon = PartialLexicon.EMPTY,
+    zhuyinEngine: ZhuyinEngine = UnavailableZhuyinEngine,
+    partialLexicon: PartialLexicon = PartialLexicon.EMPTY,
+    private val userLexicon: FsLexicon? = null,
 ) {
-    /** Ctrl, Alt, and Meta chosen from an English swipe, until the next key. */
+    /** Ctrl, Alt, Fn, and Meta chosen from an English swipe, until the next key. */
     var onComputerModifiers: (Set<ComputerKey>) -> Unit = {}
 
     /** Modifiers locked by a hold. They stay after the finger lifts. */
@@ -75,34 +83,6 @@ internal class CandidateController(
 
     /** Set only while [mode] is the digit pad. A key cannot turn this on. */
     private var numberPad = NumberPad.NONE
-    private var presented: List<Candidate> = emptyList()
-    private val composition = ZhuyinComposition()
-    private var frame = ChiaKeyFrame.parse("")
-    private var lexiconPrompt = LexiconPrompt.HIDDEN
-
-    /**
-     * Syllables typed without a tone between them.
-     * While [holdingSentence] is set, this chain is the whole reading and the engine
-     * no longer owns those keys. One open syllable still goes to the engine, so the
-     * next initial continues in that walker.
-     * A finished one-syllable tone is copied into [pendingTone] before its chain is
-     * released. The next syllable keeps that tone on [enginePrefix] until the whole
-     * composition is held. [mirrored] is the open chain's engine keys.
-     * [enginePrefixKeys] counts keys already in the engine for [enginePrefix].
-     * [chosenPrefix] is Hanzi already tapped while bopomofo is still open. It stays
-     * in front of [chain]. A tap that leaves only Hanzi writes them at once.
-     * [chosenSpans] records the bopomofo that produced each of those Hanzi, latest last,
-     * so backspace can put that reading back in front of whatever is still open.
-     */
-    private val chain = BopomofoChain()
-    private var holdingSentence = false
-    private var mirrored = 0
-    private val enginePrefix = ArrayList<SyllableReading>()
-    private var enginePrefixKeys = 0
-    private var pendingTone: List<SyllableReading> = emptyList()
-    private var pendingToneText = ""
-    private val chosenPrefix = StringBuilder()
-    private val chosenSpans = ArrayList<ChosenSpan>()
 
     /**
      * Non-zero while a commit and the composing text that replaces it are one edit.
@@ -110,32 +90,113 @@ internal class CandidateController(
      * not drop syllables that are still being chosen.
      */
     private var editDepth = 0
-    private var previewComposing = ""
-    private var previewReading = ""
 
     /** The last characters this keyboard committed, for choosing particles. */
     private val recent = StringBuilder()
 
-    /** Letters of the English word under the caret. Empty unless the Latin keyboard is composing. */
-    private val english = StringBuilder()
-    private var englishCaret = 0
     private val englishLexicon = EnglishLexicon()
     private val preference = CandidatePreference()
     private val preferenceFile by lazy { File(context.filesDir, CANDIDATE_PREF_FILE) }
     private var spaceUndo: SpaceUndo? = null
     private val symbolFrequency = SymbolFrequency()
-    private var wordContinuations: WordContinuations? = continuations
     private val emailSuggest = EmailSuggest()
     private val englishWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "fskeyboard-english").apply { isDaemon = true }
     }
+    private var closed = false
+    private val editor = EditorSession(connection)
+    private val lexiconStore = AssetLexicon(
+        context = context,
+        post = post,
+        worker = englishWorker,
+        continuations = continuations,
+        partial = partialLexicon,
+    )
+    private val presenter = CandidatePresenter(
+        pipeline = pipeline,
+        preference = preference,
+        post = post,
+        closed = { closed },
+        contextBefore = { contextBefore() },
+        dropUnusedHabits = { dropUnusedHabits() },
+        savePreference = { savePreference() },
+        onPresented = { onUi(ui(it)) },
+    )
+    private val zhuyin = ZhuyinCompositionSession(
+        engine = zhuyinEngine,
+        lexicon = lexiconStore,
+        host = object : ZhuyinHost {
+            override fun mode(): KeyboardMode = this@CandidateController.mode
+            override fun commit(text: String) = this@CandidateController.commit(text)
+            override fun apply(snapshot: EngineSnapshot) = this@CandidateController.apply(snapshot)
+            override fun edit(block: () -> Unit) = this@CandidateController.edit(block)
+            override fun promote(candidate: Candidate) = preference.promote(candidate)
+            override fun rememberPhrase(candidate: Candidate) {
+                preference.remember(candidate)
+                rememberUserRow(candidate)
+            }
+            override fun savePreference() = this@CandidateController.savePreference()
+            override fun createdMatching(reading: String): List<Candidate> = preference.createdMatching(reading)
+            override fun refreshIdleSuggestions() = this@CandidateController.refreshIdleSuggestions()
+        },
+    )
+    private val englishHost = object : EnglishHost {
+        override fun editorInfo(): EditorInfo? = this@CandidateController.editorInfo()
+        override fun textBefore(n: Int): String? {
+            loadEnglish()
+            return editor.textBefore(n)?.toString()
+        }
+        override fun commit(text: String) = this@CandidateController.commit(text)
+        override fun acceptCommitted(text: String) = this@CandidateController.acceptCommitted(text)
+        override fun apply(snapshot: EngineSnapshot) = this@CandidateController.apply(snapshot)
+        override fun finishComposing() = editor.finishComposing()
+        override fun clearUnderline() = editor.clearUnderline()
+        override fun clearOwnedCaretSpan() {
+            ownedCaretSpan = null
+        }
+        override fun presented(): List<Candidate> = presenter.presented
+        override fun publish(snapshot: EngineSnapshot) {
+            presenter.show(snapshot.candidates)
+            presenter.publish(snapshot, mode, base)
+        }
+        override fun showClearedWord() {
+            presenter.show(emptyList())
+            editor.clearUnderline()
+            presenter.publish(EngineSnapshot(), mode, base)
+        }
+        override fun refreshIdleSuggestions() = this@CandidateController.refreshIdleSuggestions()
+        override fun showEmailDomainsAfterAt() = this@CandidateController.showEmailDomainsAfterAt()
+        override fun isEmailContext(): Boolean = this@CandidateController.isEmailContext()
+        override fun beforeUsername(): String = this@CandidateController.beforeUsername()
+        override fun learnEnglish(word: String) = this@CandidateController.learnEnglish(word)
+        override fun recordEmail(choice: String, username: String) {
+            emailSuggest.recordChoice(choice, username)
+            saveEmailHistory()
+        }
+        override fun emailCandidates(typed: String, before: String, limit: Int): List<String> {
+            return emailSuggest.candidates(typed, before, limit)
+        }
+        override fun learnSymbol(symbol: String) {
+            this@CandidateController.learnSymbol(textBeforeCursor(), symbol)
+        }
+        override fun noteSpaceUndo(typed: String, committed: String) {
+            spaceUndo = SpaceUndo.English(typed, committed)
+        }
+    }
+    private val english = EnglishCompositionSession(
+        lexicon = englishLexicon,
+        host = englishHost,
+    )
+    private val zhuyinState = ZhuyinStateController(zhuyin)
+    private val latinState = LatinStateController(english, englishHost)
+    private val symbolState = SymbolStateController(english) {
+        base == KeyboardMode.LATIN && EnglishInputPolicy.shouldCompose(editorInfo())
+    }
+    private val numberState = NumberStateController { commit(it) }
     private val userEnglishFile by lazy { File(context.filesDir, USER_ENGLISH_FILE) }
     private val symbolFile by lazy { File(context.filesDir, SYMBOL_FILE) }
     private val emailHistoryFile by lazy { File(context.filesDir, EMAIL_DOMAINS_FILE) }
     private var englishLoaded = false
-    private var generation = 0L
-    private var closed = false
-    private var lastLookupMillis = 0L
     private var cursorSession: CursorSession? = null
     private var composingGlide = false
     private var glideOrigin = 0
@@ -167,38 +228,24 @@ internal class CandidateController(
     private var clipOffer: ClipOffer? = null
     private var clipVisible = false
 
-    private val hasComposition: Boolean
-        get() = if (chiakey) {
-            frame.active || holdingSentence || !chain.isEmpty || pendingTone.isNotEmpty() ||
-                chosenPrefix.isNotEmpty()
-        } else {
-            !composition.isEmpty
-        }
-
     fun start() {
         applySavedLetterMode()
         loadEnglish()
         loadCandidatePreference()
         loadSymbolFrequency()
         loadWordContinuations()
-        publish()
-        lexicon.start(context) {
-            if (!closed) {
-                if (hasComposition) apply(refresh()) else publish(EngineSnapshot())
-            }
-        }
+        presenter.publish(null, mode, base)
     }
 
     fun close() {
         closed = true
-        generation += 1
+        presenter.invalidate()
         endCursor()
-        lexicon.close()
         englishWorker.shutdown()
     }
 
     fun onStartInput(restarting: Boolean) {
-        if (chiakey) zhuyinEngine.reset()
+        zhuyin.resetEngine()
         val info = editorInfo()
         selStart = info?.initialSelStart ?: -1
         selEnd = info?.initialSelEnd ?: -1
@@ -206,10 +253,7 @@ internal class CandidateController(
             recent.setLength(0)
         }
         cancelComposition()
-        if (chiakey) {
-            frame = ChiaKeyFrame.parse("")
-            lexiconPrompt = LexiconPrompt.HIDDEN
-        }
+        zhuyin.clearFrame()
         clearModifiers()
         refreshClipboard()
         applySavedLetterMode()
@@ -224,7 +268,7 @@ internal class CandidateController(
                 numberPad = pad
             }
         }
-        publish()
+        presenter.publish(null, mode, base)
         refreshIdleSuggestions()
     }
 
@@ -245,20 +289,19 @@ internal class CandidateController(
             if (owned != null && newSelStart == newSelEnd && newSelStart in owned) return
             ownedCaretSpan = null
             var changed = false
-            if (english.isNotEmpty()) {
-                clearEnglishWord()
+            if (english.active) {
+                english.clear()
                 changed = true
             }
-            if (hasComposition) {
-                composition.clear()
-                clearChain()
+            if (zhuyin.hasComposition) {
+                zhuyin.dropChain()
                 changed = true
             }
             if (changed) {
-                presented = emptyList()
-                publish(EngineSnapshot())
+                presenter.show(emptyList())
+                presenter.publish(EngineSnapshot(), mode, base)
             }
-            if (cursorSession == null && !hasComposition && english.isEmpty() && newSelStart == newSelEnd) {
+            if (cursorSession == null && !zhuyin.hasComposition && !english.active && newSelStart == newSelEnd) {
                 refreshIdleSuggestions()
             }
         }
@@ -266,7 +309,7 @@ internal class CandidateController(
 
     fun onFinishInput() {
         endCursor()
-        commitEnglishLiteral()
+        english.finish(trailing = "", takePrediction = false)
         cancelComposition()
         selStart = -1
         selEnd = -1
@@ -283,22 +326,23 @@ internal class CandidateController(
     fun beginCursor(): Boolean {
         spaceUndo = null
         if (!canMoveCursor()) return false
-        if (english.isNotEmpty()) {
-            glideText = english.toString()
-            glideOrigin = englishCaret.coerceIn(0, glideText.length)
-            glideVisualOffset = 0
-            glideBase = compositionAnchor(glideOrigin)
-            rememberOwnedSpan(glideBase, glideText.length)
+        english.caretTarget()?.let { target ->
+            glideText = target.text
+            glideOrigin = target.caret.coerceIn(0, glideText.length)
+            glideVisualOffset = target.visualOffset
+            glideBase = compositionAnchor(glideVisualOffset + glideOrigin)
+            rememberOwnedSpan(glideBase, target.length)
             composingGlide = true
             cursorSession = null
             return true
         }
-        if (hasComposition) {
-            glideText = composition.pending.text
-            glideOrigin = composition.pending.caret.coerceIn(0, glideText.length)
-            glideVisualOffset = composition.chosenText.length
+        if (zhuyin.hasComposition) {
+            val pending = zhuyin.pendingText()
+            glideText = pending
+            glideOrigin = zhuyin.pendingCaret().coerceIn(0, pending.length)
+            glideVisualOffset = zhuyin.chosenTextLength()
             glideBase = compositionAnchor(glideVisualOffset + glideOrigin)
-            rememberOwnedSpan(glideBase, composition.text.length)
+            rememberOwnedSpan(glideBase, zhuyin.compositionLength())
             composingGlide = true
             cursorSession = null
             return true
@@ -329,7 +373,7 @@ internal class CandidateController(
         val absolute = session.startOffset + moved
         if (absolute == session.cursor) return false
         val applied = try {
-            connection()?.setSelection(absolute, absolute) == true
+            editor.setSelection(absolute, absolute)
         } catch (_: Exception) {
             false
         }
@@ -352,22 +396,35 @@ internal class CandidateController(
             return
         }
         if (modifiers.isActive() && sendModified(action)) return
-        val composeEnglish = EnglishInputPolicy.shouldCompose(editorInfo())
-        val typingEnglish = mode == KeyboardMode.LATIN && composeEnglish &&
-            (english.isNotEmpty() || (action is KeyAction.Character && action.value.isLetter()))
+        // Latin only. A symbol page dismisses the row, then the word is drawn again.
+        val typingEnglish = mode == KeyboardMode.LATIN &&
+            EnglishInputPolicy.shouldCompose(editorInfo()) &&
+            (english.active || (action is KeyAction.Character && action.value.isLetter()))
         if (action !is KeyAction.Bopomofo && !typingEnglish) dismissSuggestions()
         when (action) {
+            is KeyAction.Punctuation -> deliverPunctuation(action.text)
             is KeyAction.SetMode -> setMode(action.mode)
-            KeyAction.Shift -> Unit
-            KeyAction.NextInputMethod -> Unit
-            KeyAction.Backspace -> onBackspace()
-            KeyAction.Enter -> onEnter()
-            KeyAction.Space -> onSpace()
-            is KeyAction.Character -> onCharacter(action.value)
-            is KeyAction.Bopomofo -> onBopomofo(action)
-            is KeyAction.Punctuation -> onPunctuation(action.text)
-            is KeyAction.Computer -> Unit
+            KeyAction.Shift, KeyAction.NextInputMethod -> Unit
+            KeyAction.Backspace -> deliverBackspace()
+            else -> {
+                if (action is KeyAction.Space || action is KeyAction.Character ||
+                    action is KeyAction.Bopomofo
+                ) {
+                    hideClipboard()
+                }
+                when (stateFor(mode).handle(action)) {
+                    KeyFate.Consumed -> Unit
+                    KeyFate.Continue -> deliverUnconsumed(action)
+                }
+            }
         }
+    }
+
+    private fun stateFor(mode: KeyboardMode): KeyState = when (mode) {
+        KeyboardMode.ZHUYIN -> zhuyinState
+        KeyboardMode.LATIN -> latinState
+        KeyboardMode.SYMBOLS, KeyboardMode.SYMBOLS_MORE -> symbolState
+        KeyboardMode.NUMBER -> numberState
     }
 
     /**
@@ -381,14 +438,14 @@ internal class CandidateController(
 
     /**
      * A symbol is typed and a tap-armed modifier is cleared. A held modifier stays.
-     * A modifier waits. Any other computer key is sent, with the waiting modifiers, then the tap-armed ones clear.
+     * A modifier waits. Any other computer key is delivered, then the tap-armed ones clear.
      */
     private fun onComputer(action: KeyAction.Computer) {
         val key = action.key
         val symbol = key.symbol
         if (symbol != null) {
             clearLatched()
-            onPunctuation(symbol.toString())
+            deliverPunctuation(symbol.toString())
             return
         }
         if (key.modifier && !action.repeating) {
@@ -399,30 +456,69 @@ internal class CandidateController(
         if (key.modifier) {
             dismissSuggestions()
             hideClipboard()
-            if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
-            if (mode == KeyboardMode.ZHUYIN && hasComposition) finishZhuyinComposition()
-            sendKeyEvent(key.keyCode, modifiers.metaState() or key.metaState)
+            if (english.active) english.finish(trailing = "", takePrediction = false)
+            if (mode == KeyboardMode.ZHUYIN && zhuyin.hasComposition) zhuyin.finish()
+            editor.sendDownUp(key.keyCode, modifiers.metaState() or key.metaState)
             return
         }
         dismissSuggestions()
         hideClipboard()
-        if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
-        if (mode == KeyboardMode.ZHUYIN && hasComposition) finishZhuyinComposition()
-        sendKeyEvent(key.keyCode, modifiers.metaState())
+        if (english.active) english.finish(trailing = "", takePrediction = false)
+        if (mode == KeyboardMode.ZHUYIN && zhuyin.hasComposition) zhuyin.finish()
+        val kind = signalKey(key)
+        if (kind == null) {
+            editor.sendDownUp(key.keyCode, modifiers.metaState())
+        } else {
+            val signal = keySignal(
+                kind,
+                editorInfo()?.inputType ?: 0,
+                action.shift,
+                modifiers.metaState(),
+            )
+            when (signal) {
+                is KeySignal.Event -> editor.sendDownUp(signal.keyCode, signal.meta)
+                is KeySignal.Surrounding -> if (!clearSelection()) {
+                    if (signal.after > 0) editor.deleteForward() else editor.deleteOne()
+                }
+            }
+        }
         clearLatched()
     }
 
     /**
-     * The next letter, space, enter, or backspace after Ctrl, Alt, or Meta.
+     * The next letter, space, enter, or backspace after Ctrl, Alt, Fn, or Meta.
+     * Fn plus 1–9, 0, o, or p sends F1–F12. The function key itself is the event,
+     * so that press does not also carry the Fn meta. Another latched modifier stays.
      * Returns false when this key has no key code, so the normal path still runs.
      */
     private fun sendModified(action: KeyAction): Boolean {
-        val shift = action is KeyAction.Character && action.value.isLetter() && action.value.isUpperCase()
-        val keyCode = when (action) {
+        if (action is KeyAction.Backspace) {
+            val signal = keySignal(
+                SignalKey.BACKSPACE,
+                editorInfo()?.inputType ?: 0,
+                ShiftMode.OFF,
+                modifiers.metaState(),
+            )
+            if (signal !is KeySignal.Event) return false
+            dismissSuggestions()
+            hideClipboard()
+            if (english.active) english.finish(trailing = "", takePrediction = false)
+            if (mode == KeyboardMode.ZHUYIN && zhuyin.hasComposition) zhuyin.finish()
+            editor.sendDownUp(signal.keyCode, signal.meta)
+            clearLatched()
+            return true
+        }
+        val fnFunction = (action as? KeyAction.Character)
+            ?.takeIf { modifiers.has(ComputerKey.FN) }
+            ?.let { fnFunctionKeyCode(it.value) }
+        val shift = fnFunction == null &&
+            action is KeyAction.Character &&
+            action.value.isLetter() &&
+            action.value.isUpperCase()
+        val keyCode = fnFunction ?: when (action) {
             is KeyAction.Character -> computerKeyCode(action.value)
             KeyAction.Space -> KeyEvent.KEYCODE_SPACE
             KeyAction.Enter -> KeyEvent.KEYCODE_ENTER
-            KeyAction.Backspace -> KeyEvent.KEYCODE_DEL
             else -> null
         }
         if (keyCode == null) {
@@ -431,9 +527,12 @@ internal class CandidateController(
         }
         dismissSuggestions()
         hideClipboard()
-        if (english.isNotEmpty()) finishEnglish(trailing = "", takePrediction = false)
-        if (mode == KeyboardMode.ZHUYIN && hasComposition) finishZhuyinComposition()
-        sendKeyEvent(keyCode, modifiers.metaState(shift))
+        if (english.active) english.finish(trailing = "", takePrediction = false)
+        if (mode == KeyboardMode.ZHUYIN && zhuyin.hasComposition) zhuyin.finish()
+        val meta = modifiers.metaState(shift).let { state ->
+            if (fnFunction != null) state and ComputerKey.FN.metaState.inv() else state
+        }
+        editor.sendDownUp(keyCode, meta)
         clearLatched()
         return true
     }
@@ -457,33 +556,6 @@ internal class CandidateController(
     }
 
     /**
-     * Navigation keys leave touch mode unless they are marked as a soft-keyboard event.
-     * The editor then paints a gray focus wash over the field.
-     */
-    private fun sendKeyEvent(keyCode: Int, meta: Int) {
-        val ic = connection() ?: return
-        ic.finishComposingText()
-        val time = System.currentTimeMillis()
-        val flags = KeyEvent.FLAG_SOFT_KEYBOARD or KeyEvent.FLAG_KEEP_TOUCH_MODE
-        ic.sendKeyEvent(softKeyEvent(time, KeyEvent.ACTION_DOWN, keyCode, meta, flags))
-        ic.sendKeyEvent(softKeyEvent(time, KeyEvent.ACTION_UP, keyCode, meta, flags))
-    }
-
-    private fun softKeyEvent(time: Long, action: Int, keyCode: Int, meta: Int, flags: Int): KeyEvent {
-        return KeyEvent(
-            time,
-            time,
-            action,
-            keyCode,
-            0,
-            meta,
-            KeyCharacterMap.VIRTUAL_KEYBOARD,
-            0,
-            flags,
-        )
-    }
-
-    /**
      * Chooses [candidate] for the front syllables it spans. The rest stays to be chosen.
      * A suggestion, offered with nothing typed, is committed as it is.
      */
@@ -492,43 +564,12 @@ internal class CandidateController(
             pasteClipboard()
             return
         }
-        if (candidate.source == CandidateSource.LEXICON) {
-            onLexiconPrompt()
+        if (zhuyin.acceptCandidate(candidate)) return
+        if (mode == KeyboardMode.LATIN && english.active) {
+            english.acceptCandidate(candidate)
             return
         }
-        if (chiakey && candidate.source == CandidateSource.SYNTHETIC &&
-            (holdingSentence || !chain.isEmpty || pendingTone.isNotEmpty())
-        ) {
-            acceptPartial(candidate)
-            return
-        }
-        if (chiakey && frame.active && candidate.engineIndex >= 0) {
-            frame = zhuyinEngine.select(candidate.engineIndex)
-            // The chain still holds the syllable select just consumed.
-            enginePrefix.clear()
-            enginePrefixKeys = 0
-            chain.clear()
-            mirrored = 0
-            holdingSentence = false
-            clearPendingTone()
-            showFrame()
-            return
-        }
-        if (mode == KeyboardMode.LATIN && english.isNotEmpty()) {
-            val isEmail = isEmailContext()
-            val text = candidate.text
-            val trailing = if (isEmail) "" else " "
-            clearEnglishWord()
-            acceptCommitted(text + trailing)
-            if (isEmail) {
-                emailSuggest.recordChoice(text, beforeUsername())
-                saveEmailHistory()
-            } else {
-                learnEnglish(text)
-            }
-            return
-        }
-        if (mode != KeyboardMode.ZHUYIN || !hasComposition) {
+        if (mode != KeyboardMode.ZHUYIN || !zhuyin.hasComposition) {
             val isEmail = isEmailContext()
             val text = candidate.text
             commit(text)
@@ -538,284 +579,117 @@ internal class CandidateController(
             }
             if (isSymbol(text)) learnSymbol(textBeforeCursor(), text)
             refreshIdleSuggestions()
-            return
-        }
-        val finished = composition.choose(candidate)
-        if (finished != null) {
-            finishComposition(finished)
-        } else {
-            apply(refresh())
         }
     }
 
     /**
      * Leaving zhuyin commits what was typed, the way Enter does.
      * The digit pad is not in this path. A field opens it, and the next field closes it.
+     * [modeLeave] is not asked about the digit pad or a switch onto the same mode.
      */
     private fun setMode(next: KeyboardMode) {
         if (next == KeyboardMode.NUMBER || mode == KeyboardMode.NUMBER) return
         if (next == mode) return
-        val switchingBetweenLatinAndSymbols = (mode == KeyboardMode.LATIN && next.isSymbols) ||
-            (mode.isSymbols && next == KeyboardMode.LATIN)
-        if (!switchingBetweenLatinAndSymbols && english.isNotEmpty()) {
-            finishEnglish(trailing = "", takePrediction = false)
+        val leave = modeLeave(mode, next)
+        if (leave.english == CompositionLeave.COMMIT_TYPED) {
+            english.finish(trailing = "", takePrediction = false)
         }
         clearModifiers()
-        if (mode == KeyboardMode.ZHUYIN && hasComposition) {
-            finishZhuyinComposition()
+        if (leave.zhuyin == CompositionLeave.COMMIT_TYPED && zhuyin.hasComposition) {
+            zhuyin.finish()
         }
         if (next.isLetters && next != base) onLetterMode(next)
         if (next.isLetters) base = next
         mode = next
-        presented = emptyList()
-        publish()
+        presenter.show(emptyList())
+        presenter.publish(null, mode, base)
     }
 
-    private fun onBopomofo(action: KeyAction.Bopomofo) {
-        hideClipboard()
-        if (mode != KeyboardMode.ZHUYIN) {
-            commit(action.label)
+    /**
+     * Punctuation and a computer-key symbol. An open English word is finished with [text]
+     * and not committed again, even when the field text does not match the word.
+     */
+    private fun deliverPunctuation(text: String) {
+        if (english.active) {
+            english.finish(trailing = text, takePrediction = false)
             return
         }
-        if (chiakey) {
-            if (!zhuyinEngine.ready) {
-                showLexiconPrompt()
-                return
-            }
-            val glyph = action.label.firstOrNull() ?: return
-            // The preview keeps the typed bopomofo and tone marks until a candidate is tapped.
-            if (!chain.append(glyph)) return
-            holdingSentence = true
-            showHeld()
-            return
-        }
-        if (!composition.append(action.label, action.nearby)) return
-        apply(refresh())
-    }
-
-    /** A lone syllable lists the particles that fit what was typed before it first. */
-    private fun refresh(): EngineSnapshot {
-        val text = composition.text
-        val pending = composition.pending
-        var candidates = candidatesFor(pending, lookup(pending))
-        if (pending.size == 1 && text == pending.text) {
-            candidates = Particles.promote(candidates, recent.toString())
-        }
-        return EngineSnapshot(
-            preedit = text,
-            composingPreview = text,
-            candidates = candidates,
-            decodeMillis = lastLookupMillis,
-        )
-    }
-
-    private fun lookup(pending: ZhuyinComposer): List<Candidate> {
-        val queries = pending.queries() ?: run {
-            lastLookupMillis = 0
-            return emptyList()
-        }
-        if (!lexicon.isReady) {
-            lastLookupMillis = 0
-            return emptyList()
-        }
-        val before = recent.toString() + composition.chosenText
-        val start = System.nanoTime()
-        val exact = traced("ime.lookup") { lexicon.lookup(queries, before) }
-        val corrected = ArrayList<Candidate>()
-        for (correction in pending.corrections()) {
-            corrected += lexicon.lookup(correction.queries, before)
-        }
-        lastLookupMillis = (System.nanoTime() - start) / 1_000_000L
-        return mergeTouchCorrections(exact, corrected)
-    }
-
-    private fun onPunctuation(text: String) {
-        if (english.isNotEmpty()) {
-            finishEnglish(trailing = text, takePrediction = false)
-            return
-        }
-        if (mode == KeyboardMode.ZHUYIN && hasComposition) {
-            finishZhuyinComposition()
+        if (mode == KeyboardMode.ZHUYIN && zhuyin.hasComposition) {
+            zhuyin.finish()
         }
         commit(text)
         if (isSymbol(text)) learnSymbol(textBeforeCursor(), text)
         refreshIdleSuggestions()
     }
 
-    private fun onSpace() {
-        hideClipboard()
-        if (english.isNotEmpty()) {
-            val typed = english.toString()
-            val committed = finishEnglish(trailing = " ", takePrediction = false)
-            if (committed != null) spaceUndo = SpaceUndo.English(typed, committed)
-            return
-        }
-        // An open composition never sends ASCII space. A tone already offered stays on screen.
-        if (chiakey && mode == KeyboardMode.ZHUYIN && hasComposition) {
-            if (chosenPrefix.isNotEmpty() && !openZhuyinSyllable()) {
-                commitChosenPrefix(trailing = " ")
-                refreshIdleSuggestions()
-                return
-            }
-            if (!holdingSentence && !chain.isEmpty && !chain.lastToneChosen()) {
-                holdComposition(mirrored)
-            }
-            if (holdingSentence) {
-                chain.markLevel()
-                showHeld()
-            }
-            return
-        }
-        when (KeyPolicy.space(mode, composing = hasComposition)) {
-            KeyPolicy.Space.MarkLevelTone -> when {
-                composition.pending.isEmpty -> {
-                    val done = convertAll()
-                    finishComposition(done)
-                    spaceUndo = SpaceUndo.Text(done.text)
-                }
-                composition.markLevelTone() -> {
-                    apply(refresh())
-                    spaceUndo = SpaceUndo.Level
-                }
-            }
-            KeyPolicy.Space.CommitSpace -> {
+    /** Keys the current state did not take. Punctuation and email domains are not handled here. */
+    private fun deliverUnconsumed(action: KeyAction) {
+        when (action) {
+            KeyAction.Enter -> performEnter()
+            KeyAction.Space -> {
                 commit(" ")
                 refreshIdleSuggestions()
                 spaceUndo = SpaceUndo.Space
             }
+            is KeyAction.Character -> commit(action.value.toString())
+            is KeyAction.Bopomofo -> commit(action.label)
+            else -> Unit
         }
     }
 
-    private fun onBackspace() {
-        if (english.isNotEmpty()) {
-            if (englishCaret <= 0) return
-            english.deleteCharAt(englishCaret - 1)
-            englishCaret -= 1
-            if (english.isEmpty()) {
-                englishCaret = 0
-                ownedCaretSpan = null
-                presented = emptyList()
-                val ic = connection()
-                ic?.setComposingText("", 1)
-                ic?.finishComposingText()
-                publish(EngineSnapshot())
-            } else {
-                showEnglish()
-            }
-            return
-        }
-        if (chiakey && mode == KeyboardMode.ZHUYIN && chosenSpans.isNotEmpty() && !chain.isEmpty) {
-            restoreLatestChosen()
-            return
-        }
-        if (chiakey && mode == KeyboardMode.ZHUYIN && holdingSentence) {
-            chain.backspace()
-            if (chain.isEmpty) {
-                holdingSentence = false
-                if (chosenPrefix.isNotEmpty()) commitChosenPrefix() else showFrame()
-            } else {
-                showHeld()
-            }
-            return
-        }
-        if (chiakey && mode == KeyboardMode.ZHUYIN && frame.active) {
-            frame = zhuyinEngine.handleKey(8)
-            clearPendingTone()
-            if (chain.isEmpty) {
-                enginePrefix.clear()
-                enginePrefixKeys = 0
-            } else {
-                chain.backspace()
-            }
-            mirrored = chain.text.length
-            showFrame()
-            return
-        }
-        if (chiakey && mode == KeyboardMode.ZHUYIN && pendingTone.isNotEmpty()) {
-            clearPendingTone()
-            mirrored = 0
-            showFrame()
-            return
-        }
-        if (chiakey && mode == KeyboardMode.ZHUYIN && chosenPrefix.isNotEmpty() &&
-            chain.isEmpty && !frame.active
-        ) {
-            chosenPrefix.deleteCharAt(chosenPrefix.lastIndex)
-            if (chosenPrefix.isEmpty()) {
-                clearChain()
-                frame = ChiaKeyFrame.parse("")
-                apply(EngineSnapshot())
-            } else {
-                edit { presentComposition("", emptyList()) }
-            }
-            return
-        }
-        if (mode == KeyboardMode.ZHUYIN && hasComposition) {
-            composition.backspace()
-            apply(refresh())
-            return
-        }
+    /** False when the last backspace changed nothing, so a hold can stop. */
+    fun backspaceProgress(): Boolean = backspaceMoved
 
-        val ic = connection() ?: return
+    private var backspaceMoved = true
+
+    private fun deliverBackspace() {
+        backspaceMoved = true
+        english.consumedBackspace = false
+        when (stateFor(mode).handle(KeyAction.Backspace)) {
+            KeyFate.Consumed -> backspaceMoved =
+                if (english.consumedBackspace) english.backspaceMoved() else true
+            KeyFate.Continue -> backspaceMoved = deleteFieldBeforeCaret()
+        }
+    }
+
+    /** False when there is no field. A key event counts as progress. A selection clear does too. */
+    private fun deleteFieldBeforeCaret(): Boolean {
+        if (!editor.hasField()) return false
+        val signal = keySignal(
+            SignalKey.BACKSPACE,
+            editorInfo()?.inputType ?: 0,
+            ShiftMode.OFF,
+            modifiers.metaState(),
+        )
+        return when (signal) {
+            is KeySignal.Event -> {
+                editor.sendDownUp(signal.keyCode, signal.meta)
+                clearLatched()
+                true
+            }
+            is KeySignal.Surrounding -> {
+                if (clearSelection()) return true
+                val progressed = editor.deleteOne()
+                if (progressed && recent.isNotEmpty()) recent.setLength(recent.length - 1)
+                progressed
+            }
+        }
+    }
+
+    /** True when a selection was removed. A neighboring character is left in place. */
+    private fun clearSelection(): Boolean {
         val selected = try {
-            ic.getSelectedText(0)
+            editor.selectedText()
         } catch (_: Exception) {
             null
         }
         val hasSelection = !selected.isNullOrEmpty() || (selStart >= 0 && selEnd >= 0 && selStart != selEnd)
-        if (hasSelection) {
-            ic.commitText("", 1)
-            selStart = -1
-            selEnd = -1
-            recent.setLength(0)
-            return
-        }
-
-        ic.deleteSurroundingText(1, 0)
-        if (recent.isNotEmpty()) recent.setLength(recent.length - 1)
-    }
-
-    private fun onEnter() {
-        if (english.isNotEmpty()) {
-            finishEnglish(trailing = "", takePrediction = true)
-            return
-        }
-        if (mode == KeyboardMode.ZHUYIN && hasComposition) {
-            if (chiakey) {
-                // Enter writes the preview itself. It does not replace the tail with a guess.
-                val reading = if (!chain.isEmpty) chain.text else pendingToneText
-                val text = chosenPrefix.toString() + reading
-                edit {
-                    clearChain()
-                    frame = ChiaKeyFrame.parse("")
-                    if (text.isNotEmpty()) commit(text)
-                    zhuyinEngine.reset()
-                    apply(EngineSnapshot())
-                }
-            } else {
-                finishComposition(convertAll())
-            }
-            return
-        }
-        performEnter()
-    }
-
-    /** The first step uses the candidate on screen, so Enter matches what the bar shows. */
-    private fun convertAll(): Commit {
-        return composition.convertAll(presented.firstOrNull()) { pending ->
-            candidatesFor(pending, lookup(pending))
-        }
-    }
-
-    /** Commits, learns the phrases the user put together, and offers symbols learned after this word. */
-    private fun finishComposition(done: Commit) {
-        composition.clear()
-        val ic = connection()
-        ic?.commitText(done.text, 1)
-        ic?.finishComposingText()
-        remember(done.text)
-        lexicon.learn(done.learned)
-        refreshIdleSuggestions()
+        if (!hasSelection) return false
+        editor.commitText("")
+        selStart = -1
+        selEnd = -1
+        recent.setLength(0)
+        return true
     }
 
     /**
@@ -824,11 +698,11 @@ internal class CandidateController(
      * word keep their own candidates.
      */
     private fun refreshIdleSuggestions() {
-        if (closed || hasComposition || english.isNotEmpty() || !mode.isLetters) return
+        if (closed || zhuyin.hasComposition || english.active || !mode.isLetters) return
         if (cursorSession != null || composingGlide) return
         if (selStart >= 0 && selEnd >= 0 && selStart != selEnd) return
         val before = textBeforeCursor()
-        val words = wordContinuations?.following(before).orEmpty()
+        val words = lexiconStore.following(before)
         val symbols = symbolFrequency.predict(before)
         val candidates = ArrayList<Candidate>(words.size + symbols.size)
         var index = 0
@@ -840,9 +714,9 @@ internal class CandidateController(
             index += 1
             candidates.add(idleSuggestion(text, index))
         }
-        if (candidates == presented) return
-        presented = candidates
-        publish(EngineSnapshot(candidates = candidates))
+        if (candidates == presenter.presented) return
+        presenter.show(candidates)
+        presenter.publish(EngineSnapshot(candidates = candidates), mode, base)
     }
 
     private fun idleSuggestion(text: String, index: Int): Candidate {
@@ -857,7 +731,7 @@ internal class CandidateController(
     /** The field text before the caret, or the characters this keyboard just committed. */
     private fun textBeforeCursor(): String {
         return try {
-            connection()?.getTextBeforeCursor(64, 0)?.toString() ?: recent.toString()
+            editor.textBefore(64)?.toString() ?: recent.toString()
         } catch (_: Exception) {
             recent.toString()
         }
@@ -889,28 +763,16 @@ internal class CandidateController(
 
     /** Reads lexicon.bin off the main thread. A missing file leaves the row without next words. */
     private fun loadWordContinuations() {
-        if (wordContinuations != null) return
-        englishWorker.execute {
-            val loaded = try {
-                context.assets.open(LEXICON_BIN).use { input ->
-                    WordContinuations.open(input.readBytes())
-                }
-            } catch (_: Exception) {
-                null
-            }
-            post {
-                if (closed || loaded == null) return@post
-                wordContinuations = loaded
-                refreshIdleSuggestions()
-            }
+        lexiconStore.ensureContinuations(stillOpen = { !closed }) {
+            refreshIdleSuggestions()
         }
     }
 
     /** Drops symbol suggestions once the user does something else. */
     private fun dismissSuggestions() {
-        if (hasComposition || presented.isEmpty()) return
-        presented = emptyList()
-        publish(EngineSnapshot())
+        if (zhuyin.hasComposition || presenter.presented.isEmpty()) return
+        presenter.show(emptyList())
+        presenter.publish(EngineSnapshot(), mode, base)
     }
 
     private fun remember(text: String) {
@@ -921,9 +783,13 @@ internal class CandidateController(
     private fun performEnter() {
         hideClipboard()
         val choice = EnterActions.choose(editorInfo())
-        val ic = connection() ?: return
-        if (!choice.newline && ic.performEditorAction(choice.actionId)) {
-            recent.setLength(0)
+        if (!choice.newline) {
+            val acted = editor.performAction(choice.actionId) ?: return
+            if (acted) {
+                recent.setLength(0)
+                return
+            }
+        } else if (!editor.hasField()) {
             return
         }
         if (choice.newline) {
@@ -934,42 +800,34 @@ internal class CandidateController(
 
     private fun apply(snapshot: EngineSnapshot) {
         val inline = snapshot.composingPreview.ifEmpty { snapshot.preedit }
-        publish(snapshot)
+        presenter.publish(snapshot, mode, base)
         if (closed) return
-        val ic = connection() ?: return
+        if (!editor.hasField()) return
+        val composingStart = System.nanoTime()
         traced("ime.setComposing") {
             if (inline.isNotEmpty()) {
-                ic.setComposingText(inline, 1)
+                editor.setComposing(inline)
                 val caret = visualCaret(inline)
-                if (caret >= inline.length) ownedCaretSpan = null else placeComposingCaret(ic, inline, caret)
+                if (caret >= inline.length) ownedCaretSpan = null else placeComposingCaret(inline, caret)
             } else {
                 ownedCaretSpan = null
-                ic.setComposingText("", 1)
-                ic.finishComposingText()
+                editor.clearUnderline()
             }
         }
+        KeyStages.noteComposing(System.nanoTime() - composingStart)
     }
 
     /** Caret inside the underlined text. The end means setComposingText already placed it. */
-    private fun visualCaret(inline: String): Int {
-        val caret = when {
-            chiakey -> inline.length
-            english.isNotEmpty() -> englishCaret
-            hasComposition -> composition.chosenText.length + composition.pending.caret
-            else -> inline.length
-        }
-        return caret.coerceIn(0, inline.length)
-    }
+    private fun visualCaret(inline: String): Int = inline.length.coerceIn(0, inline.length)
 
     /**
      * setComposingText leaves the caret at the end of [text]. A caret in the middle
      * is then moved with setSelection. A missing extract skips that; the next insert
      * still rewrites the whole composing string.
      */
-    private fun placeComposingCaret(ic: InputConnection, text: String, caret: Int) {
+    private fun placeComposingCaret(text: String, caret: Int) {
         val extracted = try {
-            val request = ExtractedTextRequest().apply { hintMaxChars = MAX_EXTRACT }
-            ic.getExtractedText(request, 0)
+            editor.extractedText(MAX_EXTRACT)
         } catch (_: Exception) {
             null
         } ?: return
@@ -977,7 +835,7 @@ internal class CandidateController(
         val start = absolute - caret
         ownedCaretSpan = start..(start + text.length)
         try {
-            ic.setSelection(absolute, absolute)
+            editor.setSelection(absolute, absolute)
         } catch (_: Exception) {
             // The buffer caret is already updated. The next key writes it again.
         }
@@ -985,26 +843,20 @@ internal class CandidateController(
 
     private fun moveComposingCaret(dxPx: Float, dyPx: Float): Boolean {
         val next = CursorMotion.nearest(glideText, glideOrigin, dxPx, dyPx, ::textWidth, lineHeight())
-        val current = if (english.isNotEmpty()) {
-            englishCaret
-        } else {
-            composition.pending.caret
-        }
+        val englishCaret = english.caretTarget()
+        val current = englishCaret?.caret ?: zhuyin.pendingCaret()
         if (next == current) return false
-        if (english.isNotEmpty()) {
-            englishCaret = next
+        if (englishCaret != null) {
+            english.moveCaret(next)
         } else {
-            composition.pending.moveCaret(next)
+            zhuyin.movePendingCaret(next)
         }
-        val base = glideBase
-        if (base >= 0) {
-            val ic = connection()
-            if (ic != null) {
-                try {
-                    ic.setSelection(base + glideVisualOffset + next, base + glideVisualOffset + next)
-                } catch (_: Exception) {
-                    // The next key rewrites the composing text and places the caret.
-                }
+        val anchor = glideBase
+        if (anchor >= 0) {
+            try {
+                editor.setSelection(anchor + glideVisualOffset + next, anchor + glideVisualOffset + next)
+            } catch (_: Exception) {
+                // The next key rewrites the composing text and places the caret.
             }
         }
         return true
@@ -1025,15 +877,9 @@ internal class CandidateController(
 
     private fun lineHeight(): Float = caretPaint.fontSpacing.coerceAtLeast(1f)
 
-    private fun clearEnglishWord() {
-        english.setLength(0)
-        englishCaret = 0
-        ownedCaretSpan = null
-    }
-
     private fun commit(text: String) {
         hideClipboard()
-        connection()?.commitText(text, 1)
+        editor.commitText(text)
         remember(text)
     }
 
@@ -1045,7 +891,7 @@ internal class CandidateController(
     private fun hideClipboard() {
         if (!clipVisible) return
         clipVisible = false
-        publish()
+        presenter.publish(null, mode, base)
     }
 
     /** Drops the chip after the system clipboard was cleared. The next open reads it again. */
@@ -1053,14 +899,14 @@ internal class CandidateController(
         clipOffer = null
         if (!clipVisible) return
         clipVisible = false
-        publish()
+        presenter.publish(null, mode, base)
     }
 
     /** Commits the cached offer, not the short chip label, and leaves the chip up. */
     private fun pasteClipboard() {
         val offer = clipOffer ?: return
-        val ic = connection() ?: return
-        pasteClip(ic, offer, editorInfo())
+        if (!editor.hasField()) return
+        pasteClip(editor, offer, editorInfo())
     }
 
     private fun refreshClipboard() {
@@ -1082,32 +928,6 @@ internal class CandidateController(
         if (!saved.isLetters) return
         mode = saved
         base = saved
-    }
-
-    private fun onCharacter(value: Char) {
-        hideClipboard()
-        val composeEnglish = EnglishInputPolicy.shouldCompose(editorInfo())
-        if ((mode == KeyboardMode.LATIN || (mode.isSymbols && base == KeyboardMode.LATIN)) &&
-            composeEnglish &&
-            continuesEnglish(value)
-        ) {
-            val at = englishCaret.coerceIn(0, english.length)
-            english.insert(at, value)
-            englishCaret = at + 1
-            showEnglish()
-            return
-        }
-        if (english.isNotEmpty()) finishEnglish(trailing = value.toString(), takePrediction = false) else commit(value.toString())
-        if (mode == KeyboardMode.LATIN && value == '@' && isEmailContext()) {
-            showEmailDomainsAfterAt()
-        }
-    }
-
-    /** A letter always extends the word. An apostrophe, hyphen, or digit does only after one has started. */
-    private fun continuesEnglish(value: Char): Boolean {
-        if (value.isLetter()) return true
-        if (english.isEmpty()) return false
-        return value == '\'' || value == '-' || value.isDigit()
     }
 
     private fun loadEnglish() {
@@ -1132,47 +952,8 @@ internal class CandidateController(
         }
     }
 
-    private fun showEnglish() {
-        loadEnglish()
-        val typed = english.toString()
-        val before = connection()?.getTextBeforeCursor(64, 0)?.toString().orEmpty()
-        val start = System.nanoTime()
-        val candidates: List<Candidate>
-        if (isEmailContext()) {
-            val suggestions = emailSuggest.candidates(typed, before, ENGLISH_CANDIDATES)
-            candidates = suggestions.mapIndexed { index, text ->
-                Candidate(
-                    text = text,
-                    engineIndex = -(index + 1),
-                    source = CandidateSource.SUGGESTION,
-                    span = 0,
-                )
-            }
-        } else {
-            val hits = englishLexicon.complete(typed.lowercase(), ENGLISH_CANDIDATES)
-            val texts = EnglishSuggest.candidates(typed, hits, ENGLISH_CANDIDATES)
-            candidates = texts.mapIndexed { index, text ->
-                Candidate(
-                    text = text,
-                    engineIndex = -(index + 1),
-                    source = CandidateSource.SUGGESTION,
-                    span = 0,
-                )
-            }
-        }
-        lastLookupMillis = (System.nanoTime() - start) / 1_000_000L
-        apply(
-            EngineSnapshot(
-                preedit = typed,
-                composingPreview = typed,
-                candidates = candidates,
-                decodeMillis = lastLookupMillis,
-            ),
-        )
-    }
-
     private fun showEmailDomainsAfterAt() {
-        val before = connection()?.getTextBeforeCursor(64, 0)?.toString().orEmpty()
+        val before = editor.textBefore(64)?.toString().orEmpty()
         val domains = emailSuggest.candidates("", before, ENGLISH_CANDIDATES)
         val candidates = domains.mapIndexed { index, text ->
             Candidate(
@@ -1183,137 +964,39 @@ internal class CandidateController(
             )
         }
         if (candidates.isNotEmpty()) {
-            presented = candidates
-            publish(EngineSnapshot(candidates = candidates))
+            presenter.show(candidates)
+            presenter.publish(EngineSnapshot(candidates = candidates), mode, base)
         }
-    }
-
-    /**
-     * Ends the underlined word. Space and Enter pass [takePrediction]; punctuation,
-     * switching keyboards, and leaving the field keep the letters that were typed.
-     */
-    private fun finishEnglish(trailing: String, takePrediction: Boolean): String? {
-        if (english.isEmpty()) return null
-        val currentTyped = english.toString()
-        clearEnglishWord()
-
-        val before = connection()?.getTextBeforeCursor(currentTyped.length, 0)?.toString().orEmpty()
-        if (before != currentTyped && !before.endsWith(currentTyped)) {
-            clearComposing()
-            presented = emptyList()
-            publish(EngineSnapshot())
-            return null
-        }
-
-        val isEmail = isEmailContext()
-        val word = if (isEmail) {
-            if (takePrediction && presented.isNotEmpty()) presented.first().text else currentTyped
-        } else {
-            EnglishSuggest.commit(currentTyped, presented.firstOrNull()?.text, takePrediction)
-        }
-        val trailingChar = if (isEmail && trailing == " ") "" else trailing
-        val committed = word + trailingChar
-        acceptCommitted(committed)
-        if (isEmail) {
-            emailSuggest.recordChoice(word, beforeUsername())
-            saveEmailHistory()
-        } else {
-            learnEnglish(word)
-        }
-        if (isSymbol(trailingChar)) learnSymbol(textBeforeCursor(), trailingChar)
-        refreshIdleSuggestions()
-        return committed
-    }
-
-    /** Writes the underlined letters as they stand. Used when the field is closing. */
-    private fun commitEnglishLiteral() {
-        finishEnglish(trailing = "", takePrediction = false)
     }
 
     private fun acceptCommitted(text: String) {
-        presented = emptyList()
+        presenter.show(emptyList())
         if (text.isNotEmpty()) commit(text)
         clearComposing()
-        publish(EngineSnapshot())
+        presenter.publish(EngineSnapshot(), mode, base)
     }
 
     private fun clearComposing() {
-        val ic = connection()
-        ic?.finishComposingText()
+        editor.finishComposing()
     }
 
     /**
-     * Drops an in-progress word. An empty field is left untouched: [InputConnection.setComposingText]
+     * Drops an in-progress word. An empty field is left untouched: [android.view.inputmethod.InputConnection.setComposingText]
      * with an empty string replaces the current selection, which deletes a browser address bar
      * that selected its text when focused.
      */
     private fun cancelComposition() {
-        val discard = hasComposition || english.isNotEmpty()
-        composition.clear()
-        clearEnglishWord()
-        presented = emptyList()
+        val discard = zhuyin.hasComposition || english.active
+        zhuyin.dropChain()
+        english.clear()
+        presenter.show(emptyList())
         if (!discard) return
-        val ic = connection() ?: return
-        ic.setComposingText("", 1)
-        ic.finishComposingText()
-    }
-
-    private fun publish(snapshot: EngineSnapshot? = null) {
-        if (closed) return
-        val ticket = ++generation
-        val shown = when {
-            snapshot != null && mode == KeyboardMode.ZHUYIN -> pipeline.preview(snapshot)
-            snapshot != null && (mode == KeyboardMode.LATIN || (mode.isSymbols && base == KeyboardMode.LATIN)) -> snapshot.candidates
-            mode == KeyboardMode.ZHUYIN && snapshot == null -> presented
-            else -> emptyList()
-        }
-        if (snapshot != null) {
-            if (mode == KeyboardMode.ZHUYIN && preference.remembersAny()) {
-                if (preference.noteShown(shown, dropUnusedHabits())) savePreference()
-            }
-            presented = preference.apply(shown)
-            // logd is a binder call. A line on every key holds the frame that shows that key.
-            if (snapshot.decodeMillis >= SLOW_LOOKUP_MS) {
-                Log.i(TAG, "latency lookup=${snapshot.decodeMillis}ms candidates=${snapshot.candidates.size}")
-            }
-        }
-        onUi(ui(presented))
-        if (snapshot != null && snapshot.isComposing && mode == KeyboardMode.ZHUYIN &&
-            pipeline.willScore(snapshot.candidates.size)
-        ) {
-            val contextBefore = contextBefore()
-            pipeline.presentAsync(snapshot, contextBefore) { trace ->
-                post {
-                    applyRerank(ticket, snapshot, trace)
-                }
-            }
-        }
-    }
-
-    private fun applyRerank(ticket: Long, snapshot: EngineSnapshot, trace: RerankTrace) {
-        val superseded = closed || ticket != generation
-        if (superseded || worthLogging(trace)) {
-            val fallback = if (superseded) "stale" else trace.fallback?.name ?: "none"
-            Log.i(
-                TAG,
-                "latency lookup=${snapshot.decodeMillis}ms infer=${trace.inferMillis}ms " +
-                    "elapsed=${trace.elapsedMillis}ms fallback=$fallback",
-            )
-        }
-        if (superseded || !acceptRerankUpdate(ticket, generation, trace.fallback)) return
-        val ordered = preference.apply(trace.candidates)
-        if (ordered == presented) return
-        presented = ordered
-        onUi(ui(presented))
-    }
-
-    private fun worthLogging(trace: RerankTrace): Boolean {
-        return trace.fallback != RerankFallback.DISABLED && trace.fallback != RerankFallback.UNAVAILABLE
+        editor.clearUnderline()
     }
 
     private fun ui(candidates: List<Candidate>): ImeUiState {
         val lookedUp = shownCandidates(mode, candidates)
-        val hasUnconfirmed = (mode == KeyboardMode.ZHUYIN && hasComposition) || english.isNotEmpty()
+        val hasUnconfirmed = (mode == KeyboardMode.ZHUYIN && zhuyin.hasComposition) || english.active
         val visible = if (lookedUp.isEmpty() && !hasUnconfirmed) clipboardCandidates() else lookedUp
         return ImeUiState(
             mode = mode,
@@ -1325,7 +1008,7 @@ internal class CandidateController(
             hasUnconfirmedText = hasUnconfirmed,
             numberPad = if (mode == KeyboardMode.NUMBER) numberPad else NumberPad.NONE,
             preview = if (mode == KeyboardMode.ZHUYIN) {
-                compositionText(previewComposing, previewReading)
+                compositionText(zhuyin.previewComposing, zhuyin.previewReading)
             } else {
                 ""
             },
@@ -1348,17 +1031,16 @@ internal class CandidateController(
     }
 
     private fun readCursor(): CursorSession? {
-        val ic = connection() ?: return null
+        if (!editor.hasField()) return null
         return try {
-            val request = ExtractedTextRequest().apply { hintMaxChars = MAX_EXTRACT }
-            val extracted = ic.getExtractedText(request, 0)
+            val extracted = editor.extractedText(MAX_EXTRACT)
             val extractedText = extracted?.text?.toString()
             val selection = extracted?.selectionEnd ?: -1
             if (extracted != null && extractedText != null && selection >= 0) {
                 return CursorSession(extractedText, extracted.startOffset, selection)
             }
-            val before = ic.getTextBeforeCursor(MAX_EXTRACT, 0)?.toString() ?: return null
-            val after = ic.getTextAfterCursor(MAX_EXTRACT, 0)?.toString() ?: return null
+            val before = editor.textBefore(MAX_EXTRACT)?.toString() ?: return null
+            val after = editor.textAfter(MAX_EXTRACT)?.toString() ?: return null
             // A full before-cursor read is an absolute offset. A capped one is not.
             if (before.length >= MAX_EXTRACT) return null
             CursorSession(before + after, startOffset = 0, cursor = before.length)
@@ -1370,10 +1052,7 @@ internal class CandidateController(
     private fun contextBefore(): String {
         return traced("ime.contextBefore") {
             try {
-                connection()
-                    ?.getTextBeforeCursor(RerankLimits.CONTEXT_CHARS, 0)
-                    ?.toString()
-                    .orEmpty()
+                editor.textBefore(RerankLimits.CONTEXT_CHARS)?.toString().orEmpty()
             } catch (_: Exception) {
                 ""
             }
@@ -1381,12 +1060,12 @@ internal class CandidateController(
     }
 
     private fun isEmailContext(): Boolean {
-        val before = connection()?.getTextBeforeCursor(64, 0)?.toString().orEmpty()
+        val before = editor.textBefore(64)?.toString().orEmpty()
         return emailSuggest.hasEmailContext(before, editorInfo())
     }
 
     private fun beforeUsername(): String {
-        val before = connection()?.getTextBeforeCursor(64, 0)?.toString().orEmpty()
+        val before = editor.textBefore(64)?.toString().orEmpty()
         val at = before.lastIndexOf('@')
         if (at <= 0) return ""
         val sub = before.substring(0, at)
@@ -1445,6 +1124,7 @@ internal class CandidateController(
                     preference.hide(candidate)
                 } else if (preference.forget(candidate)) {
                     // Drop the assembled phrase, including the same text composed again from pieces.
+                    removeUserRow(candidate)
                     preference.hide(candidate)
                 }
             }
@@ -1463,24 +1143,13 @@ internal class CandidateController(
         spaceUndo = null
         when (undo) {
             SpaceUndo.Space -> {
-                connection()?.deleteSurroundingText(1, 0)
+                editor.deleteBefore(1)
                 trimRecent(1)
             }
-            SpaceUndo.Level -> {
-                composition.backspace()
-                apply(refresh())
-            }
             is SpaceUndo.English -> {
-                connection()?.deleteSurroundingText(undo.committed.length, 0)
+                editor.deleteBefore(undo.committed.length)
                 trimRecent(undo.committed.length)
-                english.append(undo.typed)
-                englishCaret = english.length
-                showEnglish()
-            }
-            is SpaceUndo.Text -> {
-                if (undo.committed.isEmpty()) return
-                connection()?.deleteSurroundingText(undo.committed.length, 0)
-                trimRecent(undo.committed.length)
+                english.restore(undo.typed)
             }
         }
     }
@@ -1489,9 +1158,9 @@ internal class CandidateController(
     fun commitVoice(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || closed) return
-        if (english.isNotEmpty()) finishEnglish(trailing = " ", takePrediction = false)
-        if (mode == KeyboardMode.ZHUYIN && hasComposition) {
-            finishZhuyinComposition()
+        if (english.active) english.finish(trailing = " ", takePrediction = false)
+        if (mode == KeyboardMode.ZHUYIN && zhuyin.hasComposition) {
+            zhuyin.finish()
             commit(" ")
         }
         commit(trimmed)
@@ -1501,20 +1170,15 @@ internal class CandidateController(
     private fun adjustsEnglish(candidate: Candidate): Boolean {
         val letters = if (mode.isLetters) mode else base
         if (letters != KeyboardMode.LATIN) return false
-        if (candidate.reading.isNotEmpty() || candidate.source == CandidateSource.CLIPBOARD) return false
-        return EnglishLexicon.isValidWord(candidate.text)
+        return english.adjusts(candidate)
     }
 
     private fun reloadCandidates() {
         when {
-            hasComposition -> if (chiakey) {
-                if (holdingSentence || !chain.isEmpty) showHeld() else showFrame()
-            } else {
-                apply(refresh())
-            }
-            english.isNotEmpty() -> showEnglish()
+            zhuyin.hasComposition -> zhuyin.reload()
+            english.active -> english.reload()
             else -> {
-                presented = emptyList()
+                presenter.show(emptyList())
                 refreshIdleSuggestions()
             }
         }
@@ -1553,9 +1217,7 @@ internal class CandidateController(
 
     private sealed interface SpaceUndo {
         data object Space : SpaceUndo
-        data object Level : SpaceUndo
         data class English(val typed: String, val committed: String) : SpaceUndo
-        data class Text(val committed: String) : SpaceUndo
     }
 
     private fun saveEmailHistory() {
@@ -1573,40 +1235,21 @@ internal class CandidateController(
     private companion object {
         const val TAG = "FsKeyboard"
         const val RECENT_CHARS = 32
-        const val SLOW_LOOKUP_MS = 5L
         const val MAX_EXTRACT = 20_000
         const val ENGLISH_CANDIDATES = 8
         const val ENGLISH_ASSET = "lexicon/english.tsv"
         const val USER_ENGLISH_FILE = "lexicon/user_english.tsv"
         const val CANDIDATE_PREF_FILE = "lexicon/candidate_pref.tsv"
         const val SYMBOL_FILE = "lexicon/symbol_freq.tsv"
-        const val LEXICON_BIN = "lexicon/lexicon.bin"
         const val EMAIL_DOMAINS_FILE = "lexicon/email_domains.tsv"
-        const val LEXICON_MISSING = "詞庫尚未下載"
-        const val LEXICON_CONSENT =
-            "詞庫來自千秋輸入法綜合詞庫，含 CC BY-NC 資料，僅供非商業使用，打過的字不會上傳。點此下載"
-    }
+        const val FS_LEXICON_FILE = FsLexicon.FILE_NAME
 
-    private enum class LexiconPrompt { HIDDEN, MISSING, CONSENT }
+        /** An assembled phrase has no lexicon score. Rank steps stay on [CandidatePreference]. */
+        const val USER_PHRASE_WEIGHT = 0.0
+    }
 
     private class CursorSession(val text: String, val startOffset: Int, var cursor: Int)
 
-    /** Hanzi the user picked, and the syllables they had typed for it. */
-    private class ChosenSpan(val text: String, val reading: List<SyllableReading>)
-
-    /** Puts the latest picked Hanzi back into the bopomofo that produced it. */
-    private fun restoreLatestChosen() {
-        val span = chosenSpans.removeAt(chosenSpans.lastIndex)
-        val prefix = chosenPrefix.toString()
-        if (span.text.isNotEmpty() && prefix.endsWith(span.text)) {
-            chosenPrefix.setLength(prefix.length - span.text.length)
-        } else if (chosenPrefix.isNotEmpty()) {
-            chosenPrefix.deleteCharAt(chosenPrefix.lastIndex)
-        }
-        if (span.reading.isNotEmpty()) chain.insertFront(span.reading)
-        holdingSentence = true
-        edit { showHeld() }
-    }
 
     /** On unless the settings screen turns it off, or the preference store cannot be read. */
     private fun dropUnusedHabits(): Boolean {
@@ -1617,330 +1260,52 @@ internal class CandidateController(
         }
     }
 
-    private fun showFrame() {
-        lexiconPrompt = LexiconPrompt.HIDDEN
-        if (frame.committed.isNotEmpty()) {
-            val text = frame.committed
-            frame = ChiaKeyFrame.parse("")
-            clearChain()
-            commit(text)
-            zhuyinEngine.acknowledge()
-            apply(EngineSnapshot())
-            return
-        }
-        val typedReading = when {
-            !chain.isEmpty -> chain.text
-            pendingToneText.isNotEmpty() -> pendingToneText
-            else -> ""
-        }
-        if (typedReading.isNotEmpty() || chosenPrefix.isNotEmpty()) {
-            if (frame.composing.isNotEmpty()) frame = frame.copy(composing = "")
-            val readings = if (!chain.isEmpty) chain.readings() else pendingTone
-            val offered = if (readings.isEmpty()) emptyList() else partialLexicon.candidates(readings)
-            presentComposition(typedReading, offered)
-            return
-        }
-        val engineCandidates = frame.candidates.mapIndexed { index, text ->
-            Candidate(text = text, engineIndex = index, source = CandidateSource.RIME)
-        }
-        val toneOffer = engineCandidates.isEmpty() && pendingTone.isNotEmpty()
-        val candidates = when {
-            engineCandidates.isNotEmpty() -> engineCandidates
-            toneOffer -> partialLexicon.candidates(pendingTone)
-            !chain.isEmpty && !chain.lastToneChosen() -> partialLexicon.candidates(chain.readings())
-            else -> emptyList()
-        }
-        if (chosenPrefix.isNotEmpty()) {
-            if (frame.composing.isNotEmpty()) frame = frame.copy(composing = "")
-            val reading = when {
-                !chain.isEmpty -> chain.text
-                toneOffer -> pendingToneText
-                else -> ""
-            }
-            presentComposition(reading, if (reading.isEmpty()) emptyList() else candidates)
-            return
-        }
-        val inline = if (toneOffer && frame.composing.isEmpty()) pendingToneText else frame.display
-        val bubbleReading = when {
-            !chain.isEmpty -> chain.text
-            toneOffer && frame.composing.isEmpty() -> pendingToneText
-            else -> frame.reading
-        }
-        rememberPreview(frame.composing, bubbleReading)
-        apply(
-            EngineSnapshot(
-                preedit = inline,
-                composingPreview = inline,
-                candidates = candidates,
-            ),
-        )
-    }
 
-    /**
-     * The held reading, underlined in the editor and shown in the bubble.
-     * Engine composing text is a prediction, not the bopomofo still open.
-     * Chosen Hanzi stays in front of that reading.
-     */
-    private fun showHeld() {
-        if (frame.composing.isNotEmpty()) frame = frame.copy(composing = "")
-        presentComposition(chain.text, partialLexicon.candidates(chain.readings()))
-    }
-
-    /**
-     * Chosen Hanzi, then the bopomofo still open. [frame.composing] is not part of it.
-     */
-    private fun presentComposition(reading: String, candidates: List<Candidate>) {
-        val hanzi = chosenPrefix.toString()
-        val shown = hanzi + reading
-        rememberPreview(hanzi, reading)
-        apply(
-            EngineSnapshot(
-                preedit = shown,
-                composingPreview = shown,
-                candidates = withCreated(reading, candidates),
-            ),
-        )
-    }
-
-    /** Puts a phrase the user assembled ahead of the lexicon rows for this reading. */
-    private fun withCreated(reading: String, candidates: List<Candidate>): List<Candidate> {
-        val extra = preference.createdMatching(reading)
-        if (extra.isEmpty()) return candidates
-        val known = HashSet<String>(candidates.size)
-        for (candidate in candidates) known += candidate.reading + "\t" + candidate.text
-        val added = ArrayList<Candidate>()
-        for (candidate in extra) {
-            val id = candidate.reading + "\t" + candidate.text
-            if (!known.add(id)) continue
-            added += candidate.copy(span = syllableCount(candidate.reading))
-        }
-        return if (added.isEmpty()) candidates else added + candidates
-    }
-
-    private fun syllableCount(reading: String): Int {
-        val parsed = BopomofoChain()
-        for (ch in reading) parsed.append(ch)
-        return parsed.size.coerceAtLeast(1)
-    }
-
-    /** Several picks joined into one phrase. One lexicon row is not a created word. */
-    private fun rememberAssembledPhrase() {
-        if (chosenSpans.size < 2) return
-        val text = chosenPrefix.toString()
-        if (text.isEmpty()) return
-        val reading = buildString {
-            for (span in chosenSpans) {
-                for (syllable in span.reading) {
-                    append(syllable.body)
-                    append(syllable.tone.mark)
-                }
-            }
-        }
-        if (reading.isEmpty()) return
-        preference.remember(
-            Candidate(
-                text = text,
-                engineIndex = -1,
-                source = CandidateSource.SYNTHETIC,
-                span = chosenSpans.sumOf { it.reading.size }.coerceAtLeast(1),
-                reading = reading,
-            ),
-        )
-        savePreference()
-    }
-
-    /** A syllable is still open, so space marks 平聲 instead of committing. */
-    private fun openZhuyinSyllable(): Boolean {
-        return holdingSentence || !chain.isEmpty || pendingTone.isNotEmpty() || frame.active
-    }
-
-    /**
-     * Appends [candidate] to the chosen Hanzi and drops the syllables it covers.
-     * Bopomofo still open stays in this composition, ahead of the field.
-     * When the preview is only Hanzi, those characters are written immediately.
-     */
-    private fun acceptPartial(candidate: Candidate) {
-        val span = candidate.span.coerceAtLeast(1)
-        val covered = when {
-            !chain.isEmpty -> chain.readings().take(span.coerceAtMost(chain.size))
-            else -> pendingTone.take(span.coerceAtMost(pendingTone.size))
-        }
-        if (!holdingSentence) {
-            // enginePrefixKeys are already in the engine and are not part of mirrored.
-            // Leaving them makes the next frame show that spelling again.
-            repeat(mirrored + enginePrefixKeys) { frame = zhuyinEngine.handleKey(8) }
-            mirrored = 0
-            enginePrefix.clear()
-            enginePrefixKeys = 0
-            clearPendingTone()
-            if (frame.reading.isEmpty()) frame = ChiaKeyFrame.parse("")
-        }
-        chain.dropFront(span.coerceAtMost(chain.size))
-        if (chain.isEmpty) {
-            holdingSentence = false
-            if (frame.reading.isEmpty()) frame = ChiaKeyFrame.parse("")
-        }
-        if (covered.isNotEmpty()) chosenSpans.add(ChosenSpan(candidate.text, covered))
-        chosenPrefix.append(candidate.text)
-        if (candidate.source != CandidateSource.CLIPBOARD && candidate.source != CandidateSource.LEXICON) {
-            preference.promote(candidate)
-            savePreference()
-        }
-        if (chain.isEmpty && pendingTone.isEmpty() && frame.reading.isEmpty()) {
-            commitChosenPrefix()
-            return
-        }
-        // Replacing the underline can report an empty composing span. Ignore that
-        // report so the syllables still open are not dropped.
-        edit {
-            if (!chain.isEmpty) showHeld() else presentComposition("", emptyList())
-        }
-    }
-
-    /** Writes the chosen Hanzi. [trailing] is the space after a finished choice. */
-    private fun commitChosenPrefix(trailing: String = "") {
-        val text = chosenPrefix.toString()
-        if (text.isEmpty() && trailing.isEmpty()) return
-        rememberAssembledPhrase()
-        edit {
-            clearChain()
-            frame = ChiaKeyFrame.parse("")
-            zhuyinEngine.reset()
-            if (text.isNotEmpty()) commit(text)
-            if (trailing.isNotEmpty()) commit(trailing)
-            apply(EngineSnapshot())
-        }
-    }
-
-    private inline fun edit(block: () -> Unit) {
-        val ic = connection()
+    private fun edit(block: () -> Unit) {
         editDepth += 1
         try {
-            try {
-                ic?.beginBatchEdit()
-            } catch (_: Exception) {
-                // The field can close mid-edit. The depth still covers commitText.
-            }
-            block()
+            editor.batch(block)
         } finally {
-            try {
-                ic?.endBatchEdit()
-            } catch (_: Exception) {
-                // The text is already in the field.
-            } finally {
-                editDepth -= 1
-            }
+            editDepth -= 1
         }
-    }
-
-    private fun rememberPreview(composing: String, reading: String) {
-        previewComposing = composing
-        previewReading = reading
     }
 
     /** Replaces sentence guesses after the ChiaKey unigram index is published. */
     fun publishPartialLexicon(next: PartialLexicon) {
         post {
-            partialLexicon = next
-            if (!chiakey || mode != KeyboardMode.ZHUYIN) return@post
-            when {
-                holdingSentence -> showHeld()
-                !chain.isEmpty && !chain.lastToneChosen() -> showFrame()
-                pendingTone.isNotEmpty() -> showFrame()
-            }
+            if (closed) return@post
+            lexiconStore.replacePartial(next)
+            if (mode != KeyboardMode.ZHUYIN) return@post
+            zhuyin.afterPartialLexicon()
         }
     }
 
-    private fun clearPendingTone() {
-        pendingTone = emptyList()
-        pendingToneText = ""
-    }
-
-    /**
-     * Backspaces every engine key in this composition and leaves the reading on [chain].
-     * [tailKeys] are the open chain's keys. [enginePrefixKeys] are the toned syllables
-     * already in the engine. [showHeld] is only valid after this, when the chain is whole.
-     */
-    private fun holdComposition(tailKeys: Int) {
-        if (enginePrefix.isNotEmpty()) chain.insertFront(enginePrefix)
-        val keys = enginePrefixKeys + tailKeys
-        enginePrefix.clear()
-        enginePrefixKeys = 0
-        repeat(keys) { frame = zhuyinEngine.handleKey(8) }
-        mirrored = 0
-        holdingSentence = true
-    }
-
-    private fun clearChain() {
-        chain.clear()
-        holdingSentence = false
-        mirrored = 0
-        enginePrefix.clear()
-        enginePrefixKeys = 0
-        clearPendingTone()
-        chosenPrefix.setLength(0)
-        chosenSpans.clear()
-        previewComposing = ""
-        previewReading = ""
-    }
-
-    /** Commits the segment on screen. The punctuation or mode change is not an engine key. */
-    private fun finishZhuyinComposition() {
-        if (!chiakey) {
-            finishComposition(convertAll())
+    /** Writes the phrase the user assembled. A missing files directory is ignored in tests. */
+    private fun rememberUserRow(candidate: Candidate) {
+        val lexicon = userLexicon
+        if (lexicon != null) {
+            lexicon.addUser(candidate.reading, candidate.text, USER_PHRASE_WEIGHT)
             return
         }
-        val reading = if (!chain.isEmpty) chain.text else pendingToneText
-        val text = chosenPrefix.toString() + reading
-        edit {
-            clearChain()
-            frame = ChiaKeyFrame.parse("")
-            if (text.isNotEmpty()) commit(text)
-            zhuyinEngine.reset()
-            apply(EngineSnapshot())
+        runCatching {
+            FsLexicon(File(context.filesDir, FS_LEXICON_FILE)).addUser(
+                candidate.reading,
+                candidate.text,
+                USER_PHRASE_WEIGHT,
+            )
         }
     }
 
-    private fun showLexiconPrompt() {
-        lexiconPrompt = LexiconPrompt.MISSING
-        frame = ChiaKeyFrame.parse("")
-        val chip = lexiconChip(LEXICON_MISSING)
-        presented = listOf(chip)
-        publish(EngineSnapshot(candidates = presented))
-    }
-
-    private fun onLexiconPrompt() {
-        if (lexiconPrompt == LexiconPrompt.CONSENT) {
-            onRequestLexicon()
+    private fun removeUserRow(candidate: Candidate) {
+        val lexicon = userLexicon
+        if (lexicon != null) {
+            lexicon.removeUser(candidate.reading, candidate.text)
             return
         }
-        lexiconPrompt = LexiconPrompt.CONSENT
-        val chip = lexiconChip(LEXICON_CONSENT)
-        presented = listOf(chip)
-        publish(EngineSnapshot(candidates = presented))
+        runCatching {
+            FsLexicon(File(context.filesDir, FS_LEXICON_FILE)).removeUser(candidate.reading, candidate.text)
+        }
     }
 
-    private fun lexiconChip(text: String): Candidate {
-        return Candidate(
-            text = text,
-            engineIndex = -1,
-            source = CandidateSource.LEXICON,
-            span = 0,
-        )
-    }
-
-    private fun statusMessage(): String = when {
-        chiakey -> ""
-        else -> lexiconStatus()
-    }
-
-    private fun lexiconStatus(): String = when (lexicon.status) {
-        EngineStatus.READY -> ""
-        EngineStatus.LOADING -> context.getString(R.string.status_loading)
-        EngineStatus.MISSING_LIBRARY -> context.getString(R.string.status_missing_rime)
-        EngineStatus.FAILED -> context.getString(
-            R.string.status_failed,
-            lexicon.statusDetail.ifBlank { "unknown" },
-        )
-    }
+    private fun statusMessage(): String = ""
 }

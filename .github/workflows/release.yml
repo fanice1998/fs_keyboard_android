@@ -43,7 +43,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,x86_64-linux-android
+          targets: aarch64-linux-android
 
       - uses: android-actions/setup-android@v4
         with:
@@ -77,7 +77,7 @@ jobs:
             VERSION_NAME="${VERSION_NAME#v}"
           fi
 
-          ./gradlew :app:assembleRelease :app:bundleRelease -PversionName="$VERSION_NAME"
+          ./gradlew :app:assembleRelease :app:bundleRelease -PversionName="$VERSION_NAME" -PbundleChiaKeyLexicon=false
 
       - name: Create GitHub Release
         env:

@@ -11,6 +11,7 @@ import android.os.Build
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputContentInfo
+import com.fskeyboard.ime.session.EditorSession
 import kotlin.math.min
 
 /**
@@ -164,11 +165,11 @@ internal fun mimeAccepted(accepted: Array<String>?, mime: String): Boolean {
  * Inserts [offer] at the caret. Text is committed whole.
  * An image uses [InputConnection.commitContent] only when the field lists that type.
  */
-internal fun pasteClip(connection: InputConnection, offer: ClipOffer, editor: EditorInfo?): Boolean {
+internal fun pasteClip(session: EditorSession, offer: ClipOffer, editor: EditorInfo?): Boolean {
     val text = offer.text
     if (text != null) {
         return try {
-            connection.commitText(text, 1)
+            session.commitText(text)
             true
         } catch (_: Exception) {
             false
@@ -182,7 +183,7 @@ internal fun pasteClip(connection: InputConnection, offer: ClipOffer, editor: Ed
             Uri.parse(uriText),
             ClipDescription("clipboard", arrayOf(mime)),
         )
-        connection.commitContent(
+        session.commitContent(
             info,
             InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION,
             null,

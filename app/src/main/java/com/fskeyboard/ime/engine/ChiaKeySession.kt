@@ -12,19 +12,39 @@ internal class ChiaKeySession(private val root: File) : ZhuyinEngine {
 
     private val gate = Any()
     @Volatile private var handle = 0L
+    private var opening = false
 
     override val ready: Boolean
         get() = handle != 0L
 
-    fun open(): Boolean = synchronized(gate) {
-        if (handle != 0L) return true
-        if (!database.isFile) return false
-        if (!ChiaKeyNative.ensureLoaded()) return false
+    /**
+     * Opens the native runtime. The database load does not hold [gate], so a
+     * field switch can reset or ignore a key instead of waiting on this call.
+     */
+    fun open(): Boolean {
+        synchronized(gate) {
+            if (handle != 0L) return true
+            if (opening) return false
+            opening = true
+        }
+        var opened = 0L
+        try {
+            opened = openNative()
+        } finally {
+            synchronized(gate) {
+                opening = false
+                if (handle == 0L && opened != 0L) handle = opened
+            }
+        }
+        return handle != 0L
+    }
+
+    private fun openNative(): Long {
+        if (!database.isFile) return 0L
+        if (!ChiaKeyNative.ensureLoaded()) return 0L
         writable.mkdirs()
         File(writable, "Preferences").mkdirs()
-        val opened = ChiaKeyNative.nativeOpen(writable.absolutePath, database.absolutePath)
-        handle = opened
-        opened != 0L
+        return ChiaKeyNative.nativeOpen(writable.absolutePath, database.absolutePath)
     }
 
     fun close() = synchronized(gate) {
@@ -51,7 +71,9 @@ internal class ChiaKeySession(private val root: File) : ZhuyinEngine {
         synchronized(gate) {
             val current = handle
             if (current == 0L) return
-            if (!ChiaKeyNative.nativeReset(current)) handle = 0L
+            // A failed clear must not drop the runtime. The next key still
+            // needs this handle; closing it left zhuyin dead until relaunch.
+            ChiaKeyNative.nativeReset(current)
         }
     }
 

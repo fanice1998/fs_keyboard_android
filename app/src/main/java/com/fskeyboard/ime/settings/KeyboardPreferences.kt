@@ -4,6 +4,7 @@ import android.content.Context
 import com.fskeyboard.ime.keyboard.ComputerKeyMap
 import com.fskeyboard.ime.keyboard.KeyboardHeight
 import com.fskeyboard.ime.keyboard.KeyboardMode
+import com.fskeyboard.ime.ui.KeyboardTheme
 import com.fskeyboard.ime.rerank.RerankPreferences
 
 /**
@@ -85,6 +86,14 @@ internal class KeyboardPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_PREVIEW, enabled).apply()
     }
 
+    /** Paper unless the stored id is the ink theme. */
+    fun keyboardTheme(): KeyboardTheme = KeyboardTheme.of(prefs.getString(KEY_THEME, null))
+
+    fun setKeyboardTheme(theme: KeyboardTheme) {
+        if (prefs.getString(KEY_THEME, null) == theme.id) return
+        prefs.edit().putString(KEY_THEME, theme.id).apply()
+    }
+
     /**
      * Whether a remembered word that has been offered twenty times without being
      * chosen is dropped. On unless the user turns it off.
@@ -122,6 +131,7 @@ internal class KeyboardPreferences(context: Context) {
         const val KEY_COMPUTER_KEY_MAP = "latin_computer_key_map"
         const val KEY_VIBRATION = "keyboard_vibration_enabled"
         const val KEY_PREVIEW = "key_preview_enabled"
+        const val KEY_THEME = "keyboard_theme"
         const val KEY_FORGET_UNUSED = "forget_unused_predictions"
         const val KEY_LETTER_MODE = "letter_mode"
     }

@@ -26,6 +26,7 @@ import com.fskeyboard.ime.keyboard.KeyboardHeight
 import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.keyboard.KeyboardView
 import com.fskeyboard.ime.keyboard.SwipeDirection
+import com.fskeyboard.ime.ui.KeyboardTheme
 import com.fskeyboard.ime.ui.dp
 import com.fskeyboard.ime.latency.KeyLatency
 import com.fskeyboard.ime.rerank.RerankPreferences
@@ -122,6 +123,13 @@ class ImeSettingsActivity : Activity() {
         vibration.setOnCheckedChangeListener { _, checked ->
             keyboardPreferences.setVibrationEnabled(checked)
             previewKeyboard.vibrationEnabled = checked
+        }
+        val inkTheme = findViewById<Switch>(R.id.ink_theme_switch)
+        inkTheme.isChecked = keyboardPreferences.keyboardTheme().id == KeyboardTheme.INK
+        inkTheme.setOnCheckedChangeListener { _, checked ->
+            val theme = if (checked) KeyboardTheme.ink() else KeyboardTheme.paper()
+            keyboardPreferences.setKeyboardTheme(theme)
+            previewKeyboard.theme = theme
         }
         val keyPreview = findViewById<Switch>(R.id.key_preview_switch)
         keyPreview.isChecked = keyboardPreferences.keyPreviewEnabled()
@@ -227,6 +235,7 @@ class ImeSettingsActivity : Activity() {
             fullWidthSymbols = keyboardPreferences.fullWidthSymbols()
             vibrationEnabled = keyboardPreferences.vibrationEnabled()
             keyPreviewEnabled = keyboardPreferences.keyPreviewEnabled()
+            theme = keyboardPreferences.keyboardTheme()
         }
         val width = LinearLayout.LayoutParams.MATCH_PARENT
         val height = LinearLayout.LayoutParams.WRAP_CONTENT

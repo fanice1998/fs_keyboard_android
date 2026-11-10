@@ -1,10 +1,8 @@
 package com.fskeyboard.ime.candidate
 
-import android.content.Context
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
-import com.fskeyboard.ime.engine.ZhuyinLexicon
 import com.fskeyboard.ime.keyboard.ComputerKey
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.rerank.CandidatePipeline
@@ -48,19 +46,9 @@ class ComputerKeyDispatchTest {
             handler,
         ) as InputConnection
         val context = object : android.content.ContextWrapper(null) {}
-        val lexicon = object : ZhuyinLexicon {
-            override val status = com.fskeyboard.ime.engine.EngineStatus.READY
-            override val statusDetail = ""
-            override val isReady = true
-            override fun start(context: Context, onReady: () -> Unit) = Unit
-            override fun close() = Unit
-            override fun lookup(queries: List<String>, before: String) = emptyList<Candidate>()
-            override fun learn(phrases: List<Pair<String, String>>) = Unit
-        }
         val armed = ArrayList<Set<ComputerKey>>()
         val controller = CandidateController(
             context = context,
-            lexicon = lexicon,
             pipeline = CandidatePipeline(),
             connection = { connection },
             editorInfo = { EditorInfo() },
@@ -87,18 +75,8 @@ class ComputerKeyDispatchTest {
             handler,
         ) as InputConnection
         val context = object : android.content.ContextWrapper(null) {}
-        val lexicon = object : ZhuyinLexicon {
-            override val status = com.fskeyboard.ime.engine.EngineStatus.READY
-            override val statusDetail = ""
-            override val isReady = true
-            override fun start(context: Context, onReady: () -> Unit) = Unit
-            override fun close() = Unit
-            override fun lookup(queries: List<String>, before: String) = emptyList<Candidate>()
-            override fun learn(phrases: List<Pair<String, String>>) = Unit
-        }
         val controller = CandidateController(
             context = context,
-            lexicon = lexicon,
             pipeline = CandidatePipeline(),
             connection = { connection },
             editorInfo = { EditorInfo() },
@@ -118,19 +96,9 @@ class ComputerKeyDispatchTest {
             handler,
         ) as InputConnection
         val context = object : android.content.ContextWrapper(null) {}
-        val lexicon = object : ZhuyinLexicon {
-            override val status = com.fskeyboard.ime.engine.EngineStatus.READY
-            override val statusDetail = ""
-            override val isReady = true
-            override fun start(context: Context, onReady: () -> Unit) = Unit
-            override fun close() = Unit
-            override fun lookup(queries: List<String>, before: String) = emptyList<Candidate>()
-            override fun learn(phrases: List<Pair<String, String>>) = Unit
-        }
         val armed = ArrayList<Set<ComputerKey>>()
         val controller = CandidateController(
             context = context,
-            lexicon = lexicon,
             pipeline = CandidatePipeline(),
             connection = { connection },
             editorInfo = { EditorInfo() },
@@ -211,18 +179,8 @@ class ComputerKeyDispatchTest {
             handler,
         ) as InputConnection
         val context = object : android.content.ContextWrapper(null) {}
-        val lexicon = object : ZhuyinLexicon {
-            override val status = com.fskeyboard.ime.engine.EngineStatus.READY
-            override val statusDetail = ""
-            override val isReady = true
-            override fun start(context: Context, onReady: () -> Unit) = Unit
-            override fun close() = Unit
-            override fun lookup(queries: List<String>, before: String) = emptyList<Candidate>()
-            override fun learn(phrases: List<Pair<String, String>>) = Unit
-        }
         return CandidateController(
             context = context,
-            lexicon = lexicon,
             pipeline = CandidatePipeline(),
             connection = { connection },
             editorInfo = { EditorInfo() },

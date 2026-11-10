@@ -1,12 +1,10 @@
 package com.fskeyboard.ime.candidate
 
-import android.content.Context
 import android.content.ContextWrapper
 import android.text.InputType
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
-import com.fskeyboard.ime.engine.ZhuyinLexicon
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.rerank.CandidatePipeline
@@ -264,6 +262,7 @@ class ClipboardCandidateTest {
                     true
                 }
                 "deleteSurroundingText" -> true
+                "sendKeyEvent" -> true
                 "finishComposingText" -> true
                 "setComposingText" -> true
                 "getSelectedText" -> null
@@ -289,18 +288,8 @@ class ClipboardCandidateTest {
             handler,
         ) as InputConnection
         val context = object : ContextWrapper(null) {}
-        val lexicon = object : ZhuyinLexicon {
-            override val status = com.fskeyboard.ime.engine.EngineStatus.READY
-            override val statusDetail = ""
-            override val isReady = true
-            override fun start(context: Context, onReady: () -> Unit) = Unit
-            override fun close() = Unit
-            override fun lookup(queries: List<String>, before: String) = emptyList<Candidate>()
-            override fun learn(phrases: List<Pair<String, String>>) = Unit
-        }
         return CandidateController(
             context = context,
-            lexicon = lexicon,
             pipeline = CandidatePipeline(),
             connection = { connection },
             editorInfo = editorInfo,

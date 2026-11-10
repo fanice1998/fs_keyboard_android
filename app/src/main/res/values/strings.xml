@@ -3,11 +3,6 @@
     <string name="app_name">FsKeyboard</string>
     <string name="ime_name">FsKeyboard 注音</string>
     <string name="subtype_zhuyin">中文（臺灣注音）</string>
-    <string name="status_loading">正在載入注音詞庫…</string>
-    <string name="status_missing_rime">尚未載入注音詞庫，仍可組字</string>
-    <string name="lexicon_missing">詞庫尚未下載</string>
-    <string name="lexicon_consent">詞庫來自千秋輸入法綜合詞庫，含 CC BY-NC 資料，僅供非商業使用，打過的字不會上傳。點此下載</string>
-    <string name="status_failed">詞庫載入失敗：%1$s</string>
     <string name="clipboard_description">剪貼簿，%1$s</string>
     <string name="clipboard_prompt_title">剪貼簿</string>
     <string name="clipboard_prompt_message">這是剪貼簿的內容。要清空系統剪貼簿嗎？</string>
@@ -37,7 +32,7 @@
     <string name="latin_top_number_row_switch">開啟英文鍵盤頂層數字鍵</string>
     <string name="latin_top_number_row_summary">開啟時，在英文鍵盤頂部額外顯示一排獨立的數字按鍵（1～0）。關閉後恢復為標準四排鍵盤。</string>
     <string name="latin_computer_keys_switch">英文鍵盤電腦特殊鍵</string>
-    <string name="latin_computer_keys_summary">開啟後，英文鍵盤的字母、數字、逗號、句號和刪除鍵可以往八個方向滑出快捷鍵或符號。左下角點一下是 Ctrl，語言鍵點一下切換注音，語言鍵往左上滑是 Alt，語言鍵往右下滑是 Fn，逗號往左上滑是反引號，逗號往右下滑是 ⌘。這些點一下或滑一下只加在下一個按鍵上，再做一次就取消。按住 Ctrl、Alt、Fn、⌘、Home 或 End 時會像方向鍵一樣持續送出。修飾鍵按住約 0.4 秒後放開則保持按下，再點一次原來的按鍵才取消。滑向沒有設定的方向不會打出字。字母、數字、逗號和句號按住不放會連續打出。</string>
+    <string name="latin_computer_keys_summary">開啟後，英文鍵盤的字母、數字、逗號、句號和刪除鍵可以往八個方向滑出快捷鍵或符號。左下角點一下是 Ctrl，語言鍵點一下切換注音，語言鍵往左上滑是 Alt，語言鍵往右下滑是 Fn，逗號往左上滑是反引號，逗號往右下滑是 ⌘。Fn 加上 1 到 9 是 F1 到 F9，0 是 F10，o 是 F11，p 是 F12。這些點一下或滑一下只加在下一個按鍵上，再做一次就取消。按住 Ctrl、Alt、Fn、⌘、Home 或 End 時會像方向鍵一樣持續送出。修飾鍵按住約 0.4 秒後放開則保持按下，再點一次原來的按鍵才取消。滑向沒有設定的方向不會打出字。字母、數字、逗號和句號按住不放會連續打出。</string>
     <string name="computer_key_editor_hint">點一個按鍵，再點一個方向，指定快捷鍵或符號。已經用在別的按鍵上的不能再選，要先清除原本的位置。同一個按鍵的不同方向可以重複。</string>
     <string name="computer_key_pick_letter">先點選一個按鍵</string>
     <string name="computer_key_letter">正在設定 %1$s</string>
@@ -48,6 +43,8 @@
     <string name="computer_key_taken">%1$s 已用於 %2$s 的 %3$s</string>
     <string name="vibration_switch">按鍵振動回饋</string>
     <string name="vibration_summary">開啟時，按下按鍵或滑動游標時會產生觸覺震動回饋。關閉後不震動。</string>
+    <string name="ink_theme_switch">墨色按鍵</string>
+    <string name="ink_theme_summary">較深的底色、較細的圓角，以及一圈按鍵邊框。關掉則回到原來的紙色。</string>
     <string name="key_preview_switch">按鍵懸浮提示</string>
     <string name="key_preview_summary">開啟時，按下注音、字母或符號，會在按鍵上方短暫浮出放大的字。空白鍵、刪除和功能鍵不會出現。</string>
     <string name="unused_habit_switch">未使用的慣用詞自動忘掉</string>

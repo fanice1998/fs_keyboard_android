@@ -42,7 +42,7 @@ if [[ ! -f "$OUT/tatoeba/cmn_sentences.tsv" ]]; then
   bunzip2 -f "$OUT/tatoeba/cmn_sentences.tsv.bz2"
 fi
 
-# OpenCC 1.4.2 (Apache-2.0), the version tools/ci-engine.sh builds: which simplified
+# OpenCC 1.4.2 (Apache-2.0): which simplified
 # characters have more than one Traditional form, for the conversion review list.
 if [[ ! -f "$OUT/opencc/STCharacters.txt" ]]; then
   echo "fetch opencc STCharacters"

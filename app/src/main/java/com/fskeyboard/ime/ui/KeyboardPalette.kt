@@ -1,7 +1,6 @@
 package com.fskeyboard.ime.ui
 
 import android.content.res.Configuration
-import android.graphics.Color
 import android.view.View
 
 internal data class KeyboardPalette(
@@ -19,25 +18,25 @@ internal data class KeyboardPalette(
         fun of(night: Boolean): KeyboardPalette = if (night) DARK else LIGHT
 
         private val LIGHT = KeyboardPalette(
-            background = Color.parseColor("#E6E8EB"),
-            key = Color.parseColor("#FFFFFF"),
-            keyPressed = Color.parseColor("#C5D8F2"),
-            keyAction = Color.parseColor("#D0D4DA"),
-            text = Color.parseColor("#1C1C1E"),
-            hint = Color.parseColor("#6B7280"),
-            accent = Color.parseColor("#D6E6FA"),
-            keyPreview = Color.parseColor("#FFFFFF"),
+            background = 0xFFE6E8EB.toInt(),
+            key = 0xFFFFFFFF.toInt(),
+            keyPressed = 0xFFC5D8F2.toInt(),
+            keyAction = 0xFFD0D4DA.toInt(),
+            text = 0xFF1C1C1E.toInt(),
+            hint = 0xFF6B7280.toInt(),
+            accent = 0xFFD6E6FA.toInt(),
+            keyPreview = 0xFFFFFFFF.toInt(),
         )
 
         private val DARK = KeyboardPalette(
-            background = Color.parseColor("#1C1C1E"),
-            key = Color.parseColor("#2C2C2E"),
-            keyPressed = Color.parseColor("#3A4A63"),
-            keyAction = Color.parseColor("#3A3A3C"),
-            text = Color.parseColor("#F2F2F7"),
-            hint = Color.parseColor("#A1A1AA"),
-            accent = Color.parseColor("#31445F"),
-            keyPreview = Color.parseColor("#636366"),
+            background = 0xFF1C1C1E.toInt(),
+            key = 0xFF2C2C2E.toInt(),
+            keyPressed = 0xFF3A4A63.toInt(),
+            keyAction = 0xFF3A3A3C.toInt(),
+            text = 0xFFF2F2F7.toInt(),
+            hint = 0xFFA1A1AA.toInt(),
+            accent = 0xFF31445F.toInt(),
+            keyPreview = 0xFF636366.toInt(),
         )
     }
 }

@@ -34,6 +34,9 @@ internal class KeyPreviewPopup(private val host: View) {
     val isShowing: Boolean
         get() = window.isShowing
 
+    /** Set by the keyboard before [show]. Paper colors when the keyboard has not set one. */
+    var palette: KeyboardPalette? = null
+
     fun show(label: String, key: RectF, boardWidth: Int) {
         if (!host.isAttachedToWindow || host.windowToken == null || boardWidth <= 0) return
         if (label.isEmpty()) return
@@ -66,10 +69,13 @@ internal class KeyPreviewPopup(private val host: View) {
         val y = origin[1] + frame.top.roundToInt() - shadow
         val width = frame.width.roundToInt() + shadow * 2
         val height = frame.height.roundToInt() + shadow * 2
+        val colors = palette ?: KeyboardPalette.of(host.isNightMode())
         bubble.label = label
         bubble.textSizePx = textSize
         bubble.shadowPx = shadow.toFloat()
         bubble.cornerPx = host.dp(16).toFloat()
+        bubble.fillColor = colors.keyPreview
+        bubble.textColor = colors.text
         bubble.invalidate()
         try {
             if (window.isShowing) {
@@ -109,6 +115,8 @@ internal class KeyPreviewPopup(private val host: View) {
         var textSizePx: Float = 0f
         var shadowPx: Float = 0f
         var cornerPx: Float = 0f
+        var fillColor: Int = 0
+        var textColor: Int = 0
 
         private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
         private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -124,15 +132,14 @@ internal class KeyPreviewPopup(private val host: View) {
 
         override fun onDraw(canvas: Canvas) {
             if (label.isEmpty() || width == 0 || height == 0) return
-            val palette = KeyboardPalette.of(isNightMode())
             val inset = shadowPx
             card.set(inset, inset, width - inset, height - inset)
             if (card.width() <= 0f || card.height() <= 0f) return
-            fill.color = palette.keyPreview
+            fill.color = fillColor
             fill.setShadowLayer(inset * 0.55f, 0f, inset * 0.22f, 0x44000000)
             canvas.drawRoundRect(card, cornerPx, cornerPx, fill)
             fill.clearShadowLayer()
-            text.color = palette.text
+            text.color = textColor
             text.textSize = textSizePx
             val baseline = card.centerY() - (text.ascent() + text.descent()) / 2f
             canvas.drawText(label, card.centerX(), baseline, text)

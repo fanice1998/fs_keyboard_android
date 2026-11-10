@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class SchemaContractTest {
     @Test
@@ -86,23 +87,14 @@ class SchemaContractTest {
     }
 
     @Test
-    fun jniMethodsMatchTheKotlinDeclarations() {
-        val jni = readProjectFile("src/main/cpp/rime_jni.cpp")
-        val kotlin = readProjectFile("src/main/java/com/fskeyboard/ime/bridge/RimeNative.kt")
-        listOf(
-            "startup",
-            "shutdown",
-            "createSession",
-            "processKey",
-            "selectCandidate",
-            "selectSchema",
-            "setOption",
-            "getOption",
-        ).forEach { name ->
-            assertTrue(name, jni.contains("RimeNative_$name"))
-            assertTrue(name, kotlin.contains("fun $name"))
-        }
-        assertTrue(jni.contains("select_candidate"))
+    fun removedEnginesAreAbsent() {
+        assertFalse(projectFileExists("src/main/cpp/rime_jni.cpp"))
+        assertFalse(projectFileExists("src/main/java/com/fskeyboard/ime/engine/RimeEngine.kt"))
+        assertFalse(projectFileExists("src/main/java/com/fskeyboard/ime/engine/RustZhuyinLexicon.kt"))
+    }
+
+    private fun projectFileExists(relative: String): Boolean {
+        return File(relative).isFile || File("app/$relative").isFile
     }
 
     private fun section(text: String, start: String, end: String): String {

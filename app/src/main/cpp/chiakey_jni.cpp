@@ -88,19 +88,13 @@ Java_com_fskeyboard_ime_engine_ChiaKeyNative_nativeClose(JNIEnv*, jclass, jlong 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_fskeyboard_ime_engine_ChiaKeyNative_nativeReset(JNIEnv*, jclass, jlong handle) {
     Session* session = AsSession(handle);
-    if (!session || !session->runtime) return JNI_FALSE;
-    if (session->engine) {
-        CKC_EngineDestroy(session->engine);
-        session->engine = nullptr;
-    }
-    char* error = nullptr;
-    session->engine = CKC_RuntimeCreateEngine(session->runtime, &error);
-    CKC_StringDestroy(error);
-    if (session->engine) return JNI_TRUE;
-    CKC_RuntimeDestroy(session->runtime);
-    session->runtime = nullptr;
-    delete session;
-    return JNI_FALSE;
+    if (!session || !session->engine) return JNI_FALSE;
+    // Clear the composing buffer. Recreating the engine here reloads the
+    // lexicon on the main thread and, if that fails, used to free this
+    // session while Kotlin still held the handle. Zhuyin then swallowed
+    // every key until the process was killed.
+    CKC_EngineReset(session->engine);
+    return JNI_TRUE;
 }
 
 extern "C" JNIEXPORT jstring JNICALL

@@ -26,7 +26,7 @@ internal class ChiaKeyNative private constructor() {
         @JvmStatic
         external fun nativeClose(handle: Long)
 
-        /** False when the engine could not be created again. The handle is then dead. */
+        /** Clears the composing buffer. The handle stays valid. */
         @JvmStatic
         external fun nativeReset(handle: Long): Boolean
 

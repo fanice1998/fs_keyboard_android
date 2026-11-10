@@ -18,8 +18,8 @@ internal data class RerankRequest(
  * a different phrase than the one shown.
  * New phrases use a negative [Candidate.engineIndex].
  *
- * The list is the first window returned by librime (see [com.fskeyboard.ime.engine.RimeEngine]),
- * not a single Rime page. A neural reranker may reorder only a prefix of that list.
+ * The list is the candidate window for this key, not a single page.
+ * A neural reranker may reorder only a prefix of that list.
  */
 internal fun interface CandidateReranker {
     fun rerank(request: RerankRequest): List<Candidate>

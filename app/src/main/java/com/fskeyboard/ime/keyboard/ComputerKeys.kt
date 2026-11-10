@@ -102,6 +102,20 @@ internal fun computerKeyCode(value: Char): Int? {
 }
 
 /**
+ * Function key for Fn plus a Latin key.
+ * 1–9 are F1–F9, 0 is F10, o is F11, and p is F12. Other keys have none.
+ */
+internal fun fnFunctionKeyCode(value: Char): Int? {
+    if (value in '1'..'9') return KeyEvent.KEYCODE_F1 + (value - '1')
+    return when (value.lowercaseChar()) {
+        '0' -> KeyEvent.KEYCODE_F10
+        'o' -> KeyEvent.KEYCODE_F11
+        'p' -> KeyEvent.KEYCODE_F12
+        else -> null
+    }
+}
+
+/**
  * Eight slices around a key. [of] uses 0° as visual up and grows clockwise.
  * A movement inside the slop is a tap, so it returns null.
  */
@@ -330,6 +344,9 @@ internal class ComputerModifiers {
     fun isActive(): Boolean = armed.isNotEmpty() || held.isNotEmpty()
 
     fun hasLatched(): Boolean = armed.isNotEmpty()
+
+    /** True when [key] is waiting for the next key or locked down. */
+    fun has(key: ComputerKey): Boolean = key in armed || key in held
 
     fun toggle(key: ComputerKey) {
         if (!key.modifier) return

@@ -3,13 +3,6 @@
     native <methods>;
 }
 
-# Rime JNI bridge
--keep class com.fskeyboard.ime.bridge.RimeResponse { <init>(...); }
--keep class com.fskeyboard.ime.bridge.RimeNative { *; }
-
-# Rust lexicon JNI bridge
--keep class com.fskeyboard.ime.engine.RustLexiconNative { *; }
-
 # ChiaKey JNI bridge
 -keep class com.fskeyboard.ime.engine.ChiaKeyNative { *; }
 

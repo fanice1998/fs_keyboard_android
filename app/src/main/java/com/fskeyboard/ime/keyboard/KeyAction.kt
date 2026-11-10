@@ -52,8 +52,24 @@ internal sealed interface KeyAction {
     /**
      * A computer key from a tap or a swipe on an English letter.
      * [repeating] is a held modifier sending its own key, instead of arming the next letter.
+     * [shift] is the Latin shift Tab carries. Other computer keys leave it off.
      */
-    data class Computer(val key: ComputerKey, val repeating: Boolean = false) : KeyAction
+    data class Computer(
+        val key: ComputerKey,
+        val repeating: Boolean = false,
+        val shift: ShiftMode = ShiftMode.OFF,
+    ) : KeyAction
+}
+
+/** Tab carries the Latin shift the letter keys use. Other actions are unchanged. */
+internal fun KeyAction.applyingShift(mode: ShiftMode): KeyAction {
+    if (this is KeyAction.Computer && key == ComputerKey.TAB) return copy(shift = mode)
+    return this
+}
+
+/** A letter or Tab spends a one-shot shift. Caps lock stays. */
+internal fun KeyAction.consumesOneShotShift(): Boolean {
+    return this is KeyAction.Character || (this is KeyAction.Computer && key == ComputerKey.TAB)
 }
 
 internal enum class KeyRole {

@@ -5,17 +5,18 @@ import android.text.InputType
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import com.fskeyboard.ime.engine.ChiaKeyFrame
-import com.fskeyboard.ime.engine.EngineStatus
 import com.fskeyboard.ime.engine.ZhuyinEngine
-import com.fskeyboard.ime.engine.ZhuyinLexicon
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.keyboard.ZhuyinSpelling
+import com.fskeyboard.ime.lexicon.FsLexicon
+import com.fskeyboard.ime.lexicon.Row
 import com.fskeyboard.ime.rerank.CandidatePipeline
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.lang.reflect.Proxy
 
 class ChiaKeyTypingTest {
@@ -245,20 +246,15 @@ class ChiaKeyTypingTest {
         val engine = ScriptedEngine(ready = false)
         val field = StringBuilder()
         val states = mutableListOf<ImeUiState>()
-        var downloads = 0
-        val controller = chiakeyController(engine, field, StringBuilder(), states) { downloads += 1 }
+        val controller = chiakeyController(engine, field, StringBuilder(), states)
         controller.onStartInput(false)
         assertEquals("", states.last().candidates.message)
         type(controller, "ㄋ")
         assertEquals("", field.toString())
         assertEquals("", engine.asciiLog.toString())
-        assertEquals(listOf(MISSING), states.last().candidates.candidates.map { it.text })
-        controller.onCandidate(states.last().candidates.candidates.single())
-        assertEquals(0, downloads)
-        assertEquals(listOf(CONSENT), states.last().candidates.candidates.map { it.text })
-        controller.onCandidate(states.last().candidates.candidates.single())
-        assertEquals(1, downloads)
-        assertEquals("", field.toString())
+        assertTrue(states.all { state ->
+            state.candidates.candidates.none { it.text.contains("下載") }
+        })
     }
 
     @Test
@@ -825,6 +821,26 @@ class ChiaKeyTypingTest {
     }
 
     @Test
+    fun aPromotedCharacterDoesNotPassNiHao() {
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(
+            ScriptedEngine(),
+            StringBuilder(),
+            StringBuilder(),
+            states,
+            partial = sampleLexicon(),
+        )
+        controller.onStartInput(false)
+        type(controller, "ㄋㄧㄏㄠ")
+        val before = states.last().candidates.candidates.map { it.text }
+        assertEquals(before.indexOf("你好") + 1, before.indexOf("你"))
+        val ni = states.last().candidates.candidates.first { it.text == "你" }
+        controller.adjustCandidate(ni, CandidateWeight.PROMOTE)
+        val after = states.last().candidates.candidates.map { it.text }
+        assertTrue(after.indexOf("你好") < after.indexOf("你"))
+    }
+
+    @Test
     fun enterOnHanziAndBopomofoWritesThePreview() {
         val engine = ScriptedEngine()
         val field = StringBuilder()
@@ -937,6 +953,30 @@ class ChiaKeyTypingTest {
         assertFalse(base.canForgetCandidate(baseStates.last().candidates.candidates.first { it.text == "天" }))
         base.adjustCandidate(baseStates.last().candidates.candidates.first { it.text == "天" }, CandidateWeight.HIDE)
         assertTrue(baseStates.last().candidates.candidates.any { it.text == "天" })
+    }
+
+    @Test
+    fun anAssembledPhraseIsWrittenAsAUserRow() {
+        val dir = File.createTempFile("fslexicon", "").apply {
+            delete()
+            mkdirs()
+        }
+        val lexicon = FsLexicon(File(dir, "fslexicon.txt"))
+        val states = mutableListOf<ImeUiState>()
+        val controller = chiakeyController(
+            ScriptedEngine(),
+            StringBuilder(),
+            StringBuilder(),
+            states,
+            partial = pieceLexicon(),
+            userLexicon = lexicon,
+        )
+        controller.onStartInput(false)
+        type(controller, "ㄋㄧˇㄏㄠˇ")
+        controller.onCandidate(states.last().candidates.candidates.first { it.text == "你" })
+        controller.onCandidate(states.last().candidates.candidates.first { it.text == "好" })
+        assertEquals(listOf(Row("ㄋㄧˇㄏㄠˇ", "你好", 0.0, "user")), lexicon.rows())
+        assertEquals("fslexicon 1", File(dir, "fslexicon.txt").readLines().first())
     }
 
     @Test
@@ -1079,10 +1119,6 @@ private fun sentenceLexicon(): PartialLexicon = PartialLexicon.index(
     ),
 )
 
-private const val MISSING = "詞庫尚未下載"
-private const val CONSENT =
-    "詞庫來自千秋輸入法綜合詞庫，含 CC BY-NC 資料，僅供非商業使用，打過的字不會上傳。點此下載"
-
 private data class OpenOffer(
     val ascii: String,
     val reading: String,
@@ -1155,7 +1191,7 @@ private fun chiakeyController(
     onEditorSelection: ((candidatesStart: Int, candidatesEnd: Int) -> Unit)? = null,
     editorInfo: () -> EditorInfo? = { EditorInfo() },
     composingCountsAsBefore: Boolean = false,
-    onRequestLexicon: () -> Unit = {},
+    userLexicon: FsLexicon? = null,
 ): CandidateController {
     var batch = 0
     var reportAfterBatch = false
@@ -1208,26 +1244,15 @@ private fun chiakeyController(
             else -> null
         }
     } as InputConnection
-    val lexicon = object : ZhuyinLexicon {
-        override val status = EngineStatus.MISSING_LIBRARY
-        override val statusDetail = ""
-        override val isReady = false
-        override fun start(context: android.content.Context, onReady: () -> Unit) = Unit
-        override fun close() = Unit
-        override fun lookup(queries: List<String>, before: String) = emptyList<Candidate>()
-        override fun learn(phrases: List<Pair<String, String>>) = Unit
-    }
     return CandidateController(
         context = ContextWrapper(null),
-        lexicon = lexicon,
         pipeline = CandidatePipeline(),
         connection = { connection },
         editorInfo = editorInfo,
         onUi = { states.add(it) },
         post = { it.run() },
         zhuyinEngine = engine,
-        chiakey = true,
-        onRequestLexicon = onRequestLexicon,
         partialLexicon = partial,
+        userLexicon = userLexicon,
     )
 }

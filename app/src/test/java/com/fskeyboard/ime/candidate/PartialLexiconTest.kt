@@ -82,6 +82,23 @@ class PartialLexiconTest {
     }
 
     @Test
+    fun aStitchedPhraseSumsExtraAlongThePath() {
+        val lexicon = PartialLexicon.index(
+            listOf(
+                row("中", listOf("ㄓㄨㄥ"), 0.0),
+                row("你", listOf("ㄋㄧ"), 0.0),
+            ),
+        )
+        val typed = listOf(
+            SyllableReading("ㄓㄨ", ZhuyinTone.NONE),
+            SyllableReading("ㄋ", ZhuyinTone.NONE),
+        )
+        val phrase = lexicon.candidates(typed).first { it.text == "中你" }
+        assertEquals(2, phrase.span)
+        assertEquals(2, phrase.extra)
+    }
+
+    @Test
     fun aMarkedToneKeepsOnlyThatTone() {
         val lexicon = PartialLexicon.index(
             listOf(

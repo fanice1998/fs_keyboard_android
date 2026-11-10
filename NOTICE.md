@@ -23,10 +23,9 @@ rime-luna-pinyin, or rime-prelude, which are LGPL-3.0. The keyboard positions
 follow the standard Taiwan bopomofo layout. The schema algebra is an original
 one-to-one map from those glyphs to ASCII keys.
 
-librime is BSD-3-Clause. The app links it as a separate native library and
-calls only the public C API declared in rime_api.h. That header and the
-built libraries are supplied locally under third_party/librime and are not
-vendored here.
+librime is BSD-3-Clause. Zhuyin goes through ChiaKey, and librime is no
+longer linked. Headers and built libraries under third_party/librime are not
+part of the build and are not vendored here.
 
 OpenCC is Apache-2.0. app/src/main/assets/rime/shared/opencc/t2tw.json follows
 the OpenCC "t2tw" profile (Traditional Chinese, OpenCC standard, to Taiwan
@@ -133,13 +132,14 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-The zhuyin lexicon is not in this repository and not in the APK. After
-the user agrees, the app downloads one published ChiaKeySource.db from
-chiakich/ChiaKey-Lexicon and installs that file whole. That release
-already contains the layers ChiaKey folded in, including libchewing
-data (LGPL-2.1-or-later), rime-essay (LGPL-3.0), Ministry of Education
-reading supplements, and Chiaki bigram tables under CC BY-NC 4.0. Those
-terms travel with the downloaded file. The database is not a
-commercial license, and typed text is not uploaded. Learning stays in
-the app-private SmartMandarinUserData.db, which a later lexicon
-download does not delete.
+The zhuyin lexicon is not in git. A personal package copies
+data/chiakey/ChiaKeySource.db into the APK and, on first open, installs
+that file whole at the app-private files/chiakey/ChiaKeySource.db.
+CI passes -PbundleChiaKeyLexicon=false and does not ship the database.
+The file already contains the layers ChiaKey folded in, including
+libchewing data (LGPL-2.1-or-later), rime-essay (LGPL-3.0), Ministry of
+Education reading supplements, and Chiaki bigram tables under CC BY-NC
+4.0. Those terms travel with the file. The database is not a commercial
+license, and typed text is not uploaded. Learning stays in the
+app-private SmartMandarinUserData.db. Installing the bundled file does
+not delete that database.

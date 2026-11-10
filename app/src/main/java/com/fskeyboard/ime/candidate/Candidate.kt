@@ -15,15 +15,12 @@ internal enum class CandidateSource {
      * The paste uses the offer cached by the controller.
      */
     CLIPBOARD,
-
-    /** A prompt to download the ChiaKey lexicon. It is not a phrase. */
-    LEXICON,
 }
 
 /**
- * [engineIndex] is librime's index before reranking.
- * A Rime candidate keeps that index so [com.fskeyboard.ime.engine.InputEngine.select]
- * can update the built-in user dictionary.
+ * [engineIndex] is the zhuyin engine's index before reranking.
+ * A candidate keeps that index so [com.fskeyboard.ime.engine.ZhuyinEngine.select]
+ * can apply the choice.
  * A candidate invented by a reranker uses a negative index and [CandidateSource.SYNTHETIC].
  * [span] is how many syllables, from the front of the composition, the candidate uses.
  * [reading] is the lexicon reading it was found under; empty for one the lexicon did not give.
@@ -38,4 +35,6 @@ internal data class Candidate(
     val span: Int = 1,
     val reading: String = "",
     val clipboardImageUri: String? = null,
+    /** Unmatched onset, medial, or vowel. Lower is a fuller reading. */
+    val extra: Int = 0,
 )

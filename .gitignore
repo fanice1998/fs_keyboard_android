@@ -23,12 +23,12 @@ third_party/librime/jniLibs/**
 # Text corpora for the bigram model; tools/fetch-corpus.sh downloads them.
 /data/corpus/
 
-# Published ChiaKey lexicon. Downloaded for local research. Do not commit.
+# Published ChiaKey lexicon. Packaged into the APK from here. Do not commit.
 /data/chiakey/
 
 # Local Telegram inbox. The file contains a bot token.
 /tools/telegram_inbox.py
-# Sends the edit summary. Reads the token from telegram_inbox.py.
+# After an edit, builds the debug APK, copies it to Drive, and sends a text summary.
 /tools/telegram_notify.py
 /.grok/telegram-notify.state
 /engine/corpus_tools/target/

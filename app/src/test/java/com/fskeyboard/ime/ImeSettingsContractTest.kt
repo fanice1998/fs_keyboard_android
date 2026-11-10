@@ -50,6 +50,11 @@ class ImeSettingsContractTest {
         assertTrue(service.contains("keyPreviewEnabled"))
         assertTrue(preferences.contains("key_preview_enabled"))
         assertTrue(preferences.contains("getBoolean(KEY_PREVIEW, true)"))
+        assertTrue(layout.contains("@+id/ink_theme_switch"))
+        assertTrue(strings.contains("name=\"ink_theme_switch\""))
+        assertTrue(activity.contains("setKeyboardTheme"))
+        assertTrue(service.contains("keyboardTheme()"))
+        assertTrue(preferences.contains("keyboard_theme"))
     }
 
     @Test

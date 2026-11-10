@@ -1,10 +1,18 @@
+import java.io.File
 import java.util.Properties
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.Internal
+import org.gradle.api.tasks.Optional
+import org.gradle.api.tasks.OutputDirectory
+import org.gradle.api.tasks.TaskAction
 
 plugins {
     id("com.android.application")
 }
-
-val rimeEnabled = (findProperty("rime.enabled") as? String)?.toBoolean() ?: false
 
 android {
     namespace = "com.fskeyboard.ime"
@@ -27,15 +35,11 @@ android {
         versionCode = (findProperty("versionCode") as? String)?.toIntOrNull() ?: commitCount
         versionName = (findProperty("versionName") as? String) ?: "0.1.$commitCount"
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += listOf("arm64-v8a")
         }
         externalNativeBuild {
             cmake {
                 arguments += "-DANDROID_STL=c++_shared"
-                arguments += if (rimeEnabled) "-DRIME_ENABLED=ON" else "-DRIME_ENABLED=OFF"
-                if (rimeEnabled) {
-                    arguments += "-DRIME_ROOT=${rootProject.projectDir}/third_party/librime"
-                }
             }
         }
     }
@@ -87,10 +91,6 @@ android {
         buildConfig = false
     }
 
-    sourceSets.named("main") {
-        jniLibs.directories.add("${rootProject.projectDir}/third_party/librime/jniLibs")
-    }
-
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -108,6 +108,60 @@ kotlin {
 dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.31.0")
     testImplementation("junit:junit:4.13.2")
+}
+
+// Personal packages copy data/chiakey/ChiaKeySource.db into generated assets.
+// -PbundleChiaKeyLexicon=false skips that copy so CI can build without the file.
+val bundleChiaKeyLexiconFlag = (
+    findProperty("bundleChiaKeyLexicon") ?: rootProject.findProperty("bundleChiaKeyLexicon")
+)?.toString()
+val bundleChiaKeyLexicon = !bundleChiaKeyLexiconFlag.orEmpty().equals("false", ignoreCase = true)
+
+if (bundleChiaKeyLexicon) {
+    val copyChiaKeyLexicon = tasks.register<CopyChiaKeyLexiconTask>("copyChiaKeyLexicon") {
+        val source = rootProject.layout.projectDirectory.file("data/chiakey/ChiaKeySource.db")
+        sourceFile.set(source)
+        outputDirectory.set(layout.buildDirectory.dir("generated/chiakeyAssets"))
+        val disk = source.asFile
+        sourcePresent.set(disk.isFile)
+        if (disk.isFile) sourceStamp.set("${disk.length()}:${disk.lastModified()}")
+    }
+    androidComponents.onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(
+            copyChiaKeyLexicon,
+            CopyChiaKeyLexiconTask::outputDirectory,
+        )
+    }
+}
+
+/** Copies the local ChiaKey database into build/generated assets. Absent file fails the package. */
+abstract class CopyChiaKeyLexiconTask : DefaultTask() {
+    @get:Internal
+    abstract val sourceFile: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+
+    @get:Input
+    abstract val sourcePresent: Property<Boolean>
+
+    @get:Optional
+    @get:Input
+    abstract val sourceStamp: Property<String>
+
+    @TaskAction
+    fun copyLexicon() {
+        val source = sourceFile.get().asFile
+        if (!source.isFile) error("Missing data/chiakey/ChiaKeySource.db")
+        val dest = outputDirectory.get().asFile.resolve("chiakey/ChiaKeySource.db")
+        dest.parentFile?.mkdirs()
+        val partial = File(dest.parentFile, "${dest.name}.partial")
+        source.copyTo(partial, overwrite = true)
+        if (!partial.renameTo(dest)) {
+            partial.copyTo(dest, overwrite = true)
+            partial.delete()
+        }
+    }
 }
 
 /** Release key material from the environment or keystore.properties. Absent means the release APK stays unsigned. */
@@ -132,7 +186,7 @@ private fun loadReleaseKeystore(): ReleaseKeystore? {
 }
 
 private data class ReleaseKeystore(
-    val store: java.io.File,
+    val store: File,
     val storePassword: String?,
     val alias: String?,
     val keyPassword: String?,

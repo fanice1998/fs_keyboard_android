@@ -12,13 +12,26 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewTreeObserver
+import com.fskeyboard.ime.latency.KeyStages
 import com.fskeyboard.ime.traced
 import com.fskeyboard.ime.ui.KeyboardPalette
+import com.fskeyboard.ime.ui.KeyboardTheme
 import com.fskeyboard.ime.ui.dp
 import com.fskeyboard.ime.ui.isNightMode
 
 internal class KeyboardView(context: Context) : View(context) {
     var onKey: (KeyAction) -> Unit = {}
+
+    /** False when the last backspace changed nothing. A hold then stops. */
+    var backspaceProgress: () -> Boolean = { true }
+
+    /** Colors, corner, border, and preview linger. Does not change what a key types. */
+    var theme: KeyboardTheme = KeyboardTheme.paper()
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
 
     /** Locks a modifier after a long press, or unlocks it when its key is tapped again. */
     var onModifierHold: (ComputerKey, Boolean) -> Unit = { _, _ -> }
@@ -219,6 +232,10 @@ internal class KeyboardView(context: Context) : View(context) {
                 action
             }
             dispatch(firing)
+            if (action == KeyAction.Backspace && !backspaceProgress()) {
+                repeating = null
+                return
+            }
             val interval = KeyRepeat.interval(action) ?: return
             postDelayed(this, interval)
         }
@@ -301,9 +318,9 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     override fun onDraw(canvas: Canvas) {
-        val palette = KeyboardPalette.of(isNightMode())
+        val palette = theme.palette(isNightMode())
         canvas.drawColor(palette.background)
-        val radius = dp(11).toFloat()
+        val radius = dp(theme.cornerDp).toFloat()
         for (box in boxes) {
             val marked = markedLetter != null && swipeKeyToken(box.spec) == markedLetter
             val faceKey = (box.spec.action as? KeyAction.Computer)?.key
@@ -319,6 +336,11 @@ internal class KeyboardView(context: Context) : View(context) {
             }
             val draw = inset(box.face)
             canvas.drawRoundRect(draw, radius, radius, fill)
+            if (theme.borderDp > 0) {
+                stroke.color = palette.hint
+                stroke.strokeWidth = dp(theme.borderDp).toFloat()
+                canvas.drawRoundRect(draw, radius, radius, stroke)
+            }
             val chosen = box == down && swipeDirection != null &&
                 (box.spec.swipes.isNotEmpty() || box.spec.extraSwipes.isNotEmpty())
             if (chosen) {
@@ -596,7 +618,7 @@ internal class KeyboardView(context: Context) : View(context) {
         previewLinger = false
         previewBox = null
         keyPreview.cancelDismiss()
-        keyPreview.show(text, box.face, width)
+        showKeyPreview(text, box.face)
     }
 
     /**
@@ -757,10 +779,10 @@ internal class KeyboardView(context: Context) : View(context) {
             previewLinger = false
             return
         }
-        keyPreview.show(box.spec.label, box.face, width)
+        showKeyPreview(box.spec.label, box.face)
         if (previewLinger || down != box) {
             previewLinger = false
-            keyPreview.hideLater(KeyPreview.LINGER_MS)
+            keyPreview.hideLater(themeLinger())
         }
     }
 
@@ -769,7 +791,7 @@ internal class KeyboardView(context: Context) : View(context) {
             previewLinger = true
             if (!previewFramePosted) {
                 previewLinger = false
-                keyPreview.hideLater(KeyPreview.LINGER_MS)
+                keyPreview.hideLater(themeLinger())
             }
             return
         }
@@ -819,13 +841,27 @@ internal class KeyboardView(context: Context) : View(context) {
 
     /** A zhuyin key from a touch carries the keys that touch may have meant. */
     private fun fire(action: KeyAction, eventTime: Long? = null) {
-        val typed = if (action is KeyAction.Bopomofo && eventTime != null) {
+        val stage = action is KeyAction.Bopomofo && eventTime != null
+        if (stage) KeyStages.begin(System.nanoTime())
+        val typed = if (stage) {
             action.copy(nearby = TouchModel.nearby(downX, downY, zhuyinAreas))
         } else {
             action
         }
         dispatch(typed, haptic = false)
+        if (stage) KeyStages.closeTail()
+        if (stage) KeyStages.armDraw()
+        // This key's keyHandled claims the draw. A later key must not keep it.
         eventTime?.let(onTyped)
+    }
+
+    private fun themeLinger(): Long {
+        return if (theme.pressMs > 0) theme.pressMs.toLong() else KeyPreview.LINGER_MS
+    }
+
+    private fun showKeyPreview(label: String, face: RectF) {
+        keyPreview.palette = theme.palette(isNightMode())
+        keyPreview.show(label, face, width)
     }
 
     private fun dispatch(action: KeyAction, haptic: Boolean = true) {
@@ -835,10 +871,13 @@ internal class KeyboardView(context: Context) : View(context) {
             return
         }
         if (haptic && vibrationEnabled) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-        traced("ime.dispatch") { onKey(action) }
+        val sending = action.applyingShift(shiftLock.mode)
+        KeyStages.onKeyEntered()
+        traced("ime.dispatch") { onKey(sending) }
+        KeyStages.onKeyReturned()
         val keepShift = action is KeyAction.Character && repeating == action
         if (keepShift) burstShift = true
-        if (action is KeyAction.Character && shiftLock.onCharacter(keepShift)) rebuild()
+        if (sending.consumesOneShotShift() && shiftLock.onCharacter(keepShift)) rebuild()
     }
 
     private fun rebuild() {

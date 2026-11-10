@@ -38,7 +38,12 @@ internal class PartialLexicon private constructor(
         for (slot in spansFromStart(bodies, tones)) {
             val word = slot.word
             if (out.any { it.text == word.text && it.span == word.syllables.size }) continue
-            out += candidate(word, word.syllables.size, typedReading(bodies, tones, word.syllables.size))
+            out += candidate(
+                word,
+                word.syllables.size,
+                typedReading(bodies, tones, word.syllables.size),
+                unmatched(word, bodies, 0),
+            )
             if (out.size == DISPLAY) break
         }
         return rankSentenceWordCharacter(out, bodies.size)
@@ -77,6 +82,8 @@ internal class PartialLexicon private constructor(
         val score = DoubleArray(count + 1) { Double.NEGATIVE_INFINITY }
         val text = arrayOfNulls<String>(count + 1)
         val pieces = IntArray(count + 1)
+        // The stitched row's extra is the sum along the chosen path, not zero.
+        val pathExtra = IntArray(count + 1)
         score[0] = 0.0
         text[0] = ""
         for (start in 0 until count) {
@@ -93,6 +100,7 @@ internal class PartialLexicon private constructor(
                     if (!better) continue
                     score[end] = next
                     pieces[end] = nextPieces
+                    pathExtra[end] = pathExtra[start] + unmatched(slot.word, bodies, start)
                     text[end] = text[start] + slot.word.text
                 }
             }
@@ -105,6 +113,7 @@ internal class PartialLexicon private constructor(
             source = CandidateSource.SYNTHETIC,
             span = count,
             reading = typedReading(bodies, tones, count),
+            extra = pathExtra[count],
         )
     }
 
@@ -131,14 +140,26 @@ internal class PartialLexicon private constructor(
         return true
     }
 
-    private fun candidate(word: Word, span: Int, reading: String): Candidate {
+    private fun candidate(word: Word, span: Int, reading: String, extra: Int): Candidate {
         return Candidate(
             text = word.text,
             engineIndex = -1,
             source = CandidateSource.SYNTHETIC,
             span = span,
             reading = reading,
+            extra = extra,
         )
+    }
+
+    /** Letters in the lexicon syllable that the typed body does not include. */
+    private fun unmatched(word: Word, bodies: List<String>, start: Int): Int {
+        var extra = 0
+        for (index in word.syllables.indices) {
+            val typed = bodies.getOrNull(start + index) ?: break
+            val full = word.syllables[index].body
+            if (full.length > typed.length) extra += full.length - typed.length
+        }
+        return extra
     }
 
     private class Word(val text: String, val syllables: List<SyllableReading>, var probability: Double)

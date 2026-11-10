@@ -1,6 +1,6 @@
 # librime prebuilt
 
-GitHub Actions fills this directory on the runner (`tools/ci-engine.sh`). A local build can do the same. Do not commit the binaries.
+This directory is no longer used by the build. Zhuyin goes through ChiaKey, and librime is not linked. CI does not build it with `tools/ci-engine.sh`. Do not commit binaries.
 
 ```
 third_party/librime/
@@ -12,7 +12,7 @@ third_party/librime/
 ```
 
 `rime_api.h` comes from the same librime revision as the `.so`.
-After the files are in place, set `rime.enabled=true` in `gradle.properties`.
+The app no longer reads `rime.enabled`, and CMake does not link these libraries.
 
 See the repository README for the load steps. librime itself is BSD-3-Clause.
 OpenCC dictionaries, if linked, are Apache-2.0.

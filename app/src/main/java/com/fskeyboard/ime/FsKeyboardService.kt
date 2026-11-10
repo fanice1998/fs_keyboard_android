@@ -30,11 +30,11 @@ import com.fskeyboard.ime.candidate.CandidateSource
 import com.fskeyboard.ime.candidate.CandidateWeightMenu
 import com.fskeyboard.ime.candidate.ImeUiState
 import com.fskeyboard.ime.candidate.clearSystemClipboard
+import com.fskeyboard.ime.engine.BundledChiaKeyLexicon
+import com.fskeyboard.ime.engine.ChiaKeyIndexPlan
+import com.fskeyboard.ime.engine.ChiaKeyRuntime
 import com.fskeyboard.ime.engine.ChiaKeySession
 import com.fskeyboard.ime.engine.ChiaKeyUnigramScan
-import com.fskeyboard.ime.engine.IdleZhuyinLexicon
-import com.fskeyboard.ime.engine.LexiconClient
-import com.fskeyboard.ime.engine.LexiconInstaller
 import java.io.File
 import com.fskeyboard.ime.keyboard.EnterActions
 import com.fskeyboard.ime.keyboard.EnterChoice
@@ -42,6 +42,7 @@ import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardView
 import com.fskeyboard.ime.latency.FrameLatencyProbe
 import com.fskeyboard.ime.latency.KeyLatency
+import com.fskeyboard.ime.latency.KeyStages
 import com.fskeyboard.ime.ui.KeyboardInsets
 import com.fskeyboard.ime.ui.KeyStage
 import com.fskeyboard.ime.voice.SystemSpeech
@@ -60,9 +61,7 @@ import com.fskeyboard.ime.ui.isNightMode
 
 class FsKeyboardService : InputMethodService() {
     private var chiakey: ChiaKeySession? = null
-    @Volatile private var downloadingLexicon = false
-    private val indexGate = Any()
-    private var indexGeneration = 0
+    private var lexiconListener: ((PartialLexicon) -> Unit)? = null
     private lateinit var pipeline: CandidatePipeline
     private lateinit var controller: CandidateController
     private var keyboard: KeyboardView? = null
@@ -88,6 +87,8 @@ class FsKeyboardService : InputMethodService() {
     private val navigationBarHeightPx by lazy { navigationBarDimension("navigation_bar_height") }
     private var pending = ImeUiState()
     private val latencyProbe = FrameLatencyProbe(KeyLatency.stats) { Log.i(TAG, it) }
+    private var coldStartNanos = 0L
+    @Volatile private var copyNanos = 0L
     private var framesWatched = false
     private val relayoutInsets = ViewTreeObserver.OnGlobalLayoutListener {
         val insets = latestInsets ?: return@OnGlobalLayoutListener
@@ -99,6 +100,8 @@ class FsKeyboardService : InputMethodService() {
     }
 
     override fun onCreate() {
+        coldStartNanos = System.nanoTime()
+        KeyStages.logger = { message -> Log.i(TAG, message) }
         super.onCreate()
         configureWindow()
         val preferences = RerankPreferences(this)
@@ -113,24 +116,24 @@ class FsKeyboardService : InputMethodService() {
         )
         ranker.load()
         pipeline = CandidatePipeline(reranker = ranker)
-        val session = ChiaKeySession(File(filesDir, "chiakey"))
+        val root = File(filesDir, "chiakey")
+        val session = ChiaKeyRuntime.session(root)
         chiakey = session
-        session.open()
         controller = CandidateController(
             context = this,
-            lexicon = IdleZhuyinLexicon,
             pipeline = pipeline,
             connection = { currentInputConnection },
             editorInfo = { currentInputEditorInfo },
             onUi = ::render,
             letterMode = { KeyboardPreferences(this).letterMode() },
             zhuyinEngine = session,
-            chiakey = true,
-            onRequestLexicon = { downloadLexicon() },
         )
         controller.onLetterMode = { mode -> KeyboardPreferences(this).setLetterMode(mode) }
         controller.start()
-        startChiaKeyIndex()
+        val listener = { lexicon: PartialLexicon -> controller.publishPartialLexicon(lexicon) }
+        lexiconListener = listener
+        ChiaKeyRuntime.attach(listener)
+        startChiaKey(root, session)
     }
 
     override fun onDestroy() {
@@ -144,7 +147,11 @@ class FsKeyboardService : InputMethodService() {
         window?.window?.decorView?.viewTreeObserver?.let { observer ->
             if (observer.isAlive) observer.removeOnGlobalLayoutListener(relayoutInsets)
         }
-        chiakey?.close()
+        // The native runtime and the unigram index stay in this process.
+        // Closing them here deadlocks the next open against the scan, and
+        // building the index a second time exhausts the heap.
+        lexiconListener?.let { ChiaKeyRuntime.detach(it) }
+        lexiconListener = null
         if (::controller.isInitialized) {
             controller.close()
         }
@@ -155,51 +162,69 @@ class FsKeyboardService : InputMethodService() {
     }
 
     /**
-     * Builds sentence guesses from the downloaded ChiaKey unigrams.
-     * A newer scan replaces an older one. A missing database leaves the previous index.
+     * Opens the engine off the main thread, then builds the unigram index.
+     * The scan is one pass and stays for the next time this process shows the keyboard.
      */
-    private fun startChiaKeyIndex() {
-        val generation = synchronized(indexGate) { ++indexGeneration }
-        val root = File(filesDir, "chiakey")
+    private fun startChiaKey(root: File, session: ChiaKeySession) {
+        if (session.ready) {
+            startChiaKeyIndex(root)
+            return
+        }
+        if (!ChiaKeyRuntime.claimOpen()) return
+        Thread({
+            try {
+                val copyStart = System.nanoTime()
+                BundledChiaKeyLexicon.install(
+                    openAsset = { assets.open(BundledChiaKeyLexicon.ASSET) },
+                    destination = session.database,
+                )
+                copyNanos = System.nanoTime() - copyStart
+                Log.i(TAG, "chiakey copy ${copyNanos / 1_000_000L}ms")
+                val openStart = System.nanoTime()
+                session.open()
+                Log.i(TAG, "chiakey open ${millisSince(openStart)}ms")
+            } finally {
+                ChiaKeyRuntime.finishOpen()
+            }
+            if (session.ready) startChiaKeyIndex(root)
+        }, "fskeyboard-chiakey-open").start()
+    }
+
+    private fun startChiaKeyIndex(root: File) {
+        if (!ChiaKeyRuntime.claimScan()) return
         Thread({
             try {
                 if (!File(root, "ChiaKeySource.db").isFile) return@Thread
-                val builder = PartialLexicon.Builder()
-                ChiaKeyUnigramScan.read(root) { qstring, text, probability ->
-                    builder.add(qstring, text, probability)
+                var built: PartialLexicon? = null
+                for (syllables in ChiaKeyIndexPlan.ranges()) {
+                    val builder = PartialLexicon.Builder()
+                    val scanStart = System.nanoTime()
+                    ChiaKeyUnigramScan.read(root, syllables) { qstring, text, probability ->
+                        builder.add(qstring, text, probability)
+                    }
+                    val scanMs = millisSince(scanStart)
+                    val buildStart = System.nanoTime()
+                    val index = builder.build()
+                    val buildMs = millisSince(buildStart)
+                    Log.i(TAG, "chiakey scan ${scanMs}ms build ${buildMs}ms words=${index.wordCount}")
+                    built = index
                 }
-                val index = builder.build()
-                val current = synchronized(indexGate) { indexGeneration }
-                if (generation != current || !::controller.isInitialized) return@Thread
+                val index = built ?: return@Thread
                 Log.i(TAG, "chiakey unigram index ready: ${index.wordCount} words")
-                controller.publishPartialLexicon(index)
+                Log.i(TAG, "chiakey ready ${readyMs()}ms")
+                ChiaKeyRuntime.offer(index, done = true)
             } catch (error: Throwable) {
                 Log.w(TAG, "chiakey unigram index failed", error)
+            } finally {
+                ChiaKeyRuntime.finishScan()
             }
         }, "fskeyboard-chiakey-index").start()
     }
 
-    /** Consent already happened. A failed download leaves the previous file. */
-    private fun downloadLexicon() {
-        if (downloadingLexicon) return
-        downloadingLexicon = true
-        val root = File(filesDir, "chiakey")
-        Thread({
-            try {
-                val release = LexiconClient.latestReleaseJson()
-                val installed = LexiconInstaller(root) { url -> LexiconClient.bytes(url) }.install(release)
-                if (installed) {
-                    chiakey?.close()
-                    chiakey?.open()
-                    startChiaKeyIndex()
-                }
-            } catch (error: Exception) {
-                Log.w(TAG, "lexicon download failed", error)
-            } finally {
-                downloadingLexicon = false
-            }
-        }, "fskeyboard-lexicon").start()
-    }
+    private fun millisSince(startNanos: Long): Long = (System.nanoTime() - startNanos) / 1_000_000L
+
+    /** onCreate to the sentence offer, without the database copy. */
+    private fun readyMs(): Long = (System.nanoTime() - coldStartNanos - copyNanos) / 1_000_000L
 
     override fun onCreateInputView(): View {
         configureWindow()
@@ -242,6 +267,7 @@ class FsKeyboardService : InputMethodService() {
             computerMap = preferences.computerKeyMap()
             vibrationEnabled = preferences.vibrationEnabled()
             keyPreviewEnabled = preferences.keyPreviewEnabled()
+            theme = preferences.keyboardTheme()
             onTyped = latencyProbe::keyHandled
             trackpadAllowed = { controller.canMoveCursor() }
             onTrackpadStart = { controller.beginCursor() }
@@ -252,6 +278,7 @@ class FsKeyboardService : InputMethodService() {
                 compositionPreview?.faded = active
                 if (!active) controller.endCursor()
             }
+            backspaceProgress = { controller.backspaceProgress() }
             onKey = { action ->
                 if (action == KeyAction.NextInputMethod) {
                     switchToAnotherKeyboard()
@@ -557,6 +584,7 @@ class FsKeyboardService : InputMethodService() {
         keyboard?.computerMap = preferences.computerKeyMap()
         keyboard?.vibrationEnabled = preferences.vibrationEnabled()
         keyboard?.keyPreviewEnabled = preferences.keyPreviewEnabled()
+        keyboard?.theme = preferences.keyboardTheme()
         keyboard?.enterChoice = EnterActions.choose(info)
         controller.onStartInput(restarting)
         window?.window?.decorView?.requestApplyInsets()
@@ -613,6 +641,7 @@ class FsKeyboardService : InputMethodService() {
     override fun onEvaluateFullscreenMode(): Boolean = false
 
     private fun render(state: ImeUiState) {
+        val renderStart = System.nanoTime()
         pending = state
         traced("ime.render") {
             keyboard?.setMode(state.mode, state.base, state.numberPad)
@@ -630,6 +659,7 @@ class FsKeyboardService : InputMethodService() {
                 panelOpen -> candidatePanel?.render(state.candidates.candidates)
             }
         }
+        KeyStages.noteRender(System.nanoTime() - renderStart)
     }
 
     /** Opens every candidate over the keys. It stays closed while there are no candidates. */

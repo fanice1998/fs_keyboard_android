@@ -5,8 +5,8 @@ import com.fskeyboard.ime.keyboard.ZhuyinComposer
 import com.fskeyboard.ime.keyboard.ZhuyinSyllable
 
 /**
- * What a finished composition commits, and the phrases to [com.fskeyboard.ime.engine.ZhuyinLexicon.learn]
- * from it as (reading, text): each two words the user chose one after the other.
+ * What a finished composition commits. [learned] is (reading, text) for each
+ * two words the user chose one after the other.
  */
 internal data class Commit(val text: String, val learned: List<Pair<String, String>> = emptyList())
 
