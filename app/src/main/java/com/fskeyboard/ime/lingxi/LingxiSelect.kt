@@ -18,6 +18,29 @@ private const val BEAM = 32
 internal const val LINGXI_CONTEXT_RUNES = 64
 internal const val LINGXI_KEY_BUDGET_NS = 25_000_000L
 
+/**
+ * Drops the open bopomofo from the end of the editor text. The cursor sits inside
+ * that underline, so the text before it includes the reading. Chosen Hanzi in front
+ * of the reading stays. The editor can still be one key behind the syllable just typed.
+ */
+internal fun withoutOpenReading(context: String, syllables: List<String>): String {
+    if (context.isEmpty() || syllables.isEmpty()) return context
+    val reading = buildString(syllables.sumOf { it.length }) { for (syllable in syllables) append(syllable) }
+    if (reading.isEmpty()) return context
+    val limit = minOf(reading.length, context.length)
+    for (cut in limit downTo 1) {
+        if (context.regionMatches(context.length - cut, reading, 0, cut)) return context.dropLast(cut)
+    }
+    return context
+}
+
+/** A finished score past [deadlineNs] is a miss, including when the row was discarded. */
+internal fun lingxiReorderLabel(reordered: List<String>?, deadlineNs: Long, now: Long): String {
+    if (deadlineNs != Long.MAX_VALUE && now > deadlineNs) return "miss"
+    if (reordered == null) return "skip"
+    return "ok"
+}
+
 internal data class LingxiResult(
     val candidates: List<String>,
     /** `ok` when the model reordered, `miss` when it ran past the budget or failed, `skip` when it was not asked. */
@@ -41,7 +64,8 @@ internal class LingxiEngine(
         deadlineNs: Long = Long.MAX_VALUE,
         useModel: Boolean = true,
     ): LingxiResult {
-        val statistical = viterbi(syllables, leftWord(context))
+        val committed = withoutOpenReading(context, syllables)
+        val statistical = viterbi(syllables, leftWord(committed))
         val texts = statistical.map { it.text }
         if (!useModel || scorer == null || statistical.size < 2) {
             return LingxiResult(pin(texts, remembered), "skip")
@@ -50,14 +74,14 @@ internal class LingxiEngine(
             return LingxiResult(pin(texts, remembered), "miss")
         }
         val reordered = try {
-            scoreWithin(deadlineNs) { reorder(syllables, context, statistical, deadlineNs) }
+            scoreWithin(deadlineNs) { reorder(syllables, committed, statistical, deadlineNs) }
         } catch (_: TimeoutException) {
             return LingxiResult(pin(texts, remembered), "miss")
         } catch (_: Exception) {
             return LingxiResult(pin(texts, remembered), "miss")
         }
-        if (reordered == null) return LingxiResult(pin(texts, remembered), "skip")
-        if (System.nanoTime() > deadlineNs) return LingxiResult(pin(texts, remembered), "miss")
+        val label = lingxiReorderLabel(reordered, deadlineNs, System.nanoTime())
+        if (label != "ok" || reordered == null) return LingxiResult(pin(texts, remembered), label)
         return LingxiResult(pin(reordered, remembered), "ok")
     }
 
@@ -89,6 +113,7 @@ internal class LingxiEngine(
         if (texts.any { it.codePointCount(0, it.length) != syllables.size }) return null
         val scores = model.score(context, syllables, texts, textOnly)
         if (scores.size != statistical.size) return null
+        // A score that lands after the budget is not a skip. select() labels it miss.
         if (System.nanoTime() > deadlineNs) return null
         val weight = if (textOnly) model.manifest.textWeight else model.manifest.weight
         return statistical.indices.sortedWith(

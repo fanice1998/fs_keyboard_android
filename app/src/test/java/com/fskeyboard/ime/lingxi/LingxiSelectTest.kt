@@ -53,6 +53,28 @@ class LingxiSelectTest {
             "zai again first=${again.candidates.first()} reorder=${again.reorder} " +
                 "stat=${againStat.candidates.first()}",
         )
+        val open = engine.select(reading, "我ㄗㄞˋ", remembered = null)
+        val behind = engine.select(reading, "我ㄗㄞ", remembered = null)
+        println(
+            "zai open first=${open.candidates.first()} reorder=${open.reorder} " +
+                "behind=${behind.candidates.first()} reorder=${behind.reorder}",
+        )
+        assertEquals("ok", open.reorder)
+        assertEquals("ok", behind.reorder)
+        assertEquals("在", open.candidates.first())
+        assertEquals("在", behind.candidates.first())
+        assertEquals("我", withoutOpenReading("我ㄗㄞˋ", reading))
+        assertEquals("我", withoutOpenReading("我ㄗㄞ", reading))
+        assertEquals("我在", withoutOpenReading("我在ㄗㄞˋ", reading))
+        assertEquals("請再試一次", withoutOpenReading("請再試一次", reading))
+        assertEquals("miss", lingxiReorderLabel(null, deadlineNs = 10, now = 11))
+        assertEquals("miss", lingxiReorderLabel(listOf("在"), deadlineNs = 10, now = 11))
+        assertEquals("skip", lingxiReorderLabel(null, deadlineNs = Long.MAX_VALUE, now = 11))
+        val expired = engine.select(reading, "我ㄗㄞˋ", remembered = null, deadlineNs = System.nanoTime())
+        val openStat = engine.select(reading, "我", remembered = null, useModel = false)
+        println("zai expired reorder=${expired.reorder} first=${expired.candidates.first()}")
+        assertEquals("miss", expired.reorder)
+        assertEquals(openStat.candidates.first(), expired.candidates.first())
         assertEquals("ok", home.reorder)
         assertEquals("ok", again.reorder)
         assertEquals("在", home.candidates.first())
