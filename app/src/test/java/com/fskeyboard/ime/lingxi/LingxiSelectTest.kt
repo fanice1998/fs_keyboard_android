@@ -45,6 +45,14 @@ class LingxiSelectTest {
         val again = engine.select(reading, "請再試一次", remembered = null)
         val homeStat = engine.select(reading, "我在家", remembered = null, useModel = false)
         val againStat = engine.select(reading, "請再試一次", remembered = null, useModel = false)
+        println(
+            "zai home first=${home.candidates.first()} reorder=${home.reorder} " +
+                "stat=${homeStat.candidates.first()}",
+        )
+        println(
+            "zai again first=${again.candidates.first()} reorder=${again.reorder} " +
+                "stat=${againStat.candidates.first()}",
+        )
         assertEquals("ok", home.reorder)
         assertEquals("ok", again.reorder)
         assertEquals("在", home.candidates.first())
