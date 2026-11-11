@@ -17,6 +17,9 @@ import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.latency.KeyStages
 import com.fskeyboard.ime.lexicon.Lexicon
 
+private const val ZHUYIN_CHAR_LIMIT = 48
+private const val ZHUYIN_PREFIX_LIMIT = 8
+
 /** One composition. A key that is not bopomofo returns false and the controller continues. */
 internal interface Composer {
     fun onKey(action: KeyAction): Boolean
@@ -409,11 +412,28 @@ internal class ZhuyinCompositionSession(
         servedByLingxi = false
     }
 
-    /** 靈犀 rows when the pack is resident. Otherwise the partial lexicon. */
+    /**
+     * 靈犀 rows when the pack is resident. Otherwise the partial lexicon.
+     * An unfinished next syllable keeps the previous row, so the bar does not blank mid-word.
+     */
     private fun offer(readings: List<SyllableReading>): List<Candidate> {
+        val previousHint = offeredHint
+        val previous = shownCandidates
+        val found = lookup(readings)
+        if (found.isEmpty() && readings.size > 1 && previous.any { !it.literal }) {
+            offeredHint = previousHint
+            return withLiteral(readings, previous.filter { !it.literal })
+        }
+        if (found.isEmpty()) return withLiteral(readings, found)
+        return found
+    }
+
+    private fun lookup(readings: List<SyllableReading>): List<Candidate> {
         offeredHint = ""
         val engine = lingxi?.engine
-        if (engine == null || readings.isEmpty()) return lexicon.partialCandidates(readings)
+        if (engine == null || readings.isEmpty()) {
+            return withLiteral(readings, lexicon.partialCandidates(readings))
+        }
         val syllables = readings.map { it.body + it.tone.mark }
         val openTone = BooleanArray(readings.size) { !readings[it].tone.chosen }
         val readingKey = buildString { for (syllable in syllables) append(syllable) }
@@ -432,6 +452,7 @@ internal class ZhuyinCompositionSession(
         }
         servedByLingxi = true
         lastReorder = result.reorder
+        if (result.candidates.isEmpty()) return emptyList()
         val rows = result.candidates.map { text ->
             Candidate(
                 text = text,
@@ -441,20 +462,91 @@ internal class ZhuyinCompositionSession(
                 reading = readingKey,
             )
         }
-        val hint = result.completion ?: return rows
-        offeredHint = hint.tail
-        return listOf(
-            Candidate(
-                text = hint.surface,
-                engineIndex = LINGXI_CANDIDATE,
-                source = CandidateSource.SYNTHETIC,
-                span = readings.size,
-                reading = hint.reading,
-                completion = true,
-                labelReading = readingKey,
-                labelTail = hint.tail,
-            ),
-        ) + rows
+        val phrases = result.completion?.let { hint ->
+            offeredHint = hint.tail
+            listOf(
+                Candidate(
+                    text = hint.surface,
+                    engineIndex = LINGXI_CANDIDATE,
+                    source = CandidateSource.SYNTHETIC,
+                    span = readings.size,
+                    reading = hint.reading,
+                    completion = true,
+                    labelReading = readingKey,
+                    labelTail = hint.tail,
+                ),
+            ) + rows
+        } ?: rows
+        return withChoices(readings, syllables, openTone, phrases)
+    }
+
+    /** Full phrases, then the typed bopomofo, then shorter words and first-syllable characters. */
+    private fun withChoices(
+        readings: List<SyllableReading>,
+        syllables: List<String>,
+        openTone: BooleanArray,
+        phrases: List<Candidate>,
+    ): List<Candidate> {
+        val rows = ArrayList<Candidate>(phrases.size + 16)
+        rows += phrases
+        val literal = literalCandidate(readings)
+        if (literal != null) rows += literal
+        val engine = lingxi?.engine
+        if (engine == null || readings.size < 2) return rows
+        val seen = HashSet<String>(rows.size)
+        for (row in rows) seen += "${row.span}\t${row.text}"
+        for (length in readings.size - 1 downTo 1) {
+            val hits = try {
+                engine.exactHits(syllables.subList(0, length), openTone.copyOfRange(0, length))
+            } catch (_: Exception) {
+                emptyList()
+            }
+            val reading = buildString {
+                for (index in 0 until length) append(syllables[index])
+            }
+            val limit = if (length == 1) ZHUYIN_CHAR_LIMIT else ZHUYIN_PREFIX_LIMIT
+            var kept = 0
+            for (hit in hits.sortedByDescending { it.prw }) {
+                if (hit.surface.isEmpty()) continue
+                if (length == 1 && hit.surface.codePointCount(0, hit.surface.length) != 1) continue
+                if (!seen.add("$length\t${hit.surface}")) continue
+                rows += Candidate(
+                    text = hit.surface,
+                    engineIndex = LINGXI_CANDIDATE,
+                    source = CandidateSource.SYNTHETIC,
+                    span = length,
+                    reading = reading,
+                )
+                kept += 1
+                if (kept == limit) break
+            }
+        }
+        return rows
+    }
+
+    private fun withLiteral(readings: List<SyllableReading>, rows: List<Candidate>): List<Candidate> {
+        if (rows.any { it.literal }) return rows
+        val literal = literalCandidate(readings) ?: return rows
+        return rows + literal
+    }
+
+    private fun literalCandidate(readings: List<SyllableReading>): Candidate? {
+        if (readings.isEmpty()) return null
+        val text = buildString {
+            for (syllable in readings) {
+                append(syllable.body)
+                append(syllable.tone.mark)
+            }
+        }
+        if (text.isEmpty()) return null
+        return Candidate(
+            text = text,
+            engineIndex = LINGXI_CANDIDATE,
+            source = CandidateSource.SYNTHETIC,
+            span = readings.size,
+            reading = text,
+            literal = true,
+        )
     }
 
     /** The row on screen, and how many syllables of it Enter must cover. */

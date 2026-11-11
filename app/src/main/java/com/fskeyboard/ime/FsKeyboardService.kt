@@ -595,6 +595,7 @@ class FsKeyboardService : InputMethodService() {
         keyboard?.keyPreviewEnabled = preferences.keyPreviewEnabled()
         keyboard?.theme = preferences.keyboardTheme()
         keyboard?.enterChoice = EnterActions.choose(info)
+        keyboard?.clearShiftLock()
         controller.onStartInput(restarting)
         window?.window?.decorView?.requestApplyInsets()
         latestInsets?.let(::applyNavigationInset)

@@ -32,9 +32,16 @@ internal class ShiftLock {
         return true
     }
 
-    /** Drops a one-shot shift. Caps lock stays, so leaving the Latin keys does not cancel it. */
+    /** Drops a one-shot shift. Caps lock stays until [clear]. */
     fun releaseOnce(): Boolean {
         if (mode != ShiftMode.ONCE) return false
+        mode = ShiftMode.OFF
+        return true
+    }
+
+    /** Drops a one-shot shift and caps lock. Used when the keyboard changes or opens again. */
+    fun clear(): Boolean {
+        if (mode == ShiftMode.OFF) return false
         mode = ShiftMode.OFF
         return true
     }

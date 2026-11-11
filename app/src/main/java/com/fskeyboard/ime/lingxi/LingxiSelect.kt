@@ -105,6 +105,11 @@ internal class LingxiEngine(
      * One longer lexicon word that continues [head]. Null when nothing is confident.
      * The model is not asked. A deadline already passed returns null.
      */
+    /** Lexicon rows for exactly these syllables. Empty when a syllable is not in the table. */
+    fun exactHits(syllables: List<String>, openTone: BooleanArray = BooleanArray(0)): List<LexHit> {
+        return tables.lexicon.exact(syllables, openTone)
+    }
+
     fun completion(
         syllables: List<String>,
         openTone: BooleanArray,

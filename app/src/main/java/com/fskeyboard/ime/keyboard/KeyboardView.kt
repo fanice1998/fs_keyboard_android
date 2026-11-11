@@ -305,8 +305,13 @@ internal class KeyboardView(context: Context) : View(context) {
         this.mode = mode
         this.base = base
         this.numberPad = pad
-        if (mode == KeyboardMode.ZHUYIN) shiftLock.releaseOnce()
+        shiftLock.clear()
         rebuild()
+    }
+
+    /** Caps lock does not survive a newly opened keyboard. */
+    fun clearShiftLock() {
+        if (shiftLock.clear()) rebuild()
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {

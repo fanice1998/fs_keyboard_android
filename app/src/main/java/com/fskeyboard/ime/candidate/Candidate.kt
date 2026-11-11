@@ -46,12 +46,15 @@ internal data class Candidate(
     val labelReading: String = "",
     /** Predicted Hanzi drawn after [labelReading] in the hint color. */
     val labelTail: String = "",
+    /** The chip text is the typed bopomofo. Enter still prefers a Hanzi candidate. */
+    val literal: Boolean = false,
 )
 
 /** The chip Enter commits: it covers every open syllable and is not the prediction. */
 internal fun Candidate.coversOpenSyllables(openSyllables: Int): Boolean {
     return openSyllables > 0 &&
         !completion &&
+        !literal &&
         source != CandidateSource.CLIPBOARD &&
         text.isNotEmpty() &&
         span == openSyllables

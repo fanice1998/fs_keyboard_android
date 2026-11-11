@@ -53,6 +53,17 @@ class ShiftLockTest {
     }
 
     @Test
+    fun clearDropsCapsLock() {
+        shift.onShift()
+        shift.onShift()
+        assertEquals(ShiftMode.LOCKED, shift.mode)
+        assertTrue(shift.clear())
+        assertEquals(ShiftMode.OFF, shift.mode)
+        assertFalse(shift.uppercase)
+        assertFalse(shift.clear())
+    }
+
+    @Test
     fun leavingLatinDropsAOneShotAndKeepsCapsLock() {
         shift.onShift()
         shift.releaseOnce()

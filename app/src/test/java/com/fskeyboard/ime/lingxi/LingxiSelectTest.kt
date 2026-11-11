@@ -248,7 +248,9 @@ class LingxiSelectTest {
             remembered = null,
             useModel = line.endsWith("reorder=ok"),
         ).candidates
-        assertEquals(expected, homophones.map { it.text })
+        val hanzi = homophones.filter { !it.literal }
+        assertEquals(expected, hanzi.map { it.text })
+        assertEquals("ㄋㄧˇ", row.last { it.literal }.text)
         session.onEnter()
         assertEquals(listOf("你"), host.commits)
         type(session, "ㄋㄧˇ")
@@ -330,6 +332,43 @@ class LingxiSelectTest {
         rawFinishSession.finish()
         assertEquals(listOf("ㄅ"), rawEnter.commits)
         assertEquals(rawEnter.commits, rawFinish.commits)
+    }
+
+    @Test
+    fun aLongerReadingKeepsSingleCharactersAndTheTypedBopomofo() {
+        val host = RecordingHost("請問")
+        val session = session(host)
+        type(session, "ㄋㄧˇㄏㄠˇ")
+        val row = host.snapshots.last().candidates
+        assertEquals(2, session.openSyllables)
+        val head = row.first { it.coversOpenSyllables(2) }
+        assertFalse(head.literal)
+        assertFalse(head.completion)
+        val letters = row.filter { it.span == 1 && !it.literal && !it.completion }
+        assertTrue(letters.any { it.text == "你" })
+        val spoken = row.single { it.literal }
+        assertEquals("ㄋㄧˇㄏㄠˇ", spoken.text)
+        session.acceptCandidate(letters.first { it.text == "你" })
+        assertTrue(host.commits.isEmpty())
+        assertEquals("你", session.previewComposing)
+        assertEquals("ㄏㄠˇ", session.previewReading)
+        val rest = host.snapshots.last().candidates.first { it.coversOpenSyllables(1) }
+        session.onEnter()
+        assertEquals(listOf("你" + rest.text), host.commits)
+    }
+
+    @Test
+    fun anUnfinishedSyllableKeepsThePreviousRow() {
+        val host = RecordingHost("請問")
+        val session = session(host)
+        type(session, "ㄋㄧˇ")
+        assertEquals("們", session.previewHint)
+        type(session, "ㄏ")
+        val row = host.snapshots.last().candidates
+        assertEquals("ㄋㄧˇㄏ", host.snapshots.last().preedit)
+        assertEquals("們", session.previewHint)
+        assertTrue(row.any { it.text == "你" && it.span == 1 && !it.literal })
+        assertEquals("ㄋㄧˇㄏ", row.single { it.literal }.text)
     }
 
     private fun session(host: RecordingHost): ZhuyinCompositionSession {
