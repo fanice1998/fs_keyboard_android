@@ -1016,6 +1016,7 @@ internal class CandidateController(
             candidates = CandidateUiState(
                 candidates = visible,
                 message = if (visible.isEmpty()) statusMessage() else "",
+                openSyllables = if (mode == KeyboardMode.ZHUYIN) zhuyin.openSyllables else 0,
             ),
             hasUnconfirmedText = hasUnconfirmed,
             numberPad = if (mode == KeyboardMode.NUMBER) numberPad else NumberPad.NONE,
@@ -1024,6 +1025,7 @@ internal class CandidateController(
             } else {
                 ""
             },
+            previewHint = if (mode == KeyboardMode.ZHUYIN) zhuyin.previewHint else "",
         )
     }
 

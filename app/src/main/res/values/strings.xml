@@ -43,6 +43,9 @@
     <string name="computer_key_taken">%1$s 已用於 %2$s 的 %3$s</string>
     <string name="vibration_switch">按鍵振動回饋</string>
     <string name="vibration_summary">開啟時，按下按鍵或滑動游標時會產生觸覺震動回饋。關閉後不震動。</string>
+    <string name="vibration_strength_label">按鍵震動強度</string>
+    <string name="vibration_strength_value">目前 %1$d%%</string>
+    <string name="vibration_strength_summary">往右較強，往左較弱。拖動時會以這個強度震一下。游標滑動的震動不跟著變。</string>
     <string name="ink_theme_switch">墨色按鍵</string>
     <string name="ink_theme_summary">較深的底色、較細的圓角，以及一圈按鍵邊框。關掉則回到原來的紙色。</string>
     <string name="key_preview_switch">按鍵懸浮提示</string>

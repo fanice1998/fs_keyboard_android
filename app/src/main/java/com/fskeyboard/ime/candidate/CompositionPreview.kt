@@ -9,6 +9,12 @@ internal object CompositionPreview {
     const val FILL: Int = 0xB32C2C2E.toInt()
     const val TEXT: Int = 0xFFFFFFFF.toInt()
 
+    /** About 45% white, so the untyped tail sits behind the reading. */
+    const val HINT: Int = 0x73FFFFFF.toInt()
+
+    /** Text measured for the bubble. The editor underline is [reading] alone. */
+    fun measuredLabel(reading: String, hint: String): String = reading + hint
+
     /**
      * [anchorTop] is the candidate bar's top in the keyboard window.
      * The bubble's bottom edge meets that line, so [CompositionPreviewFrame.top]

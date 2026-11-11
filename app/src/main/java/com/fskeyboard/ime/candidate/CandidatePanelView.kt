@@ -21,6 +21,7 @@ internal class CandidatePanelView(context: Context) : ScrollView(context) {
     private val grid = CandidateGrid(context)
     private val chips = ArrayList<TextView>()
     private var shown: List<Candidate> = emptyList()
+    private var shownSyllables = 0
 
     init {
         isClickable = true
@@ -30,11 +31,13 @@ internal class CandidatePanelView(context: Context) : ScrollView(context) {
         addView(grid, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
     }
 
-    fun render(candidates: List<Candidate>) {
+    fun render(candidates: List<Candidate>, syllables: Int = 0) {
         val palette = KeyboardPalette.of(isNightMode())
         setBackgroundColor(palette.background)
-        if (shown == candidates) return
+        if (shown == candidates && shownSyllables == syllables) return
         shown = candidates
+        shownSyllables = syllables
+        val accent = accentIndex(candidates, syllables)
         candidates.forEachIndexed { index, candidate ->
             val view = chips.getOrNull(index) ?: CandidateChips.create(this).also {
                 chips += it
@@ -43,7 +46,7 @@ internal class CandidatePanelView(context: Context) : ScrollView(context) {
             CandidateChips.bind(
                 view,
                 candidate,
-                emphasized = index == 0,
+                emphasized = index == accent,
                 palette,
                 onCandidate,
                 onLongClick = { chosen -> onCandidateHold(view, chosen) },

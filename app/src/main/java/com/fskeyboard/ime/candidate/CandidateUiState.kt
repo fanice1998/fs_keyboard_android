@@ -6,6 +6,8 @@ import com.fskeyboard.ime.keyboard.NumberPad
 internal data class CandidateUiState(
     val candidates: List<Candidate> = emptyList(),
     val message: String = "",
+    /** Syllables still open. 0 keeps the accent on the first ordinary chip. */
+    val openSyllables: Int = 0,
 )
 
 internal data class ImeUiState(
@@ -18,6 +20,8 @@ internal data class ImeUiState(
     val numberPad: NumberPad = NumberPad.NONE,
     /** Chosen Hanzi plus unfinished bopomofo. Underlined in the editor and shown in the bubble. */
     val preview: String = "",
+    /** Untyped tail drawn after [preview] on the bubble. The underline does not include it. */
+    val previewHint: String = "",
 )
 
 /** Symbol pages keep the row clear. Zhuyin and Latin both show what was just looked up. */

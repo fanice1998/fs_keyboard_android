@@ -28,6 +28,7 @@ internal class CompositionPreviewPopup(private val anchor: View) {
         animationStyle = 0
     }
     private var text: String = ""
+    private var hint: String = ""
     private var placedText: String = ""
     private var placedLeft = Int.MIN_VALUE
     private var placedTop = Int.MIN_VALUE
@@ -58,14 +59,15 @@ internal class CompositionPreviewPopup(private val anchor: View) {
         anchor.addOnAttachStateChangeListener(onAttach)
     }
 
-    /** Shows [next], or hides the bubble when the composition is empty. */
-    fun show(next: String) {
+    /** Shows [next], or hides the bubble when the composition is empty. [hint] is not underlined. */
+    fun show(next: String, hint: String = "") {
         if (next.isEmpty()) {
             hide()
             return
         }
-        val same = next == text && window.isShowing
+        val same = next == text && hint == this.hint && window.isShowing
         text = next
+        this.hint = hint
         if (same) return
         if (!canShow()) return
         place()
@@ -84,6 +86,7 @@ internal class CompositionPreviewPopup(private val anchor: View) {
 
     fun hide() {
         text = ""
+        hint = ""
         dismiss()
     }
 
@@ -101,7 +104,7 @@ internal class CompositionPreviewPopup(private val anchor: View) {
     }
 
     private fun place() {
-        val label = text
+        val label = CompositionPreview.measuredLabel(text, hint)
         if (label.isEmpty()) return
         if (!canShow()) return
         val root = anchor.rootView
@@ -136,7 +139,8 @@ internal class CompositionPreviewPopup(private val anchor: View) {
             frame.width == placedWidth &&
             frame.height == placedHeight
         if (samePlace) return
-        bubble.label = label
+        bubble.label = text
+        bubble.hint = hint
         bubble.textSizePx = textSize
         bubble.padX = padX.toFloat()
         bubble.cornerPx = anchor.dp(8).toFloat()
@@ -161,6 +165,7 @@ internal class CompositionPreviewPopup(private val anchor: View) {
 
     private class Bubble(context: android.content.Context) : View(context) {
         var label: String = ""
+        var hint: String = ""
         var textSizePx: Float = 0f
         var padX: Float = 0f
         var cornerPx: Float = 0f
@@ -182,10 +187,18 @@ internal class CompositionPreviewPopup(private val anchor: View) {
             fill.color = CompositionPreview.FILL
             canvas.drawRoundRect(card, cornerPx, cornerPx, fill)
             text.textSize = textSizePx
+            text.color = CompositionPreview.TEXT
             val available = (width - padX * 2).coerceAtLeast(0f)
-            val shown = TextUtils.ellipsize(label, text, available, TextUtils.TruncateAt.END)
             val baseline = height / 2f - (text.ascent() + text.descent()) / 2f
+            val shown = TextUtils.ellipsize(label, text, available, TextUtils.TruncateAt.END)
             canvas.drawText(shown, 0, shown.length, padX, baseline, text)
+            if (hint.isNotEmpty() && shown.length == label.length) {
+                val used = text.measureText(label)
+                val rest = (available - used).coerceAtLeast(0f)
+                text.color = CompositionPreview.HINT
+                val tail = TextUtils.ellipsize(hint, text, rest, TextUtils.TruncateAt.END)
+                canvas.drawText(tail, 0, tail.length, padX + used, baseline, text)
+            }
         }
     }
 }

@@ -29,12 +29,24 @@ internal class LexHit(
     val rare: Boolean,
 )
 
+/** A lexicon word whose reading is strictly longer than the typed prefix. */
+internal class LongHit(
+    val surface: String,
+    val prw: Float,
+    val syllables: Int,
+    val reading: String,
+)
+
 /**
  * Compact lexicon (`ZUINLEX`). Entries stay in the file layout.
- * [exact] binary-searches the reading-id sequence.
+ * A fully toned reading binary-searches the reading-id sequence.
+ * An untoned reading binary-searches [byBody], the same entries ordered by
+ * tone-stripped bodies, so a long phrase is one range instead of five tones
+ * raised to the syllable count.
  */
 internal class LingxiLexicon(
     private val syllableIds: HashMap<String, Int>,
+    private val syllableForms: Array<String>,
     private val rd: ShortArray,
     private val rdOff: IntArray,
     private val sfOff: IntArray,
@@ -47,8 +59,101 @@ internal class LingxiLexicon(
 ) {
     val entryCount: Int get() = rdOff.size
 
-    fun exact(syllables: List<String>): List<LexHit> {
+    /** Syllable id to tone-stripped body id. Body ids follow first-seen form order. */
+    private val bodyOfSyllable: IntArray
+
+    /** Tone-stripped bopomofo body to [bodyOfSyllable]. */
+    private val bodyIds: HashMap<String, Int>
+
+    /** Entry indexes sorted by tone-stripped reading, then by syllable count. */
+    private val byBody: IntArray
+
+    init {
+        val bodies = HashMap<String, Int>(syllableForms.size)
+        val ofSyllable = IntArray(syllableForms.size)
+        for (id in syllableForms.indices) {
+            val body = syllableForms[id].trimEnd('ˊ', 'ˇ', 'ˋ', '˙')
+            ofSyllable[id] = bodies.getOrPut(body) { bodies.size }
+        }
+        bodyOfSyllable = ofSyllable
+        bodyIds = bodies
+        val boxed = Array(entryCount) { it }
+        boxed.sortWith { left, right -> compareBodyEntries(left, right) }
+        byBody = IntArray(entryCount) { boxed[it] }
+    }
+
+    /**
+     * [openTone] marks syllables whose tone was not chosen. Those match every
+     * tone of the same body. A chosen 平聲 stays the unmarked reading only.
+     */
+    fun exact(syllables: List<String>, openTone: BooleanArray = BooleanArray(0)): List<LexHit> {
         if (syllables.isEmpty()) return emptyList()
+        val open = openTone.size == syllables.size && openTone.any { it }
+        if (!open) return exactFixed(syllables)
+        return exactOpen(syllables, openTone)
+    }
+
+    private fun queryIds(syllables: List<String>): IntArray? {
+        val query = IntArray(syllables.size)
+        for (index in syllables.indices) {
+            query[index] = syllableIds[syllables[index]] ?: return null
+        }
+        return query
+    }
+
+    private fun longerFixed(query: IntArray, limit: Int, deadlineNs: Long): List<LongHit> {
+        var lo = 0
+        var hi = entryCount
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (compareReading(mid, query) < 0) lo = mid + 1 else hi = mid
+        }
+        val out = ArrayList<LongHit>(limit)
+        var seen = 0
+        while (lo < entryCount && seen < limit) {
+            if (past(deadlineNs)) break
+            if (!startsWith(lo, query)) break
+            val len = rdLen[lo].toInt() and 0xFF
+            if (len > query.size) {
+                seen++
+                val reading = readingOf(lo, len)
+                if (reading != null) out += LongHit(surfaceOf(lo), prw[lo], len, reading)
+            }
+            lo++
+        }
+        return out
+    }
+
+    private fun startsWith(index: Int, query: IntArray): Boolean {
+        val len = rdLen[index].toInt() and 0xFF
+        if (len < query.size) return false
+        val off = rdOff[index]
+        for (step in query.indices) {
+            if ((rd[off + step].toInt() and 0xFFFF) != query[step]) return false
+        }
+        return true
+    }
+
+    private fun readingOf(index: Int, len: Int): String? {
+        val off = rdOff[index]
+        val reading = StringBuilder()
+        for (step in 0 until len) {
+            val id = rd[off + step].toInt() and 0xFFFF
+            val form = syllableForms.getOrNull(id) ?: return null
+            reading.append(form)
+        }
+        return reading.toString()
+    }
+
+    private fun surfaceOf(index: Int): String {
+        return String(strs, sfOff[index], sfLen[index], Charsets.UTF_8)
+    }
+
+    private fun past(deadlineNs: Long): Boolean {
+        return deadlineNs != Long.MAX_VALUE && System.nanoTime() > deadlineNs
+    }
+
+    private fun exactFixed(syllables: List<String>): List<LexHit> {
         val query = IntArray(syllables.size)
         for (index in syllables.indices) {
             query[index] = syllableIds[syllables[index]] ?: return emptyList()
@@ -65,6 +170,148 @@ internal class LingxiLexicon(
             lo++
         }
         return out
+    }
+
+    /**
+     * Words whose reading starts with [syllables] and continues.
+     * At most [limit] strictly longer entries are examined.
+     * Open tones share one toneless range. A deadline already passed stops the walk.
+     */
+    fun longer(
+        syllables: List<String>,
+        openTone: BooleanArray = BooleanArray(0),
+        limit: Int = 32,
+        deadlineNs: Long = Long.MAX_VALUE,
+    ): List<LongHit> {
+        if (syllables.isEmpty() || limit <= 0) return emptyList()
+        if (past(deadlineNs)) return emptyList()
+        val open = openTone.size == syllables.size && openTone.any { it }
+        if (!open) {
+            val query = queryIds(syllables) ?: return emptyList()
+            return longerFixed(query, limit, deadlineNs)
+        }
+        return longerOpen(syllables, openTone, limit, deadlineNs)
+    }
+
+    /** Every tone of a body, filtered where the user already chose a tone. */
+    private fun exactOpen(syllables: List<String>, openTone: BooleanArray): List<LexHit> {
+        val query = bodyQuery(syllables) ?: return emptyList()
+        val chosen = chosenIds(syllables, openTone) ?: return emptyList()
+        var lo = lowerBody(query)
+        val out = ArrayList<LexHit>()
+        while (lo < entryCount && compareBody(byBody[lo], query) == 0) {
+            val index = byBody[lo]
+            if (tonesMatch(index, chosen)) out += hit(index)
+            lo++
+        }
+        return out
+    }
+
+    /** One toneless prefix scan. [limit] counts longer entries whose chosen tones match. */
+    private fun longerOpen(
+        syllables: List<String>,
+        openTone: BooleanArray,
+        limit: Int,
+        deadlineNs: Long,
+    ): List<LongHit> {
+        val query = bodyQuery(syllables) ?: return emptyList()
+        val chosen = chosenIds(syllables, openTone) ?: return emptyList()
+        var lo = lowerBody(query)
+        val out = ArrayList<LongHit>(limit)
+        var seen = 0
+        while (lo < entryCount && seen < limit) {
+            if (past(deadlineNs)) break
+            val index = byBody[lo]
+            if (!startsWithBody(index, query)) break
+            val len = rdLen[index].toInt() and 0xFF
+            if (len > query.size && tonesMatch(index, chosen)) {
+                seen++
+                val reading = readingOf(index, len)
+                if (reading != null) out += LongHit(surfaceOf(index), prw[index], len, reading)
+            }
+            lo++
+        }
+        return out
+    }
+
+    private fun bodyQuery(syllables: List<String>): IntArray? {
+        val query = IntArray(syllables.size)
+        for (index in syllables.indices) {
+            val body = syllables[index].trimEnd('ˊ', 'ˇ', 'ˋ', '˙')
+            query[index] = bodyIds[body] ?: return null
+        }
+        return query
+    }
+
+    /** Chosen tones keep their syllable id. An open tone is -1 and matches any tone. */
+    private fun chosenIds(syllables: List<String>, openTone: BooleanArray): IntArray? {
+        val chosen = IntArray(syllables.size)
+        for (index in syllables.indices) {
+            if (openTone[index]) {
+                chosen[index] = -1
+            } else {
+                chosen[index] = syllableIds[syllables[index]] ?: return null
+            }
+        }
+        return chosen
+    }
+
+    private fun lowerBody(query: IntArray): Int {
+        var lo = 0
+        var hi = entryCount
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (compareBody(byBody[mid], query) < 0) lo = mid + 1 else hi = mid
+        }
+        return lo
+    }
+
+    private fun compareBodyEntries(left: Int, right: Int): Int {
+        val leftOff = rdOff[left]
+        val rightOff = rdOff[right]
+        val leftLen = rdLen[left].toInt() and 0xFF
+        val rightLen = rdLen[right].toInt() and 0xFF
+        val shared = minOf(leftLen, rightLen)
+        for (step in 0 until shared) {
+            val leftBody = bodyOfSyllable[rd[leftOff + step].toInt() and 0xFFFF]
+            val rightBody = bodyOfSyllable[rd[rightOff + step].toInt() and 0xFFFF]
+            if (leftBody != rightBody) return leftBody - rightBody
+        }
+        return leftLen - rightLen
+    }
+
+    private fun compareBody(index: Int, query: IntArray): Int {
+        val off = rdOff[index]
+        val len = rdLen[index].toInt() and 0xFF
+        val shared = minOf(len, query.size)
+        for (step in 0 until shared) {
+            val body = bodyOfSyllable[rd[off + step].toInt() and 0xFFFF]
+            if (body != query[step]) return body - query[step]
+        }
+        return len - query.size
+    }
+
+    private fun startsWithBody(index: Int, query: IntArray): Boolean {
+        val len = rdLen[index].toInt() and 0xFF
+        if (len < query.size) return false
+        val off = rdOff[index]
+        for (step in query.indices) {
+            val body = bodyOfSyllable[rd[off + step].toInt() and 0xFFFF]
+            if (body != query[step]) return false
+        }
+        return true
+    }
+
+    private fun tonesMatch(index: Int, chosen: IntArray): Boolean {
+        val off = rdOff[index]
+        val len = rdLen[index].toInt() and 0xFF
+        if (len < chosen.size) return false
+        for (step in chosen.indices) {
+            val want = chosen[step]
+            if (want < 0) continue
+            if ((rd[off + step].toInt() and 0xFFFF) != want) return false
+        }
+        return true
     }
 
     fun hasSurface(surface: String): Boolean {
@@ -126,19 +373,20 @@ internal class LingxiLm(
     val unigrams: Int get() = uni.size
     val bigrams: Int get() = q.size
 
-    fun uni(word: String): Double {
-        val index = find(word)
-        return if (index >= 0) uni[index].toDouble() else UNSEEN
-    }
+    fun uni(word: String): Double = uniAt(idOf(word))
 
-    fun has(word: String): Boolean = find(word) >= 0
+    fun has(word: String): Boolean = idOf(word) >= 0
 
-    fun bi(left: String, word: String): Double {
-        if (q.isEmpty()) return 0.0
-        val leftId = find(left)
-        if (leftId < 0 || leftStart[leftId] == leftStart[leftId + 1]) return 0.0
-        val rightId = find(word)
-        if (rightId < 0) return 0.0
+    /** Unigram row, or -1 when the word was never counted. */
+    fun idOf(word: String): Int = find(word)
+
+    fun uniAt(index: Int): Double = if (index >= 0) uni[index].toDouble() else UNSEEN
+
+    fun bi(left: String, word: String): Double = biAt(idOf(left), idOf(word))
+
+    fun biAt(leftId: Int, rightId: Int): Double {
+        if (q.isEmpty() || leftId < 0 || rightId < 0) return 0.0
+        if (leftId >= uni.size || leftStart[leftId] == leftStart[leftId + 1]) return 0.0
         var lo = leftStart[leftId]
         val hiLimit = leftStart[leftId + 1]
         var hi = hiLimit
@@ -330,7 +578,7 @@ private fun decodeLexicon(bytes: ByteArray): LingxiLexicon {
     val syllables = String(syllableBytes, Charsets.UTF_8).split(' ').filter { it.isNotEmpty() }
     val ids = HashMap<String, Int>(syllables.size)
     syllables.forEachIndexed { index, syllable -> ids[syllable] = index }
-    return LingxiLexicon(ids, rd, rdOff, sfOff, sfLen, rdLen, flags, prw, strs, byText)
+    return LingxiLexicon(ids, syllables.toTypedArray(), rd, rdOff, sfOff, sfLen, rdLen, flags, prw, strs, byText)
 }
 
 private fun decodeLm(bytes: ByteArray): LingxiLm {

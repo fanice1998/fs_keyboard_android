@@ -41,10 +41,18 @@ internal fun lingxiReorderLabel(reordered: List<String>?, deadlineNs: Long, now:
     return "ok"
 }
 
+internal data class LingxiCompletion(
+    val surface: String,
+    val tail: String,
+    val reading: String,
+)
+
 internal data class LingxiResult(
     val candidates: List<String>,
     /** `ok` when the model reordered, `miss` when it ran past the budget or failed, `skip` when it was not asked. */
     val reorder: String,
+    /** A longer lexicon word continuing [candidates]'s first row. Never one of those rows. */
+    val completion: LingxiCompletion? = null,
 )
 
 /**
@@ -63,26 +71,90 @@ internal class LingxiEngine(
         remembered: String?,
         deadlineNs: Long = Long.MAX_VALUE,
         useModel: Boolean = true,
+        openTone: BooleanArray = BooleanArray(0),
     ): LingxiResult {
         val committed = withoutOpenReading(context, syllables)
-        val statistical = viterbi(syllables, leftWord(committed))
+        val statistical = viterbi(syllables, openTone, lingxiLeftWord(tables, committed))
         val texts = statistical.map { it.text }
+        // The lexicon walk happens before the model, and stops once the key budget is gone.
+        val scanned = scanContinuations(syllables, openTone, deadlineNs)
+        fun finish(rows: List<String>, label: String): LingxiResult {
+            val shown = pin(rows, remembered)
+            val hint = chooseCompletion(scanned, shown.firstOrNull().orEmpty(), committed)
+            return LingxiResult(shown, label, hint)
+        }
         if (!useModel || scorer == null || statistical.size < 2) {
-            return LingxiResult(pin(texts, remembered), "skip")
+            return finish(texts, "skip")
         }
         if (System.nanoTime() > deadlineNs) {
-            return LingxiResult(pin(texts, remembered), "miss")
+            return finish(texts, "miss")
         }
         val reordered = try {
             scoreWithin(deadlineNs) { reorder(syllables, committed, statistical, deadlineNs) }
         } catch (_: TimeoutException) {
-            return LingxiResult(pin(texts, remembered), "miss")
+            return finish(texts, "miss")
         } catch (_: Exception) {
-            return LingxiResult(pin(texts, remembered), "miss")
+            return finish(texts, "miss")
         }
         val label = lingxiReorderLabel(reordered, deadlineNs, System.nanoTime())
-        if (label != "ok" || reordered == null) return LingxiResult(pin(texts, remembered), label)
-        return LingxiResult(pin(reordered, remembered), "ok")
+        if (label != "ok" || reordered == null) return finish(texts, label)
+        return finish(reordered, "ok")
+    }
+
+    /**
+     * One longer lexicon word that continues [head]. Null when nothing is confident.
+     * The model is not asked. A deadline already passed returns null.
+     */
+    fun completion(
+        syllables: List<String>,
+        openTone: BooleanArray,
+        context: String,
+        head: String,
+        deadlineNs: Long = Long.MAX_VALUE,
+    ): LingxiCompletion? {
+        if (head.isEmpty()) return null
+        val committed = withoutOpenReading(context, syllables)
+        return chooseCompletion(scanContinuations(syllables, openTone, deadlineNs), head, committed)
+    }
+
+    private fun scanContinuations(
+        syllables: List<String>,
+        openTone: BooleanArray,
+        deadlineNs: Long,
+    ): List<LongHit> {
+        if (syllables.isEmpty()) return emptyList()
+        val openCount = if (openTone.size == syllables.size) openTone.count { it } else 0
+        if (openCount > MAX_OPEN_TONES) return emptyList()
+        if (deadlineNs != Long.MAX_VALUE && System.nanoTime() > deadlineNs) return emptyList()
+        return tables.lexicon.longer(syllables, openTone, LONGER_LIMIT, deadlineNs).filter { hit ->
+            val extra = hit.syllables - syllables.size
+            extra in 1..MAX_EXTRA && hit.syllables <= MAX_WORD
+        }
+    }
+
+    private fun chooseCompletion(
+        hits: List<LongHit>,
+        head: String,
+        committed: String,
+    ): LingxiCompletion? {
+        if (head.isEmpty() || hits.isEmpty()) return null
+        val left = lingxiLeftWord(tables, committed)
+        var best: LongHit? = null
+        var bestLog = Double.NEGATIVE_INFINITY
+        for (hit in hits) {
+            if (hit.surface.codePointCount(0, hit.surface.length) <= head.codePointCount(0, head.length)) continue
+            if (!hit.surface.startsWith(head)) continue
+            if (tables.lm.bi(left, hit.surface) <= 0.0) continue
+            val score = logProb(left, hit.surface, hit.prw)
+            if (score > bestLog) {
+                bestLog = score
+                best = hit
+            }
+        }
+        val chosen = best ?: return null
+        val tail = chosen.surface.substring(head.length)
+        if (tail.isEmpty()) return null
+        return LingxiCompletion(chosen.surface, tail, chosen.reading)
     }
 
     /** A finite budget waits on the scorer only until the deadline, then keeps the statistical row. */
@@ -121,25 +193,39 @@ internal class LingxiEngine(
         ).map { texts[it] }
     }
 
-    private fun viterbi(syllables: List<String>, left: String): List<Row> {
+    private fun viterbi(syllables: List<String>, openTone: BooleanArray, left: String): List<Row> {
         if (syllables.isEmpty()) return emptyList()
+        val unspecified = openTone.size == syllables.size
         val n = syllables.size
+        val wordIds = HashMap<String, Int>(256)
+        fun wordId(text: String): Int {
+            wordIds[text]?.let { return it }
+            val id = tables.lm.idOf(text)
+            wordIds[text] = id
+            return id
+        }
         val states = Array(n + 1) { HashMap<String, ArrayList<Hyp>>() }
-        states[0][left] = arrayListOf(Hyp("", 0.0, left, false))
+        states[0][left] = arrayListOf(Hyp(null, "", 0.0, left, false))
         for (at in 0 until n) {
             val hyps = prune(states[at])
             if (hyps.isEmpty()) break
             val room = minOf(MAX_WORD, n - at)
+            val leftIds = IntArray(hyps.size) { wordId(hyps[it].last) }
             for (len in 1..room) {
-                val entries = tables.lexicon.exact(syllables.subList(at, at + len))
+                val tones = if (unspecified) openTone.copyOfRange(at, at + len) else BooleanArray(0)
+                val entries = tables.lexicon.exact(syllables.subList(at, at + len), tones)
                 if (entries.isEmpty()) continue
-                for (hyp in hyps) {
-                    for (entry in entries) {
+                val rightIds = IntArray(entries.size) { wordId(entries[it].surface) }
+                for (hypIndex in hyps.indices) {
+                    val hyp = hyps[hypIndex]
+                    val leftId = leftIds[hypIndex]
+                    for (entryIndex in entries.indices) {
+                        val entry = entries[entryIndex]
                         if (entry.surface.isEmpty() || entry.prw <= 0f) continue
-                        val score = hyp.log + arcLog(hyp.last, entry.surface, entry.prw)
+                        val score = hyp.log + arcLog(leftId, rightIds[entryIndex], entry.prw)
                         offer(
                             states[at + len],
-                            Hyp(hyp.text + entry.surface, score, entry.surface, hyp.rare || entry.rare),
+                            Hyp(hyp, entry.surface, score, entry.surface, hyp.rare || entry.rare),
                         )
                     }
                 }
@@ -148,47 +234,39 @@ internal class LingxiEngine(
         val best = HashMap<String, Hyp>()
         for (group in states[n].values) {
             for (hyp in group) {
-                if (hyp.text.isEmpty()) continue
-                val old = best[hyp.text]
-                if (old == null || hyp.log > old.log) best[hyp.text] = hyp
+                val text = hyp.text()
+                if (text.isEmpty()) continue
+                val old = best[text]
+                if (old == null || hyp.log > old.log) best[text] = hyp
             }
         }
         return best.values.sortedWith(
             compareBy<Hyp> { it.rare }
                 .thenByDescending { it.log }
-                .thenBy { block(it.text) }
-                .thenBy { it.text },
-        ).take(LINGXI_N_BEST).map { Row(it.text, it.log) }
+                .thenBy { block(it.text()) }
+                .thenBy { it.text() },
+        ).take(LINGXI_N_BEST).map { Row(it.text(), it.log) }
     }
 
-    private fun arcLog(left: String, surface: String, prw: Float): Double {
-        return logProb(left, surface, prw)
+    private fun arcLog(leftId: Int, rightId: Int, prw: Float): Double {
+        return scored(leftId, rightId, prw)
     }
 
     private fun logProb(left: String, surface: String, prw: Float): Double {
-        val probability = MU * tables.lm.bi(left, surface) + (1.0 - MU) * tables.lm.uni(surface)
+        return scored(tables.lm.idOf(left), tables.lm.idOf(surface), prw)
+    }
+
+    private fun scored(leftId: Int, rightId: Int, prw: Float): Double {
+        val probability = MU * tables.lm.biAt(leftId, rightId) + (1.0 - MU) * tables.lm.uniAt(rightId)
         val safe = if (probability > 0.0) probability else 1e-300
         val prior = if (prw > 0f) prw.toDouble() else 1e-300
         return ln(safe) + ln(prior)
     }
 
-    private fun leftWord(context: String): String {
-        if (context.isEmpty()) return BOS
-        val points = codePoints(context)
-        val room = minOf(6, points.size)
-        for (length in room downTo 1) {
-            val suffix = String(points, points.size - length, length)
-            if (tables.lm.has(suffix) || tables.lexicon.hasSurface(suffix)) return suffix
-        }
-        val last = points.last()
-        if (Character.UnicodeScript.of(last) == Character.UnicodeScript.HAN) {
-            return String(intArrayOf(last), 0, 1)
-        }
-        return BOS
-    }
-
     private companion object {
-        const val BOS = "<s>"
+        const val LONGER_LIMIT = 32
+        const val MAX_EXTRA = 4
+        const val MAX_OPEN_TONES = 2
         val SCORER = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "fskeyboard-lingxi-score").apply { isDaemon = true }
         }
@@ -197,11 +275,44 @@ internal class LingxiEngine(
 
 private class Row(val text: String, val log: Double)
 
-private class Hyp(val text: String, val log: Double, val last: String, val rare: Boolean)
+/**
+ * One lexicon arc. [prev] is the path before [piece]. The start node has no [prev].
+ * The joined surface is built only for a path that stays in the beam.
+ */
+private class Hyp(
+    val prev: Hyp?,
+    val piece: String,
+    val log: Double,
+    val last: String,
+    val rare: Boolean,
+) {
+    private var rendered: String? = null
+
+    fun text(): String {
+        rendered?.let { return it }
+        val value = if (prev == null) {
+            ""
+        } else {
+            val parts = ArrayList<String>()
+            var node: Hyp? = this
+            while (node?.prev != null) {
+                parts.add(node.piece)
+                node = node.prev
+            }
+            buildString {
+                for (index in parts.lastIndex downTo 0) append(parts[index])
+            }
+        }
+        rendered = value
+        return value
+    }
+}
 
 private fun offer(groups: MutableMap<String, ArrayList<Hyp>>, hyp: Hyp) {
     val rows = groups.getOrPut(hyp.last) { ArrayList() }
-    val existing = rows.indexOfFirst { it.text == hyp.text }
+    if (rows.size >= LINGXI_N_BEST && hyp.log <= rows[rows.lastIndex].log) return
+    val text = hyp.text()
+    val existing = rows.indexOfFirst { it.text() == text }
     if (existing >= 0) {
         if (rows[existing].log >= hyp.log) return
         rows.removeAt(existing)
@@ -239,6 +350,21 @@ private fun block(text: String): Int {
         point <= 0xFFFF -> 1
         else -> 3
     }
+}
+
+internal fun lingxiLeftWord(tables: LingxiTables, context: String): String {
+    if (context.isEmpty()) return "<s>"
+    val points = codePoints(context)
+    val room = minOf(6, points.size)
+    for (length in room downTo 1) {
+        val suffix = String(points, points.size - length, length)
+        if (tables.lm.has(suffix) || tables.lexicon.hasSurface(suffix)) return suffix
+    }
+    val last = points.last()
+    if (Character.UnicodeScript.of(last) == Character.UnicodeScript.HAN) {
+        return String(intArrayOf(last), 0, 1)
+    }
+    return "<s>"
 }
 
 private fun codePoints(text: String): IntArray {

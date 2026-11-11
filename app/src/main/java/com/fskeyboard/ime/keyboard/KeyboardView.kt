@@ -1,11 +1,17 @@
 package com.fskeyboard.ime.keyboard
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.media.AudioAttributes
 import android.os.Build
+import android.os.VibrationAttributes
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -155,6 +161,15 @@ internal class KeyboardView(context: Context) : View(context) {
             if (field == value) return
             field = value
             isHapticFeedbackEnabled = value
+        }
+
+    /**
+     * Key-tap strength, from 0 to 1. 0.6 matches the lighter click shipped before the slider.
+     * Cursor glides keep [tick] and do not read this.
+     */
+    var vibrationScale: Float = DEFAULT_TAP_SCALE
+        set(value) {
+            field = value.coerceIn(0f, 1f)
         }
 
     /** Whether a press floats that key's label above the key. */
@@ -820,12 +835,12 @@ internal class KeyboardView(context: Context) : View(context) {
         if (!vibrationEnabled) return
         val observer = viewTreeObserver
         if (!observer.isAlive) {
-            performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            playTap()
             return
         }
         if (Build.VERSION.SDK_INT >= 29) {
             observer.registerFrameCommitCallback {
-                if (vibrationEnabled) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                playTap()
             }
             return
         }
@@ -833,10 +848,104 @@ internal class KeyboardView(context: Context) : View(context) {
             override fun onDraw() {
                 post {
                     if (observer.isAlive) observer.removeOnDrawListener(this)
-                    if (vibrationEnabled) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    playTap()
                 }
             }
         })
+    }
+
+    /**
+     * A click scaled by [vibrationScale]. A full primitive click is 1.
+     * Devices that cannot scale a click keep the system tap.
+     */
+    private fun playTap() {
+        if (!vibrationEnabled) return
+        val scale = vibrationScale
+        if (scale <= 0f) return
+        val effect = createTapEffect(scale)
+        val vibrator = if (effect != null) deviceVibrator() else null
+        if (effect != null && vibrator != null) {
+            try {
+                vibrate(vibrator, effect)
+                return
+            } catch (_: RuntimeException) {
+                // The system tap still marks the key.
+            }
+        }
+        performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+    }
+
+    /** One click at the current strength, including while the settings switch is off. */
+    internal fun playVibrationSample() {
+        val enabled = vibrationEnabled
+        vibrationEnabled = true
+        try {
+            playTap()
+        } finally {
+            vibrationEnabled = enabled
+        }
+    }
+
+    private fun vibrate(vibrator: Vibrator, effect: VibrationEffect) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            vibrateTouch(vibrator, effect)
+        } else {
+            vibrateLegacy(vibrator, effect)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun vibrateTouch(vibrator: Vibrator, effect: VibrationEffect) {
+        vibrator.vibrate(
+            effect,
+            VibrationAttributes.Builder().setUsage(VibrationAttributes.USAGE_TOUCH).build(),
+        )
+    }
+
+    @SuppressLint("MissingPermission")
+    @Suppress("DEPRECATION")
+    private fun vibrateLegacy(vibrator: Vibrator, effect: VibrationEffect) {
+        vibrator.vibrate(
+            effect,
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                .build(),
+        )
+    }
+
+    private fun deviceVibrator(): Vibrator? {
+        return if (Build.VERSION.SDK_INT >= 31) defaultVibrator() else legacyVibrator()
+    }
+
+    private fun defaultVibrator(): Vibrator? {
+        return context.getSystemService(VibratorManager::class.java)?.defaultVibrator
+    }
+
+    private fun legacyVibrator(): Vibrator? {
+        return context.getSystemService(Vibrator::class.java)
+    }
+
+    private fun createTapEffect(scale: Float): VibrationEffect? {
+        if (tapKind == TAP_PRIMITIVE && Build.VERSION.SDK_INT >= 30) {
+            return VibrationEffect.startComposition()
+                .addPrimitive(VibrationEffect.Composition.PRIMITIVE_CLICK, scale)
+                .compose()
+        }
+        if (tapKind == TAP_ONESHOT) {
+            val amplitude = (scale * 255f).toInt().coerceIn(1, 255)
+            return VibrationEffect.createOneShot(TAP_FALLBACK_MS, amplitude)
+        }
+        return null
+    }
+
+    private fun detectTapKind(): Int {
+        val vibrator = deviceVibrator() ?: return TAP_NONE
+        if (Build.VERSION.SDK_INT >= 30) {
+            val click = VibrationEffect.Composition.PRIMITIVE_CLICK
+            if (vibrator.arePrimitivesSupported(click).firstOrNull() == true) return TAP_PRIMITIVE
+        }
+        if (vibrator.hasAmplitudeControl()) return TAP_ONESHOT
+        return TAP_NONE
     }
 
     /** A zhuyin key from a touch carries the keys that touch may have meant. */
@@ -870,7 +979,7 @@ internal class KeyboardView(context: Context) : View(context) {
             rebuild()
             return
         }
-        if (haptic && vibrationEnabled) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        if (haptic) playTap()
         val sending = action.applyingShift(shiftLock.mode)
         KeyStages.onKeyEntered()
         traced("ime.dispatch") { onKey(sending) }
@@ -1132,7 +1241,16 @@ internal class KeyboardView(context: Context) : View(context) {
     /** [rect] is the hit target. [face] is the drawn key, and matches [rect] until an edge grows. */
     private data class KeyBox(val spec: KeySpec, val rect: RectF, val face: RectF = rect)
 
+    private val tapKind: Int by lazy { detectTapKind() }
+
     private companion object {
         const val NO_POINTER = -1
+        const val TAP_NONE = 0
+        const val TAP_PRIMITIVE = 1
+        const val TAP_ONESHOT = 2
+
+        /** Fraction of a full click. The slider's 60% mark. */
+        const val DEFAULT_TAP_SCALE = 0.6f
+        const val TAP_FALLBACK_MS = 12L
     }
 }

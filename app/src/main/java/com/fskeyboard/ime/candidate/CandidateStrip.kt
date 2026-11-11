@@ -46,6 +46,7 @@ internal class CandidateStrip(context: Context) : View(context) {
     }
 
     private var candidates: List<Candidate> = emptyList()
+    private var openSyllables = 0
     private var palette = KeyboardPalette.of(false)
     private val labels = ArrayList<String>()
     private val slots = ArrayList<RectF>()
@@ -81,11 +82,13 @@ internal class CandidateStrip(context: Context) : View(context) {
     private var previewLoading = false
     private var previewGeneration = 0
 
-    fun show(next: List<Candidate>, nextPalette: KeyboardPalette) {
+    fun show(next: List<Candidate>, nextPalette: KeyboardPalette, syllables: Int = 0) {
         val sameList = candidates == next
         val samePalette = palette == nextPalette
-        if (sameList && samePalette) return
+        val sameSyllables = openSyllables == syllables
+        if (sameList && samePalette && sameSyllables) return
         palette = nextPalette
+        openSyllables = syllables
         if (!sameList) {
             candidates = next
             if (accessFocus >= candidates.size) accessFocus = HOST
@@ -162,14 +165,16 @@ internal class CandidateStrip(context: Context) : View(context) {
         textPaint.textSize = sp(TEXT_SP)
         val radius = corner
         val stroke = 1.5f * resources.displayMetrics.density
+        val accent = accentIndex(candidates, openSyllables)
         for (index in slots.indices) {
             val rect = chipRect(index)
-            val clipboard = candidates.getOrNull(index)?.source == CandidateSource.CLIPBOARD
+            val candidate = candidates.getOrNull(index)
+            val clipboard = candidate?.source == CandidateSource.CLIPBOARD
             fill.style = Paint.Style.FILL
             fill.color = when {
                 index == pressed -> palette.keyPressed
-                clipboard -> palette.background
-                index == 0 -> palette.accent
+                clipboard || candidate?.completion == true -> palette.background
+                index == accent -> palette.accent
                 else -> palette.key
             }
             canvas.drawRoundRect(rect, radius, radius, fill)
@@ -195,9 +200,7 @@ internal class CandidateStrip(context: Context) : View(context) {
             } else if (clipboard) {
                 drawClipboardLabel(canvas, rect, labels[index], baseline)
             } else {
-                textPaint.color = palette.text
-                textPaint.textAlign = Paint.Align.CENTER
-                canvas.drawText(labels[index], rect.centerX(), baseline, textPaint)
+                drawCandidateLabel(canvas, rect, candidate, labels[index], baseline)
             }
         }
     }
@@ -261,6 +264,35 @@ internal class CandidateStrip(context: Context) : View(context) {
 
     override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = nodes
 
+    /** A completion chip draws the typed bopomofo, then the predicted tail in the hint color. */
+    private fun drawCandidateLabel(
+        canvas: Canvas,
+        rect: RectF,
+        candidate: Candidate?,
+        label: String,
+        baseline: Float,
+    ) {
+        val reading = candidate?.labelReading.orEmpty()
+        val tail = candidate?.labelTail.orEmpty()
+        if (reading.isEmpty()) {
+            textPaint.color = palette.text
+            textPaint.textAlign = Paint.Align.CENTER
+            canvas.drawText(label, rect.centerX(), baseline, textPaint)
+            return
+        }
+        textPaint.textAlign = Paint.Align.LEFT
+        val total = textPaint.measureText(reading + tail)
+        var x = rect.centerX() - total / 2f
+        textPaint.color = palette.text
+        canvas.drawText(reading, x, baseline, textPaint)
+        x += textPaint.measureText(reading)
+        if (tail.isNotEmpty()) {
+            textPaint.color = palette.hint
+            canvas.drawText(tail, x, baseline, textPaint)
+        }
+        textPaint.textAlign = Paint.Align.CENTER
+    }
+
     private fun layoutChips() {
         labels.clear()
         slots.clear()
@@ -273,7 +305,7 @@ internal class CandidateStrip(context: Context) : View(context) {
         corner = dp(8).toFloat()
         var x = 0f
         for (candidate in candidates) {
-            val label = CandidateChips.labelOf(candidate)
+            val label = candidate.visibleLabel()
             labels += label
             val left = x + margin
             val right = left + chipContentWidth(candidate, label) + padH * 2f

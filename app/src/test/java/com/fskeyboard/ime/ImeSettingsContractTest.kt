@@ -34,6 +34,15 @@ class ImeSettingsContractTest {
         assertTrue(layout.contains("@+id/latin_top_number_row_switch"))
         assertTrue(layout.contains("@+id/vibration_switch"))
         assertTrue(strings.contains("name=\"vibration_switch\""))
+        assertTrue(layout.contains("@+id/vibration_strength"))
+        assertTrue(strings.contains("name=\"vibration_strength_label\""))
+        assertTrue(activity.contains("setVibrationScale"))
+        assertTrue(activity.contains("playVibrationSample"))
+        val preferences = readProjectFile("src/main/java/com/fskeyboard/ime/settings/KeyboardPreferences.kt")
+        val service = readProjectFile("src/main/java/com/fskeyboard/ime/FsKeyboardService.kt")
+        assertTrue(preferences.contains("keyboard_vibration_scale"))
+        assertTrue(preferences.contains("getInt(KEY_VIBRATION_SCALE, VIBRATION_SCALE_DEFAULT)"))
+        assertTrue(service.contains("vibrationScale"))
     }
 
     @Test

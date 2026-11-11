@@ -91,7 +91,7 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         if (!clipboard) dismissClipboardPrompt()
         val changed = shown != state.candidates
         shown = state.candidates
-        strip.show(state.candidates, palette)
+        strip.show(state.candidates, palette, state.openSyllables)
         if (changed) scroll.scrollTo(0, 0)
     }
 

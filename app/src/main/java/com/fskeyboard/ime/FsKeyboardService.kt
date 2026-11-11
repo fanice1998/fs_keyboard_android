@@ -273,6 +273,7 @@ class FsKeyboardService : InputMethodService() {
             computerKeys = preferences.computerKeys()
             computerMap = preferences.computerKeyMap()
             vibrationEnabled = preferences.vibrationEnabled()
+            vibrationScale = preferences.vibrationScale() / 100f
             keyPreviewEnabled = preferences.keyPreviewEnabled()
             theme = preferences.keyboardTheme()
             onTyped = latencyProbe::keyHandled
@@ -590,6 +591,7 @@ class FsKeyboardService : InputMethodService() {
         keyboard?.computerKeys = preferences.computerKeys()
         keyboard?.computerMap = preferences.computerKeyMap()
         keyboard?.vibrationEnabled = preferences.vibrationEnabled()
+        keyboard?.vibrationScale = preferences.vibrationScale() / 100f
         keyboard?.keyPreviewEnabled = preferences.keyPreviewEnabled()
         keyboard?.theme = preferences.keyboardTheme()
         keyboard?.enterChoice = EnterActions.choose(info)
@@ -659,11 +661,14 @@ class FsKeyboardService : InputMethodService() {
             }
             keyboard?.enterChoice = enterChoice
             candidateBar?.render(state.candidates)
-            compositionPreview?.show(state.preview)
+            compositionPreview?.show(state.preview, state.previewHint)
             val clipboardOnly = state.candidates.candidates.singleOrNull()?.source == CandidateSource.CLIPBOARD
             when {
                 state.candidates.candidates.isEmpty() || clipboardOnly -> showPanel(false)
-                panelOpen -> candidatePanel?.render(state.candidates.candidates)
+                panelOpen -> candidatePanel?.render(
+                    state.candidates.candidates,
+                    state.candidates.openSyllables,
+                )
             }
         }
         KeyStages.noteRender(System.nanoTime() - renderStart)
@@ -673,7 +678,7 @@ class FsKeyboardService : InputMethodService() {
     private fun showPanel(open: Boolean) {
         val candidates = pending.candidates.candidates
         panelOpen = open && candidates.isNotEmpty()
-        if (panelOpen) candidatePanel?.render(candidates)
+        if (panelOpen) candidatePanel?.render(candidates, pending.candidates.openSyllables)
         candidatePanel?.visibility = if (panelOpen) View.VISIBLE else View.GONE
         candidateBar?.expanded = panelOpen
     }

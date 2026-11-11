@@ -8,7 +8,11 @@ class CompositionPreviewTest {
     @Test
     fun bubbleIsWhiteOnTranslucentDarkGray() {
         assertEquals(0xFFFFFFFF.toInt(), CompositionPreview.TEXT)
+        assertEquals(0x73FFFFFF.toInt(), CompositionPreview.HINT)
         assertEquals(0xB32C2C2E.toInt(), CompositionPreview.FILL)
+        assertEquals("ㄇㄚˊ", CompositionPreview.measuredLabel("ㄇㄚˊ", ""))
+        assertTrue(CompositionPreview.measuredLabel("ㄇㄚˊ", "辣鍋").length > CompositionPreview.measuredLabel("ㄇㄚˊ", "").length)
+        assertEquals("ㄇㄚˊ", compositionText("", "ㄇㄚˊ"))
     }
 
     @Test

@@ -79,6 +79,18 @@ internal class KeyboardPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_VIBRATION, enabled).apply()
     }
 
+    /** Key-tap strength from 0 to 100. 60 is the lighter click used before the slider. */
+    fun vibrationScale(): Int = prefs.getInt(KEY_VIBRATION_SCALE, VIBRATION_SCALE_DEFAULT)
+        .coerceIn(0, VIBRATION_SCALE_MAX)
+
+    fun setVibrationScale(percent: Int, flush: Boolean = false) {
+        val editor = prefs.edit().putInt(
+            KEY_VIBRATION_SCALE,
+            percent.coerceIn(0, VIBRATION_SCALE_MAX),
+        )
+        if (flush) editor.commit() else editor.apply()
+    }
+
     /** Whether a press floats the key's label above the key. On unless the user turns it off. */
     fun keyPreviewEnabled(): Boolean = prefs.getBoolean(KEY_PREVIEW, true)
 
@@ -130,6 +142,9 @@ internal class KeyboardPreferences(context: Context) {
         const val KEY_COMPUTER_KEYS = "latin_computer_keys"
         const val KEY_COMPUTER_KEY_MAP = "latin_computer_key_map"
         const val KEY_VIBRATION = "keyboard_vibration_enabled"
+        const val KEY_VIBRATION_SCALE = "keyboard_vibration_scale"
+        const val VIBRATION_SCALE_MAX = 100
+        const val VIBRATION_SCALE_DEFAULT = 60
         const val KEY_PREVIEW = "key_preview_enabled"
         const val KEY_THEME = "keyboard_theme"
         const val KEY_FORGET_UNUSED = "forget_unused_predictions"

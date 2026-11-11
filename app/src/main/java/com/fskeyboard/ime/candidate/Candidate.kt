@@ -37,4 +37,36 @@ internal data class Candidate(
     val clipboardImageUri: String? = null,
     /** Unmatched onset, medial, or vowel. Lower is a fuller reading. */
     val extra: Int = 0,
+    /**
+     * A longer lexicon word on the left of the homophone row.
+     * [text] is the whole word a tap commits. The chip draws [labelReading] and then [labelTail].
+     */
+    val completion: Boolean = false,
+    /** Typed bopomofo drawn on a completion chip. Empty on every other row. */
+    val labelReading: String = "",
+    /** Predicted Hanzi drawn after [labelReading] in the hint color. */
+    val labelTail: String = "",
 )
+
+/** The chip Enter commits: it covers every open syllable and is not the prediction. */
+internal fun Candidate.coversOpenSyllables(openSyllables: Int): Boolean {
+    return openSyllables > 0 &&
+        !completion &&
+        source != CandidateSource.CLIPBOARD &&
+        text.isNotEmpty() &&
+        span == openSyllables
+}
+
+/** Index of the chip drawn with the accent. -1 when this row has nothing to emphasize. */
+internal fun accentIndex(candidates: List<Candidate>, openSyllables: Int): Int {
+    if (openSyllables > 0) return candidates.indexOfFirst { it.coversOpenSyllables(openSyllables) }
+    return candidates.indexOfFirst {
+        it.source != CandidateSource.CLIPBOARD && !it.completion && it.text.isNotEmpty()
+    }
+}
+
+/** Bopomofo plus the gray tail on a completion chip. Other chips keep their Hanzi label. */
+internal fun Candidate.visibleLabel(): String {
+    if (labelReading.isNotEmpty()) return labelReading + labelTail
+    return if (comment.isEmpty()) text else "$text $comment"
+}

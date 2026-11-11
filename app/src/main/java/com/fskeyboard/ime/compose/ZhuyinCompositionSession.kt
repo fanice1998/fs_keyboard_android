@@ -2,6 +2,7 @@ package com.fskeyboard.ime.compose
 
 import com.fskeyboard.ime.candidate.BopomofoChain
 import com.fskeyboard.ime.candidate.Candidate
+import com.fskeyboard.ime.candidate.coversOpenSyllables
 import com.fskeyboard.ime.lingxi.LINGXI_CANDIDATE
 import com.fskeyboard.ime.lingxi.LINGXI_KEY_BUDGET_NS
 import com.fskeyboard.ime.lingxi.LingxiSlot
@@ -86,6 +87,17 @@ internal class ZhuyinCompositionSession(
         private set
     var previewReading: String = ""
         private set
+
+    /** Untyped tail of a lexicon word. Drawn on the bubble only. */
+    var previewHint: String = ""
+        private set
+
+    /** Syllables still open. The candidate row uses this to accent the chip Enter commits. */
+    var openSyllables: Int = 0
+        private set
+
+    private var offeredHint = ""
+    private var shownCandidates: List<Candidate> = emptyList()
 
     val hasComposition: Boolean
         get() = frame.active || holdingSentence || !chain.isEmpty || pendingTone.isNotEmpty() ||
@@ -210,19 +222,14 @@ internal class ZhuyinCompositionSession(
         return false
     }
 
-    /** True when Enter wrote the preview instead of the editor action. */
+    /**
+     * True when Enter committed the open composition instead of the editor action.
+     * Open bopomofo becomes the first Hanzi that covers every typed syllable.
+     * The gray prediction stays on its own chip.
+     */
     fun onEnter(): Boolean {
         if (host.mode() != KeyboardMode.ZHUYIN || !hasComposition) return false
-        // Enter writes the preview itself. It does not replace the tail with a guess.
-        val reading = if (!chain.isEmpty) chain.text else pendingToneText
-        val text = chosenPrefix.toString() + reading
-        host.edit {
-            clearChain()
-            frame = ChiaKeyFrame.parse("")
-            if (text.isNotEmpty()) host.commit(text)
-            engine.reset()
-            host.apply(EngineSnapshot())
-        }
+        commitComposition()
         return true
     }
 
@@ -252,9 +259,25 @@ internal class ZhuyinCompositionSession(
         return false
     }
 
-    /** Commits the segment on screen. The punctuation or mode change is not an engine key. */
+    /** Commits the segment on screen. Punctuation and leaving zhuyin use the same conversion as Enter. */
     fun finish() {
+        commitComposition()
+    }
+
+    /**
+     * Writes the open composition.
+     * A covering Hanzi candidate replaces the bopomofo. Anything else keeps the typed letters.
+     * [acceptPartial] edits on its own, so this does not wrap that call in [ZhuyinHost.edit].
+     */
+    private fun commitComposition() {
         val reading = if (!chain.isEmpty) chain.text else pendingToneText
+        if (reading.isNotEmpty()) {
+            val target = shownCandidates.firstOrNull { it.coversOpenSyllables(openSyllableCount()) }
+            if (target != null) {
+                acceptPartial(target)
+                return
+            }
+        }
         val text = chosenPrefix.toString() + reading
         host.edit {
             clearChain()
@@ -262,6 +285,14 @@ internal class ZhuyinCompositionSession(
             if (text.isNotEmpty()) host.commit(text)
             engine.reset()
             host.apply(EngineSnapshot())
+        }
+    }
+
+    private fun openSyllableCount(): Int {
+        return when {
+            !chain.isEmpty -> chain.size
+            pendingTone.isNotEmpty() -> pendingTone.size
+            else -> 0
         }
     }
 
@@ -327,6 +358,8 @@ internal class ZhuyinCompositionSession(
         }
         previewComposing = frame.composing
         previewReading = bubbleReading
+        previewHint = ""
+        noteShown(candidates)
         host.apply(
             EngineSnapshot(
                 preedit = inline,
@@ -358,9 +391,11 @@ internal class ZhuyinCompositionSession(
         val shown = hanzi + reading
         previewComposing = hanzi
         previewReading = reading
+        previewHint = if (reading.isEmpty()) "" else offeredHint
         val gapStart = System.nanoTime()
         val rows = withCreated(reading, candidates)
         KeyStages.addGap(System.nanoTime() - gapStart)
+        noteShown(rows)
         host.apply(
             EngineSnapshot(
                 preedit = shown,
@@ -376,20 +411,28 @@ internal class ZhuyinCompositionSession(
 
     /** 靈犀 rows when the pack is resident. Otherwise the partial lexicon. */
     private fun offer(readings: List<SyllableReading>): List<Candidate> {
+        offeredHint = ""
         val engine = lingxi?.engine
         if (engine == null || readings.isEmpty()) return lexicon.partialCandidates(readings)
         val syllables = readings.map { it.body + it.tone.mark }
+        val openTone = BooleanArray(readings.size) { !readings[it].tone.chosen }
         val readingKey = buildString { for (syllable in syllables) append(syllable) }
         val started = keyStartedNs
         val deadline = if (started == 0L) System.nanoTime() + LINGXI_KEY_BUDGET_NS else started + LINGXI_KEY_BUDGET_NS
         val result = try {
-            engine.select(syllables, host.committedContext(), remembered[readingKey], deadline)
+            engine.select(
+                syllables,
+                host.committedContext(),
+                remembered[readingKey],
+                deadline,
+                openTone = openTone,
+            )
         } catch (_: Exception) {
             com.fskeyboard.ime.lingxi.LingxiResult(emptyList(), "miss")
         }
         servedByLingxi = true
         lastReorder = result.reorder
-        return result.candidates.map { text ->
+        val rows = result.candidates.map { text ->
             Candidate(
                 text = text,
                 engineIndex = LINGXI_CANDIDATE,
@@ -398,6 +441,26 @@ internal class ZhuyinCompositionSession(
                 reading = readingKey,
             )
         }
+        val hint = result.completion ?: return rows
+        offeredHint = hint.tail
+        return listOf(
+            Candidate(
+                text = hint.surface,
+                engineIndex = LINGXI_CANDIDATE,
+                source = CandidateSource.SYNTHETIC,
+                span = readings.size,
+                reading = hint.reading,
+                completion = true,
+                labelReading = readingKey,
+                labelTail = hint.tail,
+            ),
+        ) + rows
+    }
+
+    /** The row on screen, and how many syllables of it Enter must cover. */
+    private fun noteShown(rows: List<Candidate>) {
+        shownCandidates = rows
+        openSyllables = openSyllableCount()
     }
 
     private fun finishKeyClock() {
@@ -413,7 +476,7 @@ internal class ZhuyinCompositionSession(
         host.lingxiLine("lingxi key-to-row ms=$ms reorder=$reorder")
     }
 
-    /** Puts a phrase the user assembled ahead of the lexicon rows for this reading. */
+    /** A phrase the user assembled sits after a prediction chip and ahead of the homophones. */
     private fun withCreated(reading: String, candidates: List<Candidate>): List<Candidate> {
         val extra = host.createdMatching(reading)
         if (extra.isEmpty()) return candidates
@@ -425,7 +488,13 @@ internal class ZhuyinCompositionSession(
             if (!known.add(id)) continue
             added += candidate.copy(span = syllableCount(candidate.reading))
         }
-        return if (added.isEmpty()) candidates else added + candidates
+        if (added.isEmpty()) return candidates
+        val completion = ArrayList<Candidate>()
+        val rest = ArrayList<Candidate>()
+        for (candidate in candidates) {
+            if (candidate.completion) completion += candidate else rest += candidate
+        }
+        return completion + added + rest
     }
 
     private fun syllableCount(reading: String): Int {
@@ -571,6 +640,10 @@ internal class ZhuyinCompositionSession(
         chosenSpans.clear()
         previewComposing = ""
         previewReading = ""
+        previewHint = ""
+        offeredHint = ""
+        shownCandidates = emptyList()
+        openSyllables = 0
     }
 
     /** Hanzi the user picked, and the syllables they had typed for it. */

@@ -36,6 +36,8 @@ class ImeSettingsActivity : Activity() {
     private lateinit var keyboardPreferences: KeyboardPreferences
     private lateinit var heightSeek: SeekBar
     private lateinit var heightValue: TextView
+    private lateinit var strengthSeek: SeekBar
+    private lateinit var strengthValue: TextView
     private lateinit var previewKeyboard: KeyboardView
     private lateinit var editorKeyboard: KeyboardView
     private lateinit var letterLabel: TextView
@@ -166,6 +168,35 @@ class ImeSettingsActivity : Activity() {
                 showHeight(seekBar.progress)
             }
         })
+        strengthValue = findViewById(R.id.vibration_strength_value)
+        strengthSeek = findViewById(R.id.vibration_strength)
+        strengthSeek.min = 0
+        strengthSeek.max = KeyboardPreferences.VIBRATION_SCALE_MAX
+        val savedStrength = keyboardPreferences.vibrationScale()
+        strengthSeek.progress = savedStrength
+        showStrength(savedStrength)
+        var sampled = savedStrength
+        strengthSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                previewKeyboard.vibrationScale = progress / 100f
+                showStrength(progress)
+                if (!fromUser) return
+                keyboardPreferences.setVibrationScale(progress)
+                if (kotlin.math.abs(progress - sampled) < 8) return
+                sampled = progress
+                previewKeyboard.playVibrationSample()
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+
+            override fun onStopTrackingTouch(seekBar: SeekBar) {
+                keyboardPreferences.setVibrationScale(seekBar.progress, flush = true)
+                previewKeyboard.vibrationScale = seekBar.progress / 100f
+                showStrength(seekBar.progress)
+                sampled = seekBar.progress
+                previewKeyboard.playVibrationSample()
+            }
+        })
     }
 
     override fun onDestroy() {
@@ -184,6 +215,9 @@ class ImeSettingsActivity : Activity() {
         if (::keyboardPreferences.isInitialized && ::heightSeek.isInitialized) {
             keyboardPreferences.setRowHeightDp(heightSeek.progress, flush = true)
         }
+        if (::keyboardPreferences.isInitialized && ::strengthSeek.isInitialized) {
+            keyboardPreferences.setVibrationScale(strengthSeek.progress, flush = true)
+        }
         super.onPause()
     }
 
@@ -201,6 +235,10 @@ class ImeSettingsActivity : Activity() {
                 summary.maxMillis,
             )
         }
+    }
+
+    private fun showStrength(percent: Int) {
+        strengthValue.text = getString(R.string.vibration_strength_value, percent)
     }
 
     private fun showHeight(rowDp: Int) {
@@ -234,6 +272,7 @@ class ImeSettingsActivity : Activity() {
             computerKeys = keyboardPreferences.computerKeys()
             fullWidthSymbols = keyboardPreferences.fullWidthSymbols()
             vibrationEnabled = keyboardPreferences.vibrationEnabled()
+            vibrationScale = keyboardPreferences.vibrationScale() / 100f
             keyPreviewEnabled = keyboardPreferences.keyPreviewEnabled()
             theme = keyboardPreferences.keyboardTheme()
         }
