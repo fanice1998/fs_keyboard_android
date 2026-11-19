@@ -93,6 +93,17 @@ internal class BopomofoChain {
         return true
     }
 
+    /**
+     * Marks the open syllable as 輕聲 (˙). Space uses this, not 平聲.
+     * A tone already on that syllable stays, so space does not strip it.
+     */
+    fun markNeutral(): Boolean {
+        if (syllables.isEmpty() || syllables.last().isEmpty()) return false
+        if (tones.last() != ZhuyinTone.NONE) return false
+        tones[tones.lastIndex] = ZhuyinTone.NEUTRAL
+        return true
+    }
+
     /** Clears a chosen tone before it deletes a symbol. */
     fun backspace() {
         if (syllables.isEmpty()) return

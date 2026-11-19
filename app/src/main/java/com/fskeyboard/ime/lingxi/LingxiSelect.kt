@@ -132,6 +132,11 @@ internal class LingxiEngine(
         return tables.lexicon.topSupplements(syllables, openTone, skip, limit)
     }
 
+    /** Real lexicon readings of [surface]. Empty when the word is not in the lexicon table. */
+    fun readingsOf(surface: String): List<String> {
+        return tables.lexicon.readingsOf(surface)
+    }
+
     fun completion(
         syllables: List<String>,
         openTone: BooleanArray,

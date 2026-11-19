@@ -7,6 +7,7 @@ import com.fskeyboard.ime.lingxi.LINGXI_CANDIDATE
 import com.fskeyboard.ime.lingxi.LINGXI_EXTRA_PENALTY
 import com.fskeyboard.ime.lingxi.LINGXI_KEY_BUDGET_NS
 import com.fskeyboard.ime.lingxi.LingxiSlot
+import com.fskeyboard.ime.lingxi.withoutOpenReading
 import kotlin.math.ln
 import com.fskeyboard.ime.candidate.CandidateSource
 import com.fskeyboard.ime.candidate.SyllableReading
@@ -18,6 +19,7 @@ import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.keyboard.ZhuyinClass
 import com.fskeyboard.ime.keyboard.ZhuyinPhonology
+import com.fskeyboard.ime.keyboard.ZhuyinTone
 import com.fskeyboard.ime.latency.KeyStages
 import com.fskeyboard.ime.lexicon.Lexicon
 
@@ -163,6 +165,7 @@ internal class ZhuyinCompositionSession(
         if (held) {
             holdingSentence = true
             noteTouch(action)
+            mergeChainSyllables()
         }
         KeyStages.noteCompose(System.nanoTime() - composeStart)
         if (!held) {
@@ -188,7 +191,10 @@ internal class ZhuyinCompositionSession(
             holdComposition(mirrored)
         }
         if (holdingSentence) {
-            chain.markLevel()
+            // The ˙ mark needs its own touch: backspace clears it first and then drops
+            // one touch because the chain text got shorter. The keyboard's own ˙ key
+            // already noted a touch through onKey, so only space adds it here.
+            if (chain.markNeutral()) touches += KeyTouch('˙', emptyList())
             showHeld()
         }
         return true
@@ -395,6 +401,31 @@ internal class ZhuyinCompositionSession(
     }
 
     /**
+     * Joins chain syllables that only split because the phonology cannot extend one glyph
+     * into the next — ㄚ is a FINAL and ㄧ a MEDIAL, so ㄚㄧㄢ arrives as ㄚ + ㄧㄢ even
+     * though the lexicon knows the single syllable ㄚㄧㄢ. Only a join the Lingxi lexicon
+     * holds as one complete syllable (extra == 0) is kept; the last syllable keeps its
+     * tone and [touches] stays, one key per touch. An earlier syllable already toned, or
+     * no engine, leaves the chain as typed.
+     */
+    private fun mergeChainSyllables() {
+        val engine = lingxi?.engine ?: return
+        val readings = chain.readings()
+        if (readings.size < 2) return
+        if (readings.dropLast(1).any { it.tone != ZhuyinTone.NONE }) return
+        val tone = readings.last().tone
+        val body = buildString { for (reading in readings) append(reading.body) }
+        val hits = try {
+            engine.exactHits(listOf(body + tone.mark), booleanArrayOf(!tone.chosen), includeSupplements = false)
+        } catch (_: Exception) {
+            return
+        }
+        if (hits.none { it.extra == 0 }) return
+        chain.clear()
+        chain.insertFront(listOf(SyllableReading(body, tone)))
+    }
+
+    /**
      * The held reading, underlined in the editor and shown in the bubble.
      * Engine composing text is a prediction, not the bopomofo still open.
      * Chosen Hanzi stays in front of that reading.
@@ -418,7 +449,7 @@ internal class ZhuyinCompositionSession(
         previewReading = reading
         previewHint = if (reading.isEmpty()) "" else offeredHint
         val gapStart = System.nanoTime()
-        val rows = withCreated(reading, candidates)
+        val rows = withCreated(reading, withNextWordChips(candidates))
         KeyStages.addGap(System.nanoTime() - gapStart)
         noteShown(rows)
         host.apply(
@@ -432,6 +463,45 @@ internal class ZhuyinCompositionSession(
         )
         finishKeyClock()
         servedByLingxi = false
+    }
+
+    /**
+     * Next-word chips while bopomofo is still open. The committed context is read with the
+     * open reading stripped, so a trailing non-Han character does not empty [Lexicon.following].
+     * Each chip is a gray completion (completion = true, so Enter skips it) whose span covers
+     * every open syllable, so a tap commits the whole word and drops the unfinished reading.
+     * When the typed syllables are a prefix of one of a next word's real readings, only the
+     * matching words stay; when nothing matches, or no reading is known, the full list stays.
+     */
+    private fun withNextWordChips(candidates: List<Candidate>): List<Candidate> {
+        if (chain.isEmpty) return candidates
+        val syllables = chain.readings().map { it.body + it.tone.mark }
+        val context = withoutOpenReading(host.committedContext(), syllables)
+        val next = lexicon.following(context)
+        if (next.isEmpty()) return candidates
+        val partial = chain.text
+        val engine = lingxi?.engine
+        val matched = if (engine != null) {
+            next.filter { surface -> engine.readingsOf(surface).any { it.startsWith(partial) } }
+        } else {
+            emptyList()
+        }
+        val kept = if (matched.isEmpty()) next else matched
+        val have = HashSet<String>()
+        for (candidate in candidates) if (candidate.completion) have += candidate.text
+        val chips = ArrayList<Candidate>(kept.size)
+        for (surface in kept) {
+            if (!have.add(surface)) continue
+            chips += Candidate(
+                text = surface,
+                engineIndex = LINGXI_CANDIDATE,
+                source = CandidateSource.SYNTHETIC,
+                span = chain.size,
+                completion = true,
+            )
+        }
+        if (chips.isEmpty()) return candidates
+        return candidates + chips
     }
 
     /**
@@ -485,12 +555,24 @@ internal class ZhuyinCompositionSession(
         servedByLingxi = true
         lastReorder = chosen.reorder
         if (chosen.candidates.isEmpty()) return emptyList()
+        // A row the typed reading only partially spells (extra > 0) does not cover every
+        // open syllable, so Enter must not commit it as the covering Hanzi. A complete
+        // syllable (extra == 0) keeps span = readings.size.
+        val extraBySurface = HashMap<String, Int>()
+        try {
+            for (hit in engine.exactHits(syllables, openTone, includeSupplements = true)) {
+                val known = extraBySurface[hit.surface]
+                if (known == null || hit.extra > known) extraBySurface[hit.surface] = hit.extra
+            }
+        } catch (_: Exception) {
+        }
         val rows = chosen.candidates.map { text ->
+            val extra = extraBySurface[text] ?: 0
             Candidate(
                 text = text,
                 engineIndex = LINGXI_CANDIDATE,
                 source = CandidateSource.SYNTHETIC,
-                span = readings.size,
+                span = if (extra > 0) 0 else readings.size,
                 reading = readingKey,
             )
         }
@@ -630,7 +712,11 @@ internal class ZhuyinCompositionSession(
             "ok", "miss" -> lastReorder
             else -> "skip"
         }
-        host.lingxiLine("lingxi key-to-row ms=$ms reorder=$reorder")
+        try {
+            host.lingxiLine("lingxi key-to-row ms=$ms reorder=$reorder")
+        } catch (_: RuntimeException) {
+            // The unit-test Android jar throws from Log. A log failure must not drop the key.
+        }
     }
 
     /** A phrase the user assembled sits after a prediction chip and ahead of the homophones. */

@@ -555,6 +555,26 @@ internal class LingxiLexicon(
         return false
     }
 
+    /** Every real reading stored under [surface], along [byText]. Empty when the lexicon has no such word. */
+    fun readingsOf(surface: String): List<String> {
+        val key = surface.toByteArray(Charsets.UTF_8)
+        var lo = 0
+        var hi = entryCount
+        while (lo < hi) {
+            val mid = (lo + hi) ushr 1
+            if (compareSurface(byText[mid], key) < 0) lo = mid + 1 else hi = mid
+        }
+        val out = ArrayList<String>()
+        while (lo < entryCount && compareSurface(byText[lo], key) == 0) {
+            val index = byText[lo]
+            val len = rdLen[index].toInt() and 0xFF
+            val reading = readingOf(index, len)
+            if (reading != null) out += reading
+            lo++
+        }
+        return out
+    }
+
     /** Highest-prior supplements for this reading. Non-supplements are not materialized. */
     fun topSupplements(
         syllables: List<String>,
