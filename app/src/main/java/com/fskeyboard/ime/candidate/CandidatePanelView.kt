@@ -5,9 +5,8 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ScrollView
 import android.widget.TextView
-import com.fskeyboard.ime.ui.KeyboardPalette
+import com.fskeyboard.ime.ui.CandidateChrome
 import com.fskeyboard.ime.ui.dp
-import com.fskeyboard.ime.ui.isNightMode
 
 /**
  * Every candidate, in equal cells, scrolled inside the keyboard.
@@ -22,6 +21,7 @@ internal class CandidatePanelView(context: Context) : ScrollView(context) {
     private val chips = ArrayList<TextView>()
     private var shown: List<Candidate> = emptyList()
     private var shownSyllables = 0
+    private var shownChrome: CandidateChrome? = null
 
     init {
         isClickable = true
@@ -31,12 +31,13 @@ internal class CandidatePanelView(context: Context) : ScrollView(context) {
         addView(grid, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
     }
 
-    fun render(candidates: List<Candidate>, syllables: Int = 0) {
-        val palette = KeyboardPalette.of(isNightMode())
-        setBackgroundColor(palette.background)
-        if (shown == candidates && shownSyllables == syllables) return
+    fun render(candidates: List<Candidate>, syllables: Int = 0, chrome: CandidateChrome) {
+        setBackgroundColor(chrome.bar)
+        val listChanged = shown != candidates || shownSyllables != syllables
+        if (!listChanged && shownChrome == chrome) return
         shown = candidates
         shownSyllables = syllables
+        shownChrome = chrome
         val accent = accentIndex(candidates, syllables)
         candidates.forEachIndexed { index, candidate ->
             val view = chips.getOrNull(index) ?: CandidateChips.create(this).also {
@@ -47,7 +48,7 @@ internal class CandidatePanelView(context: Context) : ScrollView(context) {
                 view,
                 candidate,
                 emphasized = index == accent,
-                palette,
+                chrome,
                 onCandidate,
                 onLongClick = { chosen -> onCandidateHold(view, chosen) },
             )
@@ -56,12 +57,12 @@ internal class CandidatePanelView(context: Context) : ScrollView(context) {
         for (index in candidates.size until chips.size) {
             chips[index].visibility = GONE
         }
-        scrollTo(0, 0)
+        if (listChanged) scrollTo(0, 0)
     }
 }
 
 /**
- * Equal cells, four to six across. A word wider than one cell takes the width
+ * Equal cells, six across. A word wider than one cell takes the width
  * it needs and the row holds fewer of them. The glyph size stays put.
  */
 private class CandidateGrid(context: Context) : ViewGroup(context) {
@@ -105,7 +106,7 @@ private class CandidateGrid(context: Context) : ViewGroup(context) {
 
     private fun measureCells(inner: Int): List<Int> {
         if (inner <= 0) return emptyList()
-        val cols = candidateColumns(inner / resources.displayMetrics.density)
+        val cols = candidateColumns()
         val cell = ((inner - gap * (cols - 1)) / cols).coerceAtLeast(1)
         val widths = ArrayList<Int>()
         val heightSpec = MeasureSpec.makeMeasureSpec(cellHeight, MeasureSpec.EXACTLY)

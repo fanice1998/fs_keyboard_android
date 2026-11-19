@@ -39,12 +39,12 @@ internal data class Candidate(
     val extra: Int = 0,
     /**
      * A longer lexicon word on the left of the homophone row.
-     * [text] is the whole word a tap commits. The chip draws [labelReading] and then [labelTail].
+     * [text] is the whole predicted word a tap commits. The chip draws that Hanzi.
      */
     val completion: Boolean = false,
-    /** Typed bopomofo drawn on a completion chip. Empty on every other row. */
+    /** Typed bopomofo for this prediction. The chip does not draw it. */
     val labelReading: String = "",
-    /** Predicted Hanzi drawn after [labelReading] in the hint color. */
+    /** Predicted characters after the typed part. The chip draws [text], not this tail. */
     val labelTail: String = "",
     /** The chip text is the typed bopomofo. Enter still prefers a Hanzi candidate. */
     val literal: Boolean = false,
@@ -68,8 +68,7 @@ internal fun accentIndex(candidates: List<Candidate>, openSyllables: Int): Int {
     }
 }
 
-/** Bopomofo plus the gray tail on a completion chip. Other chips keep their Hanzi label. */
+/** Every chip shows its Hanzi, including the prediction. A comment stays on the same label. */
 internal fun Candidate.visibleLabel(): String {
-    if (labelReading.isNotEmpty()) return labelReading + labelTail
     return if (comment.isEmpty()) text else "$text $comment"
 }

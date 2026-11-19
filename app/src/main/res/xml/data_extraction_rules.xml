@@ -2,6 +2,7 @@
 <!--
   Android 12 and newer. Cloud backup and a phone-to-phone transfer both keep
   the learned phrases and the keyboard preferences.
+  An include list replaces the default set. User-chosen keyboard photos stay out.
 -->
 <data-extraction-rules>
     <cloud-backup>

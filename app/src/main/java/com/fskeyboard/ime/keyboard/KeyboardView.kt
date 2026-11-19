@@ -2,16 +2,21 @@ package com.fskeyboard.ime.keyboard
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
 import android.media.AudioAttributes
 import android.os.Build
+import android.os.SystemClock
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.util.Log
 import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -20,10 +25,22 @@ import android.view.ViewConfiguration
 import android.view.ViewTreeObserver
 import com.fskeyboard.ime.latency.KeyStages
 import com.fskeyboard.ime.traced
+import com.fskeyboard.ime.ui.AppearanceImageCache
+import com.fskeyboard.ime.ui.KeyAnimation
 import com.fskeyboard.ime.ui.KeyboardPalette
 import com.fskeyboard.ime.ui.KeyboardTheme
+import com.fskeyboard.ime.ui.ResolvedKeyboard
+import com.fskeyboard.ime.ui.colorsMatch
+import com.fskeyboard.ime.ui.drawHaloText
+import com.fskeyboard.ime.ui.haloColor
+import com.fskeyboard.ime.ui.mix
+import com.fskeyboard.ime.ui.pulse
+import com.fskeyboard.ime.ui.resolveKeyboard
+import com.fskeyboard.ime.ui.smoothstep
+import com.fskeyboard.ime.ui.AppearanceOverrides
 import com.fskeyboard.ime.ui.dp
 import com.fskeyboard.ime.ui.isNightMode
+import kotlin.math.hypot
 
 internal class KeyboardView(context: Context) : View(context) {
     var onKey: (KeyAction) -> Unit = {}
@@ -36,6 +53,7 @@ internal class KeyboardView(context: Context) : View(context) {
         set(value) {
             if (field == value) return
             field = value
+            if (!explicitAppearance) paintResolved = defaultFromTheme()
             invalidate()
         }
 
@@ -184,6 +202,37 @@ internal class KeyboardView(context: Context) : View(context) {
         isHapticFeedbackEnabled = vibrationEnabled
     }
 
+    /** Parsed outside of drawing. [onDraw] does not read preferences or the night mode. */
+    fun applyAppearance(resolved: ResolvedKeyboard, night: Boolean) {
+        explicitAppearance = true
+        resolvedNight = night
+        if (paintResolved == resolved) return
+        paintResolved = resolved
+        invalidate()
+    }
+
+    /** Editor path: paper again, including after the last key override is removed. */
+    fun clearAppearance() {
+        explicitAppearance = false
+        paintResolved = defaultFromTheme()
+        backgroundBitmap = null
+        invalidate()
+    }
+
+    fun setBackgroundBitmap(bitmap: Bitmap?, mtime: Long) {
+        if (backgroundBitmap === bitmap && backgroundMtime == mtime) return
+        backgroundBitmap = bitmap?.takeUnless { it.isRecycled }
+        backgroundMtime = mtime
+        invalidate()
+    }
+
+    /** Plays [paintResolved]'s animation on the first labeled letter key. Not used by the editor. */
+    fun playAnimationSample() {
+        val box = boxes.firstOrNull { sampleKey(it.spec) } ?: return
+        val copy = RectF(box.face)
+        post { startAnim(copy) }
+    }
+
     private var mode = KeyboardMode.ZHUYIN
     private var base = KeyboardMode.ZHUYIN
     private var numberPad = NumberPad.NONE
@@ -232,6 +281,20 @@ internal class KeyboardView(context: Context) : View(context) {
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
     }
+    private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val bitmapMatrix = Matrix()
+    private val layerPaint = Paint()
+    private val animPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var explicitAppearance = false
+    private var resolvedNight = false
+    private var paintResolved: ResolvedKeyboard = defaultFromTheme()
+    private var backgroundBitmap: Bitmap? = null
+    private var backgroundMtime = Long.MIN_VALUE
+    private var loggedBlitMtime = Long.MIN_VALUE
+    private var animFace: RectF? = null
+    private var animKind = KeyAnimation.NONE
+    private var animStart = 0L
+    private var animT = 1f
 
     /** A still hold after a recent space tap. A slide cancels it before this runs. */
     private val voiceHold = Runnable { engageVoice() }
@@ -264,9 +327,10 @@ internal class KeyboardView(context: Context) : View(context) {
             return@Runnable
         }
         val action = spec.secondary ?: return@Runnable
+        val face = animCopy()
         release()
         buzz()
-        fire(action)
+        fire(action, animFace = face)
     }
 
     /** A modifier swipe becomes a hold when the finger stays in that direction. */
@@ -327,6 +391,8 @@ internal class KeyboardView(context: Context) : View(context) {
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         layoutKeys(w, h)
         endPreview(linger = false)
+        animFace = null
+        AppearanceImageCache.noteSize(this, w, h)
     }
 
     override fun onDetachedFromWindow() {
@@ -334,13 +400,26 @@ internal class KeyboardView(context: Context) : View(context) {
         stopRepeat()
         previewFramePosted = false
         endPreview(linger = false)
+        animFace = null
+        AppearanceImageCache.detach(this)
         super.onDetachedFromWindow()
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (!explicitAppearance) {
+            paintResolved = defaultFromTheme()
+            invalidate()
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
-        val palette = theme.palette(isNightMode())
-        canvas.drawColor(palette.background)
+        val resolved = paintResolved
+        val palette = resolved.palette
+        prepareAnim()
+        drawBackdrop(canvas, resolved)
         val radius = dp(theme.cornerDp).toFloat()
+        val density = resources.displayMetrics.density
         for (box in boxes) {
             val marked = markedLetter != null && swipeKeyToken(box.spec) == markedLetter
             val faceKey = (box.spec.action as? KeyAction.Computer)?.key
@@ -348,17 +427,29 @@ internal class KeyboardView(context: Context) : View(context) {
             val lockHeld = box.spec.holdKey in lockedComputerKeys ||
                 box.spec.swipes.values.any { it in lockedComputerKeys }
             val pressed = !trackpad && (box == down || box.spec.highlighted || marked || faceArmed || lockHeld)
-            fill.color = when {
+            val face = when {
                 trackpad -> palette.key
                 pressed -> palette.keyPressed
                 box.spec.role == KeyRole.ACTION || box.spec.role == KeyRole.MODIFIER -> palette.keyAction
                 else -> palette.key
             }
             val draw = inset(box.face)
+            val kind = if (animFace != null && animFace == box.face) animKind else KeyAnimation.NONE
+            if (kind == KeyAnimation.POP || kind == KeyAnimation.SINK) {
+                canvas.save()
+                if (kind == KeyAnimation.POP) {
+                    val scale = 1f + 0.08f * pulse(animT)
+                    canvas.scale(scale, scale, draw.centerX(), draw.centerY())
+                } else {
+                    canvas.translate(0f, dp(2).toFloat() * pulse(animT))
+                }
+            }
+            fill.color = face
+            fill.style = Paint.Style.FILL
             canvas.drawRoundRect(draw, radius, radius, fill)
-            if (theme.borderDp > 0) {
-                stroke.color = palette.hint
-                stroke.strokeWidth = dp(theme.borderDp).toFloat()
+            if (resolved.drawBorder && resolved.borderDp > 0) {
+                stroke.color = resolved.borderColor
+                stroke.strokeWidth = dp(resolved.borderDp).toFloat()
                 canvas.drawRoundRect(draw, radius, radius, stroke)
             }
             val chosen = box == down && swipeDirection != null &&
@@ -368,34 +459,85 @@ internal class KeyboardView(context: Context) : View(context) {
                 stroke.strokeWidth = dp(2).toFloat()
                 canvas.drawRoundRect(draw, radius, radius, stroke)
             }
-            if (trackpad) continue
-            val icon = box.spec.icon
-            if (icon != null) {
-                KeyIcons.draw(canvas, icon, draw, palette.text, iconPaint)
-            } else if (box.spec.label.isNotEmpty()) {
-                label.color = if (box.spec.role == KeyRole.SPACE) palette.hint else palette.text
-                val hasSwipes = box.spec.swipes.isNotEmpty() || box.spec.extraSwipes.isNotEmpty()
-                label.textSize = when {
-                    box.spec.label.length >= 6 -> sp(11f)
-                    box.spec.label.length >= 4 -> sp(13f)
-                    box.spec.label.length > 1 -> sp(15f)
-                    hasSwipes -> sp(16f)
-                    else -> sp(20f)
+            if (!trackpad) {
+                val icon = box.spec.icon
+                val ink = if (box.spec.role == KeyRole.SPACE && !resolved.labelOverridden) {
+                    palette.hint
+                } else {
+                    resolved.labelColor
                 }
-                val baseline = draw.centerY() - (label.ascent() + label.descent()) / 2f
-                canvas.drawText(box.spec.label, draw.centerX(), baseline, label)
-
-                val secondary = box.spec.secondary
-                if (secondary is KeyAction.Character) {
-                    secondaryLabel.textAlign = Paint.Align.RIGHT
-                    secondaryLabel.color = palette.hint
-                    secondaryLabel.textSize = sp(10f)
-                    val secX = draw.right - dp(4)
-                    val secY = draw.top - secondaryLabel.ascent() + dp(2)
-                    canvas.drawText(secondary.value.toString(), secX, secY, secondaryLabel)
+                if (icon != null) {
+                    val halo = if (colorsMatch(resolved.labelColor, face)) haloColor(face) else null
+                    KeyIcons.draw(canvas, icon, draw, resolved.labelColor, iconPaint, halo = halo)
+                } else if (box.spec.label.isNotEmpty()) {
+                    val hasSwipes = box.spec.swipes.isNotEmpty() || box.spec.extraSwipes.isNotEmpty()
+                    label.textSize = when {
+                        box.spec.label.length >= 6 -> sp(11f)
+                        box.spec.label.length >= 4 -> sp(13f)
+                        box.spec.label.length > 1 -> sp(15f)
+                        hasSwipes -> sp(16f)
+                        else -> sp(20f)
+                    }
+                    val baseline = draw.centerY() - (label.ascent() + label.descent()) / 2f
+                    drawHaloText(canvas, box.spec.label, draw.centerX(), baseline, label, ink, face, density)
+                    val secondary = box.spec.secondary
+                    if (secondary is KeyAction.Character) {
+                        secondaryLabel.textAlign = Paint.Align.RIGHT
+                        secondaryLabel.color = palette.hint
+                        secondaryLabel.textSize = sp(10f)
+                        val secX = draw.right - dp(4)
+                        val secY = draw.top - secondaryLabel.ascent() + dp(2)
+                        canvas.drawText(secondary.value.toString(), secX, secY, secondaryLabel)
+                    }
                 }
+                drawSwipeLabels(canvas, box, draw, palette)
             }
-            drawSwipeLabels(canvas, box, draw, palette)
+            if (kind == KeyAnimation.SINK) {
+                animPaint.style = Paint.Style.FILL
+                animPaint.color = palette.keyPressed
+                animPaint.alpha = 102
+                canvas.drawRoundRect(draw, radius, radius, animPaint)
+                animPaint.alpha = 255
+            } else if (kind == KeyAnimation.RIPPLE) {
+                val span = hypot(draw.width().toDouble(), draw.height().toDouble()).toFloat()
+                val mixed = mix(resolved.labelColor, Color.WHITE, 0.5f)
+                val alpha = (180f * (1f - smoothstep(animT))).toInt().coerceIn(0, 255)
+                animPaint.style = Paint.Style.FILL
+                animPaint.color = (mixed and 0x00FFFFFF) or (alpha shl 24)
+                canvas.drawCircle(draw.centerX(), draw.centerY(), smoothstep(animT) * span, animPaint)
+            } else if (kind == KeyAnimation.FLASH) {
+                val alpha = (90f * (1f - smoothstep(animT))).toInt().coerceIn(0, 255)
+                animPaint.style = Paint.Style.FILL
+                animPaint.color = 0x00FFFFFF or (alpha shl 24)
+                canvas.drawRoundRect(draw, radius, radius, animPaint)
+            }
+            if (kind == KeyAnimation.POP || kind == KeyAnimation.SINK) canvas.restore()
+        }
+        val face = animFace
+        if (face != null && animT < 1f) {
+            val gutter = gap / 2f
+            var left = face.left + gutter
+            var top = face.top + gutter
+            var right = face.right - gutter
+            var bottom = face.bottom - gutter
+            if (animKind == KeyAnimation.POP) {
+                // 1.08 scale grows each side by 4% of the cap, plus half the border stroke.
+                val stroke = if (paintResolved.drawBorder) dp(paintResolved.borderDp) / 2f else 0f
+                val extraX = (right - left) * 0.04f + stroke
+                val extraY = (bottom - top) * 0.04f + stroke
+                left -= extraX
+                top -= extraY
+                right += extraX
+                bottom += extraY
+            } else if (animKind == KeyAnimation.SINK) {
+                bottom += dp(2).toFloat()
+            }
+            postInvalidateOnAnimation(
+                left.toInt(),
+                top.toInt(),
+                right.toInt() + 1,
+                bottom.toInt() + 1,
+            )
         }
     }
 
@@ -414,7 +556,7 @@ internal class KeyboardView(context: Context) : View(context) {
                 if (moveSwipe(event)) return true
                 val box = down ?: return true
                 val index = event.findPointerIndex(downPointer)
-                if (index >= 0 && hit(event.getX(index), event.getY(index)) != box) {
+                if (index >= 0 && heldBox(box, event.getX(index), event.getY(index)) != box) {
                     release()
                 }
             }
@@ -431,13 +573,17 @@ internal class KeyboardView(context: Context) : View(context) {
                 if (onLetterPick != null) {
                     val box = down
                     val token = box?.spec?.let { swipeKeyToken(it) }
-                    val stillOnKey = box != null && box == hit(event.getX(index), event.getY(index))
+                    val stillOnKey = box != null && box == heldBox(box, event.getX(index), event.getY(index))
                     release()
                     if (stillOnKey && token != null) onLetterPick?.invoke(token)
                     return true
                 }
                 val box = down
-                val released = hit(event.getX(index), event.getY(index))
+                val released = if (box == null) {
+                    hit(event.getX(index), event.getY(index))
+                } else {
+                    heldBox(box, event.getX(index), event.getY(index))
+                }
                 val tracking = trackpad
                 val direction = swipe?.move(
                     event.getX(index) - downX,
@@ -453,12 +599,14 @@ internal class KeyboardView(context: Context) : View(context) {
                 }
                 val linger = action != null && box != null &&
                     (direction != null || (box == released && KeyPreview.visible(box.spec)))
+                val face = if (action != null) animCopy() else null
                 release(lingerPreview = linger)
-                if (action != null) fire(action, event.eventTime)
+                if (action != null) fire(action, event.eventTime, face)
                 if (action == KeyAction.Space) lastSpaceTapAt = event.eventTime
             }
             MotionEvent.ACTION_CANCEL -> {
                 parent?.requestDisallowInterceptTouchEvent(false)
+                animFace = null
                 release()
                 releaseAllHolds()
             }
@@ -500,7 +648,8 @@ internal class KeyboardView(context: Context) : View(context) {
             }
             spec?.action == KeyAction.Backspace && !hasSwipes -> {
                 backspaceSent = true
-                fire(spec.action, eventTime)
+                val face = animCopy()
+                fire(spec.action, eventTime, face)
                 postDelayed(repeat, KeyRepeat.DELAY_MS)
             }
             spec?.action == KeyAction.Backspace -> postDelayed(repeat, KeyRepeat.DELAY_MS)
@@ -672,8 +821,9 @@ internal class KeyboardView(context: Context) : View(context) {
             else -> fresh(spec.action)
         }
         val linger = action != null && (direction != null || KeyPreview.visible(spec))
+        val face = if (action != null) animCopy() else null
         release(lingerPreview = linger)
-        if (action != null) fire(action, eventTime)
+        if (action != null) fire(action, eventTime, face)
     }
 
     /** Drops the gesture under the current finger without lifting a modifier it is holding. */
@@ -954,11 +1104,13 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     /** A zhuyin key from a touch carries the keys that touch may have meant. */
-    private fun fire(action: KeyAction, eventTime: Long? = null) {
+    private fun fire(action: KeyAction, eventTime: Long? = null, animFace: RectF? = null) {
         val stage = action is KeyAction.Bopomofo && eventTime != null
         if (stage) KeyStages.begin(System.nanoTime())
         val typed = if (stage) {
-            action.copy(nearby = TouchModel.nearby(downX, downY, zhuyinAreas))
+            val areas = zhuyinAreas
+            val likely = TouchModel.nearby(downX, downY, areas)
+            action.copy(nearby = TouchModel.withAdjacent(likely, action.label, areas))
         } else {
             action
         }
@@ -967,6 +1119,10 @@ internal class KeyboardView(context: Context) : View(context) {
         if (stage) KeyStages.armDraw()
         // This key's keyHandled claims the draw. A later key must not keep it.
         eventTime?.let(onTyped)
+        if (animFace != null) {
+            val copy = animFace
+            post { startAnim(copy) }
+        }
     }
 
     private fun themeLinger(): Long {
@@ -974,7 +1130,8 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     private fun showKeyPreview(label: String, face: RectF) {
-        keyPreview.palette = theme.palette(isNightMode())
+        val themePalette = theme.palette(resolvedNight)
+        keyPreview.palette = themePalette.copy(text = paintResolved.labelColor)
         keyPreview.show(label, face, width)
     }
 
@@ -1207,11 +1364,90 @@ internal class KeyboardView(context: Context) : View(context) {
     }
 
     private fun swipeInk(): Int {
-        return if (isNightMode()) Color.parseColor("#8EB4F0") else Color.parseColor("#2F6FDB")
+        return if (resolvedNight) Color.parseColor("#8EB4F0") else Color.parseColor("#2F6FDB")
     }
 
     private fun swipeOnInk(): Int {
-        return if (isNightMode()) Color.parseColor("#1C1C1E") else Color.WHITE
+        return if (resolvedNight) Color.parseColor("#1C1C1E") else Color.WHITE
+    }
+
+    private fun defaultFromTheme(): ResolvedKeyboard {
+        resolvedNight = isNightMode()
+        return resolveKeyboard(theme, resolvedNight, AppearanceOverrides.NONE, appearanceDir = null)
+    }
+
+    private fun prepareAnim() {
+        val face = animFace ?: return
+        val duration = animKind.durationMs
+        animT = if (duration <= 0) {
+            1f
+        } else {
+            ((SystemClock.uptimeMillis() - animStart).toFloat() / duration).coerceIn(0f, 1f)
+        }
+        if (animT >= 1f) animFace = face.let { null }
+    }
+
+    private fun startAnim(face: RectF) {
+        val kind = paintResolved.animation
+        if (kind == KeyAnimation.NONE || kind.durationMs <= 0) return
+        animKind = kind
+        animStart = SystemClock.uptimeMillis()
+        animFace = face
+        animT = 0f
+        invalidate()
+    }
+
+    /** Taken before release() clears [down]. The posted runnable keeps this copy and does not read [down]. */
+    private fun animCopy(): RectF? {
+        if (paintResolved.animation == KeyAnimation.NONE) return null
+        val face = down?.face ?: return null
+        return RectF(face)
+    }
+
+    private fun sampleKey(spec: KeySpec): Boolean {
+        return spec.icon == null &&
+            spec.label.isNotEmpty() &&
+            spec.role != KeyRole.ACTION &&
+            spec.role != KeyRole.MODIFIER &&
+            spec.role != KeyRole.SPACE
+    }
+
+    private fun drawBackdrop(canvas: Canvas, resolved: ResolvedKeyboard) {
+        val background = resolved.palette.background
+        val alpha = resolved.alphaPercent
+        val bitmap = backgroundBitmap?.takeUnless { it.isRecycled }
+        if (alpha >= 100) {
+            canvas.drawColor(background)
+            if (bitmap != null) blit(canvas, bitmap, background)
+            return
+        }
+        if (bitmap == null) return
+        val fade = alpha.coerceIn(0, 100) / 100f
+        layerPaint.alpha = (fade * 255f).toInt().coerceIn(0, 255)
+        val count = canvas.saveLayer(0f, 0f, width.toFloat(), height.toFloat(), layerPaint)
+        canvas.drawColor(background or 0xFF000000.toInt())
+        blit(canvas, bitmap, background)
+        canvas.restoreToCount(count)
+        layerPaint.alpha = 255
+    }
+
+    private fun blit(canvas: Canvas, bitmap: Bitmap, fallback: Int) {
+        try {
+            val bw = bitmap.width.toFloat().coerceAtLeast(1f)
+            val bh = bitmap.height.toFloat().coerceAtLeast(1f)
+            val vw = width.toFloat().coerceAtLeast(1f)
+            val vh = height.toFloat().coerceAtLeast(1f)
+            val scale = maxOf(vw / bw, vh / bh)
+            bitmapMatrix.setScale(scale, scale)
+            bitmapMatrix.postTranslate((vw - bw * scale) / 2f, (vh - bh * scale) / 2f)
+            canvas.drawBitmap(bitmap, bitmapMatrix, bitmapPaint)
+        } catch (error: RuntimeException) {
+            if (loggedBlitMtime != backgroundMtime) {
+                loggedBlitMtime = backgroundMtime
+                Log.i(TAG, error.javaClass.simpleName)
+            }
+            canvas.drawColor(fallback or 0xFF000000.toInt())
+        }
     }
 
     private fun inset(rect: RectF): RectF {
@@ -1224,8 +1460,34 @@ internal class KeyboardView(context: Context) : View(context) {
         )
     }
 
+    /**
+     * The pressed key stays while the finger is inside its rectangle.
+     * Sense applies only after the point has left that rectangle.
+     */
+    private fun heldBox(box: KeyBox, x: Float, y: Float): KeyBox? {
+        val label = (box.spec.action as? KeyAction.Bopomofo)?.label
+        val rect = box.rect
+        if (label == null) {
+            if (rect.contains(x, y)) return box
+            return hit(x, y)
+        }
+        if (heldLabel(rect.left, rect.top, rect.right, rect.bottom, label, x, y, null) == label) {
+            return box
+        }
+        val sensed = (hit(x, y)?.spec?.action as? KeyAction.Bopomofo)?.label
+        val held = heldLabel(rect.left, rect.top, rect.right, rect.bottom, label, x, y, sensed)
+        if (held == null) return null
+        if (held == label) return box
+        return boxes.firstOrNull { (it.spec.action as? KeyAction.Bopomofo)?.label == held }
+    }
+
     private fun hit(x: Float, y: Float): KeyBox? {
-        return boxes.firstOrNull { it.rect.contains(x, y) }
+        val inside = boxes.firstOrNull { it.rect.contains(x, y) }
+        if (mode != KeyboardMode.ZHUYIN) return inside
+        if (inside != null && inside.spec.action !is KeyAction.Bopomofo) return inside
+        val owner = (inside?.spec?.action as? KeyAction.Bopomofo)?.label
+        val label = TouchModel.sense(x, y, zhuyinAreas, owner) ?: return inside
+        return boxes.firstOrNull { (it.spec.action as? KeyAction.Bopomofo)?.label == label } ?: inside
     }
 
     private fun stopRepeat() {
@@ -1249,6 +1511,7 @@ internal class KeyboardView(context: Context) : View(context) {
     private val tapKind: Int by lazy { detectTapKind() }
 
     private companion object {
+        const val TAG = "FsKeyboard"
         const val NO_POINTER = -1
         const val TAP_NONE = 0
         const val TAP_PRIMITIVE = 1
@@ -1258,4 +1521,34 @@ internal class KeyboardView(context: Context) : View(context) {
         const val DEFAULT_TAP_SCALE = 0.6f
         const val TAP_FALLBACK_MS = 12L
     }
+}
+
+/** Half-open edges, matching a key rectangle. */
+internal fun pointInKeyRect(
+    left: Float,
+    top: Float,
+    right: Float,
+    bottom: Float,
+    x: Float,
+    y: Float,
+): Boolean {
+    return left < right && top < bottom && x >= left && x < right && y >= top && y < bottom
+}
+
+/**
+ * Inside the pressed rectangle the key stays down.
+ * [sensed] applies only after the point has left that rectangle.
+ */
+internal fun heldLabel(
+    left: Float,
+    top: Float,
+    right: Float,
+    bottom: Float,
+    label: String,
+    x: Float,
+    y: Float,
+    sensed: String?,
+): String? {
+    if (pointInKeyRect(left, top, right, bottom, x, y)) return label
+    return sensed
 }

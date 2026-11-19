@@ -1,5 +1,6 @@
 package com.fskeyboard.ime.ui
 
+import android.content.Context
 import android.content.res.Configuration
 import android.view.View
 
@@ -41,14 +42,32 @@ internal data class KeyboardPalette(
     }
 }
 
-internal fun View.isNightMode(): Boolean {
+internal fun Context.isNightMode(): Boolean {
     val mask = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK
     return mask == Configuration.UI_MODE_NIGHT_YES
 }
+
+internal fun View.isNightMode(): Boolean = context.isNightMode()
 
 internal fun View.dp(value: Int): Int =
     (value * resources.displayMetrics.density).toInt()
 
 internal fun android.content.Context.dp(value: Int): Int =
     (value * resources.displayMetrics.density).toInt()
+
+/**
+ * The prediction chip sits one elevation step away from a normal candidate.
+ * A dark key goes lighter. A light key that is already near white sinks below the bar.
+ */
+internal fun KeyboardPalette.predictionFill(): Int {
+    fun channel(color: Int, shift: Int) = (color ushr shift) and 0xFF
+    fun moved(shift: Int): Int {
+        val keyChannel = channel(key, shift)
+        val barChannel = channel(background, shift)
+        val step = keyChannel - barChannel
+        val raised = keyChannel + step
+        return if (raised in 0..255) raised else (barChannel - step).coerceIn(0, 255)
+    }
+    return (0xFF shl 24) or (moved(16) shl 16) or (moved(8) shl 8) or moved(0)
+}
 

@@ -18,8 +18,11 @@ import android.widget.Button
 import com.fskeyboard.ime.R
 import com.fskeyboard.ime.keyboard.KeyIcon
 import com.fskeyboard.ime.keyboard.KeyIcons
-import com.fskeyboard.ime.ui.KeyboardPalette
+import com.fskeyboard.ime.ui.AppearanceOverrides
+import com.fskeyboard.ime.ui.CandidateChrome
+import com.fskeyboard.ime.ui.candidateFaceFill
 import com.fskeyboard.ime.ui.dp
+import com.fskeyboard.ime.ui.drawHaloText
 import kotlin.concurrent.thread
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -47,7 +50,7 @@ internal class CandidateStrip(context: Context) : View(context) {
 
     private var candidates: List<Candidate> = emptyList()
     private var openSyllables = 0
-    private var palette = KeyboardPalette.of(false)
+    private var chrome = CandidateChrome.resolve(night = false, overrides = AppearanceOverrides.NONE)
     private val labels = ArrayList<String>()
     private val slots = ArrayList<RectF>()
     private var contentWidth = 0
@@ -82,12 +85,12 @@ internal class CandidateStrip(context: Context) : View(context) {
     private var previewLoading = false
     private var previewGeneration = 0
 
-    fun show(next: List<Candidate>, nextPalette: KeyboardPalette, syllables: Int = 0) {
+    fun show(next: List<Candidate>, nextChrome: CandidateChrome, syllables: Int = 0) {
         val sameList = candidates == next
-        val samePalette = palette == nextPalette
+        val sameChrome = chrome == nextChrome
         val sameSyllables = openSyllables == syllables
-        if (sameList && samePalette && sameSyllables) return
-        palette = nextPalette
+        if (sameList && sameChrome && sameSyllables) return
+        chrome = nextChrome
         openSyllables = syllables
         if (!sameList) {
             candidates = next
@@ -170,18 +173,23 @@ internal class CandidateStrip(context: Context) : View(context) {
             val rect = chipRect(index)
             val candidate = candidates.getOrNull(index)
             val clipboard = candidate?.source == CandidateSource.CLIPBOARD
-            fill.style = Paint.Style.FILL
-            fill.color = when {
-                index == pressed -> palette.keyPressed
-                clipboard || candidate?.completion == true -> palette.background
-                index == accent -> palette.accent
-                else -> palette.key
+            val behind = if (index == pressed) {
+                chrome.pressed
+            } else {
+                candidateFaceFill(
+                    chrome,
+                    completion = candidate?.completion == true,
+                    clipboard = clipboard,
+                    emphasized = index == accent,
+                )
             }
+            fill.style = Paint.Style.FILL
+            fill.color = behind
             canvas.drawRoundRect(rect, radius, radius, fill)
             if (clipboard) {
                 fill.style = Paint.Style.STROKE
                 fill.strokeWidth = stroke
-                fill.color = palette.hint
+                fill.color = chrome.hint
                 val inset = stroke / 2f
                 canvas.drawRoundRect(
                     rect.left + inset,
@@ -198,9 +206,9 @@ internal class CandidateStrip(context: Context) : View(context) {
             if (clipboard && preview != null && candidates.getOrNull(index)?.clipboardImageUri != null) {
                 drawClipboardPreview(canvas, rect, baseline)
             } else if (clipboard) {
-                drawClipboardLabel(canvas, rect, labels[index], baseline)
+                drawClipboardLabel(canvas, rect, labels[index], baseline, behind)
             } else {
-                drawCandidateLabel(canvas, rect, candidate, labels[index], baseline)
+                drawCandidateLabel(canvas, rect, labels[index], baseline, behind)
             }
         }
     }
@@ -264,33 +272,18 @@ internal class CandidateStrip(context: Context) : View(context) {
 
     override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = nodes
 
-    /** A completion chip draws the typed bopomofo, then the predicted tail in the hint color. */
-    private fun drawCandidateLabel(
-        canvas: Canvas,
-        rect: RectF,
-        candidate: Candidate?,
-        label: String,
-        baseline: Float,
-    ) {
-        val reading = candidate?.labelReading.orEmpty()
-        val tail = candidate?.labelTail.orEmpty()
-        if (reading.isEmpty()) {
-            textPaint.color = palette.text
-            textPaint.textAlign = Paint.Align.CENTER
-            canvas.drawText(label, rect.centerX(), baseline, textPaint)
-            return
-        }
-        textPaint.textAlign = Paint.Align.LEFT
-        val total = textPaint.measureText(reading + tail)
-        var x = rect.centerX() - total / 2f
-        textPaint.color = palette.text
-        canvas.drawText(reading, x, baseline, textPaint)
-        x += textPaint.measureText(reading)
-        if (tail.isNotEmpty()) {
-            textPaint.color = palette.hint
-            canvas.drawText(tail, x, baseline, textPaint)
-        }
+    private fun drawCandidateLabel(canvas: Canvas, rect: RectF, label: String, baseline: Float, behind: Int) {
         textPaint.textAlign = Paint.Align.CENTER
+        drawHaloText(
+            canvas,
+            label,
+            rect.centerX(),
+            baseline,
+            textPaint,
+            chrome.text,
+            behind,
+            resources.displayMetrics.density,
+        )
     }
 
     private fun layoutChips() {
@@ -350,21 +343,20 @@ internal class CandidateStrip(context: Context) : View(context) {
             canvas,
             KeyIcon.CLIPBOARD,
             RectF(x, top, x + size, top + size),
-            palette.hint,
+            chrome.hint,
             iconPaint,
             scale = 1f,
         )
         return size
     }
 
-    private fun drawClipboardLabel(canvas: Canvas, rect: RectF, label: String, baseline: Float) {
+    private fun drawClipboardLabel(canvas: Canvas, rect: RectF, label: String, baseline: Float, behind: Int) {
         val gap = dp(MARK_GAP_DP).toFloat()
         val markWidth = clipboardMarkSize()
         var x = rect.centerX() - (markWidth + gap + textPaint.measureText(label)) / 2f
         x += drawClipboardMark(canvas, rect, x) + gap
         textPaint.textAlign = Paint.Align.LEFT
-        textPaint.color = palette.text
-        canvas.drawText(label, x, baseline, textPaint)
+        drawHaloText(canvas, label, x, baseline, textPaint, chrome.text, behind, resources.displayMetrics.density)
         textPaint.textAlign = Paint.Align.CENTER
     }
 

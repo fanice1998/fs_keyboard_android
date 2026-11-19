@@ -1,5 +1,6 @@
 package com.fskeyboard.ime.lingxi
 
+import com.fskeyboard.ime.engine.ChiaKeyUnigramScan
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -74,12 +75,20 @@ internal class LingxiEngine(
         openTone: BooleanArray = BooleanArray(0),
     ): LingxiResult {
         val committed = withoutOpenReading(context, syllables)
-        val statistical = viterbi(syllables, openTone, lingxiLeftWord(tables, committed))
+        val left = lingxiLeftWord(tables, committed)
+        val statistical = viterbi(syllables, openTone, left)
         val texts = statistical.map { it.text }
+        val nonRare = statistical.count { !it.rare }
+        // A character outside the vocab must not make the model skip the Lingxi rows.
+        val fillers = if (nonRare >= LINGXI_N_BEST || statistical.size >= LINGXI_N_BEST) {
+            emptyList()
+        } else {
+            seatSupplements(syllables, openTone, left, texts, LINGXI_N_BEST - statistical.size)
+        }
         // The lexicon walk happens before the model, and stops once the key budget is gone.
         val scanned = scanContinuations(syllables, openTone, deadlineNs)
         fun finish(rows: List<String>, label: String): LingxiResult {
-            val shown = pin(rows, remembered)
+            val shown = pin(if (fillers.isEmpty()) rows else rows + fillers, remembered)
             val hint = chooseCompletion(scanned, shown.firstOrNull().orEmpty(), committed)
             return LingxiResult(shown, label, hint)
         }
@@ -106,8 +115,21 @@ internal class LingxiEngine(
      * The model is not asked. A deadline already passed returns null.
      */
     /** Lexicon rows for exactly these syllables. Empty when a syllable is not in the table. */
-    fun exactHits(syllables: List<String>, openTone: BooleanArray = BooleanArray(0)): List<LexHit> {
-        return tables.lexicon.exact(syllables, openTone)
+    fun exactHits(
+        syllables: List<String>,
+        openTone: BooleanArray = BooleanArray(0),
+        includeSupplements: Boolean = true,
+    ): List<LexHit> {
+        return tables.lexicon.exact(syllables, openTone, includeSupplements)
+    }
+
+    fun topSupplements(
+        syllables: List<String>,
+        openTone: BooleanArray = BooleanArray(0),
+        skip: Collection<String> = emptyList(),
+        limit: Int = 8,
+    ): List<LexHit> {
+        return tables.lexicon.topSupplements(syllables, openTone, skip, limit)
     }
 
     fun completion(
@@ -218,7 +240,12 @@ internal class LingxiEngine(
             val leftIds = IntArray(hyps.size) { wordId(hyps[it].last) }
             for (len in 1..room) {
                 val tones = if (unspecified) openTone.copyOfRange(at, at + len) else BooleanArray(0)
-                val entries = tables.lexicon.exact(syllables.subList(at, at + len), tones)
+                // Supplements stay out of the beam. A common syllable has thousands of them.
+                val entries = tables.lexicon.exact(
+                    syllables.subList(at, at + len),
+                    tones,
+                    includeSupplements = false,
+                )
                 if (entries.isEmpty()) continue
                 val rightIds = IntArray(entries.size) { wordId(entries[it].surface) }
                 for (hypIndex in hyps.indices) {
@@ -227,7 +254,7 @@ internal class LingxiEngine(
                     for (entryIndex in entries.indices) {
                         val entry = entries[entryIndex]
                         if (entry.surface.isEmpty() || entry.prw <= 0f) continue
-                        val score = hyp.log + arcLog(leftId, rightIds[entryIndex], entry.prw)
+                        val score = hyp.log + arcLog(leftId, rightIds[entryIndex], entry.prw, entry.extra)
                         offer(
                             states[at + len],
                             Hyp(hyp, entry.surface, score, entry.surface, hyp.rare || entry.rare),
@@ -245,27 +272,63 @@ internal class LingxiEngine(
                 if (old == null || hyp.log > old.log) best[text] = hyp
             }
         }
-        return best.values.sortedWith(
+        val ranked = best.values.sortedWith(
             compareBy<Hyp> { it.rare }
                 .thenByDescending { it.log }
                 .thenBy { block(it.text()) }
                 .thenBy { it.text() },
-        ).take(LINGXI_N_BEST).map { Row(it.text(), it.log) }
+        ).take(LINGXI_N_BEST)
+        val out = ArrayList<Row>(ranked.size)
+        for (hyp in ranked) out += Row(hyp.text(), hyp.log, hyp.rare)
+        return out
     }
 
-    private fun arcLog(leftId: Int, rightId: Int, prw: Float): Double {
-        return scored(leftId, rightId, prw)
+    private fun seatSupplements(
+        syllables: List<String>,
+        openTone: BooleanArray,
+        left: String,
+        taken: List<String>,
+        room: Int,
+    ): List<String> {
+        if (room <= 0 || syllables.isEmpty()) return emptyList()
+        val n = syllables.size
+        val tones = if (openTone.size == n) openTone else BooleanArray(0)
+        val have = HashSet<String>(taken.size * 2)
+        have += taken
+        val leftId = tables.lm.idOf(left)
+        val extras = ArrayList<Row>()
+        for (entry in tables.lexicon.exact(syllables, tones)) {
+            if (!entry.supplement || entry.surface.isEmpty() || entry.prw <= 0f) continue
+            if (entry.surface.codePointCount(0, entry.surface.length) != n) continue
+            if (!have.add(entry.surface)) continue
+            extras += Row(
+                entry.surface,
+                scored(leftId, tables.lm.idOf(entry.surface), entry.prw, entry.extra),
+                rare = true,
+            )
+        }
+        extras.sortWith(compareByDescending<Row> { it.log }.thenBy { block(it.text) }.thenBy { it.text })
+        val out = ArrayList<String>(room)
+        for (row in extras) {
+            if (out.size >= room) break
+            out += row.text
+        }
+        return out
+    }
+
+    private fun arcLog(leftId: Int, rightId: Int, prw: Float, extra: Int): Double {
+        return scored(leftId, rightId, prw, extra)
     }
 
     private fun logProb(left: String, surface: String, prw: Float): Double {
-        return scored(tables.lm.idOf(left), tables.lm.idOf(surface), prw)
+        return scored(tables.lm.idOf(left), tables.lm.idOf(surface), prw, 0)
     }
 
-    private fun scored(leftId: Int, rightId: Int, prw: Float): Double {
+    private fun scored(leftId: Int, rightId: Int, prw: Float, extra: Int): Double {
         val probability = MU * tables.lm.biAt(leftId, rightId) + (1.0 - MU) * tables.lm.uniAt(rightId)
         val safe = if (probability > 0.0) probability else 1e-300
         val prior = if (prw > 0f) prw.toDouble() else 1e-300
-        return ln(safe) + ln(prior)
+        return ln(safe) + ln(prior) - extra * LINGXI_EXTRA_PENALTY
     }
 
     private companion object {
@@ -278,7 +341,7 @@ internal class LingxiEngine(
     }
 }
 
-private class Row(val text: String, val log: Double)
+private class Row(val text: String, val log: Double, val rare: Boolean)
 
 /**
  * One lexicon arc. [prev] is the path before [piece]. The start node has no [prev].
@@ -385,8 +448,50 @@ private fun codePoints(text: String): IntArray {
     return out
 }
 
-internal fun loadLingxiEngine(root: File): LingxiEngine {
-    val tables = loadLingxiTables(root)
+/** Absent file is not an error. The native engine is not opened. */
+internal fun readUserUnigramRows(file: File): List<ChiaUnigram> {
+    if (!file.isFile) return emptyList()
+    val out = ArrayList<ChiaUnigram>()
+    ChiaKeyUnigramScan.readUserFile(file) { qstring, text, probability ->
+        out += ChiaUnigram(qstring, text, probability)
+    }
+    return out
+}
+
+internal fun mergeUserUnigrams(
+    tables: LingxiTables,
+    file: File?,
+    log: (String) -> Unit = {},
+): LingxiTables {
+    if (file == null) return tables
+    val rows = try {
+        readUserUnigramRows(file)
+    } catch (error: Exception) {
+        log("lingxi user unigrams skipped ${error.javaClass.simpleName}")
+        return tables
+    }
+    if (rows.isEmpty()) return tables
+    return try {
+        val merged = mergeChiaUnigrams(tables.lexicon.encode(), rows, tables.lexicon.supplementMask)
+        val lexicon = decodeLexicon(merged.bytes, merged.supplementMask)
+        val (characters, words) = lexicon.census()
+        LingxiTables(lexicon, tables.lm, tables.census.copy(characters = characters, words = words))
+    } catch (error: Exception) {
+        log("lingxi user unigrams skipped ${error.javaClass.simpleName}")
+        tables
+    }
+}
+
+internal fun loadLingxiEngine(
+    root: File,
+    userUnigrams: File? = null,
+    log: (String) -> Unit = {},
+): LingxiEngine {
+    val loaded = loadLingxiTables(root)
+    // User phrases are merged after this, so a saved phrase is not treated as a stock name.
+    val demoted = loaded.lexicon.demotePersonalNames { loaded.lm.uni(it) }
+    if (demoted > 0) log("lingxi personal names demoted=$demoted")
+    val tables = mergeUserUnigrams(loaded, userUnigrams, log)
     val model = lingxiFile(root, "select/model.onnx", "select/model.onnx")
     val vocab = lingxiFile(root, "select/vocab.json", "select/vocab.json")
     val manifest = lingxiFile(root, "select/manifest.json", "select/manifest.json")

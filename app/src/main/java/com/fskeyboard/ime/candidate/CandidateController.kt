@@ -62,7 +62,7 @@ internal class CandidateController(
     private val letterMode: () -> KeyboardMode = { KeyboardMode.ZHUYIN },
     private val clipboard: () -> ClipOffer? = { readClipboard(context) },
     continuations: WordContinuations? = null,
-    zhuyinEngine: ZhuyinEngine = UnavailableZhuyinEngine,
+    zhuyinEngine: ZhuyinEngine = UnavailableZhuyinEngine(),
     partialLexicon: PartialLexicon = PartialLexicon.EMPTY,
     private val userLexicon: FsLexicon? = null,
     lingxi: com.fskeyboard.ime.lingxi.LingxiSlot? = null,

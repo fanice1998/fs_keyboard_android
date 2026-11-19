@@ -4,6 +4,10 @@ import android.content.Context
 import com.fskeyboard.ime.keyboard.ComputerKeyMap
 import com.fskeyboard.ime.keyboard.KeyboardHeight
 import com.fskeyboard.ime.keyboard.KeyboardMode
+import com.fskeyboard.ime.ui.AppearanceOverrides
+import com.fskeyboard.ime.ui.KeyAnimation
+import com.fskeyboard.ime.ui.acceptedImageName
+import com.fskeyboard.ime.ui.readStoredAlpha
 import com.fskeyboard.ime.ui.KeyboardTheme
 import com.fskeyboard.ime.rerank.RerankPreferences
 
@@ -106,6 +110,75 @@ internal class KeyboardPreferences(context: Context) {
         prefs.edit().putString(KEY_THEME, theme.id).apply()
     }
 
+    /** Absent color keys stay null. 0 is a real color, so this cannot use getInt's default. */
+    fun appearance(): AppearanceOverrides {
+        return AppearanceOverrides(
+            backgroundColor = colorOrNull(KEY_BACKGROUND_COLOR),
+            keyFill = colorOrNull(KEY_KEY_FILL_COLOR),
+            keyBorderEnabled = if (prefs.contains(KEY_KEY_BORDER_ENABLED)) {
+                prefs.getBoolean(KEY_KEY_BORDER_ENABLED, false)
+            } else {
+                null
+            },
+            keyBorderColor = colorOrNull(KEY_KEY_BORDER_COLOR),
+            keyLabelColor = colorOrNull(KEY_KEY_LABEL_COLOR),
+            alphaPercent = readStoredAlpha(prefs.contains(KEY_ALPHA), prefs.getInt(KEY_ALPHA, 0)),
+            animation = if (prefs.contains(KEY_ANIMATION)) {
+                KeyAnimation.of(prefs.getString(KEY_ANIMATION, null))
+            } else {
+                null
+            },
+            imageName = acceptedImageName(
+                if (prefs.contains(KEY_BACKGROUND_IMAGE)) prefs.getString(KEY_BACKGROUND_IMAGE, null) else null,
+            ),
+            candidateBar = colorOrNull(KEY_CANDIDATE_BAR),
+            candidateSelected = colorOrNull(KEY_CANDIDATE_SELECTED),
+            candidateUnselected = colorOrNull(KEY_CANDIDATE_UNSELECTED),
+            candidateText = colorOrNull(KEY_CANDIDATE_TEXT),
+        )
+    }
+
+    fun setAppearanceColor(key: String, argb: Int, flush: Boolean = false) {
+        if (key !in APPEARANCE_COLOR_KEYS) return
+        val editor = prefs.edit().putInt(key, argb or 0xFF000000.toInt())
+        if (flush) editor.commit() else editor.apply()
+    }
+
+    fun clearAppearance(keys: Collection<String>, flush: Boolean = false) {
+        val editor = prefs.edit()
+        for (key in keys) {
+            if (key !in APPEARANCE_KEYS) continue
+            editor.remove(key)
+        }
+        if (flush) editor.commit() else editor.apply()
+    }
+
+    fun setKeyAnimation(animation: KeyAnimation, flush: Boolean = false) {
+        val editor = prefs.edit().putString(KEY_ANIMATION, animation.stored())
+        if (flush) editor.commit() else editor.apply()
+    }
+
+    fun setKeyboardAlpha(percent: Int, flush: Boolean = false) {
+        val editor = prefs.edit().putInt(KEY_ALPHA, percent.coerceIn(0, 100))
+        if (flush) editor.commit() else editor.apply()
+    }
+
+    fun setKeyBorderEnabled(enabled: Boolean, flush: Boolean = false) {
+        val editor = prefs.edit().putBoolean(KEY_KEY_BORDER_ENABLED, enabled)
+        if (flush) editor.commit() else editor.apply()
+    }
+
+    fun setBackgroundImageName(name: String?, flush: Boolean = false) {
+        val editor = prefs.edit()
+        if (name == null) editor.remove(KEY_BACKGROUND_IMAGE) else editor.putString(KEY_BACKGROUND_IMAGE, name)
+        if (flush) editor.commit() else editor.apply()
+    }
+
+    private fun colorOrNull(key: String): Int? {
+        if (!prefs.contains(key)) return null
+        return prefs.getInt(key, 0) or 0xFF000000.toInt()
+    }
+
     /**
      * Whether a remembered word that has been offered twenty times without being
      * chosen is dropped. On unless the user turns it off.
@@ -149,5 +222,35 @@ internal class KeyboardPreferences(context: Context) {
         const val KEY_THEME = "keyboard_theme"
         const val KEY_FORGET_UNUSED = "forget_unused_predictions"
         const val KEY_LETTER_MODE = "letter_mode"
+        const val KEY_BACKGROUND_COLOR = "keyboard_background_color"
+        const val KEY_KEY_FILL_COLOR = "keyboard_key_fill_color"
+        const val KEY_KEY_BORDER_ENABLED = "keyboard_key_border_enabled"
+        const val KEY_KEY_BORDER_COLOR = "keyboard_key_border_color"
+        const val KEY_KEY_LABEL_COLOR = "keyboard_key_label_color"
+        const val KEY_ALPHA = "keyboard_alpha"
+        const val KEY_ANIMATION = "keyboard_key_animation"
+        const val KEY_BACKGROUND_IMAGE = "keyboard_background_image"
+        const val KEY_CANDIDATE_BAR = "candidate_bar_color"
+        const val KEY_CANDIDATE_SELECTED = "candidate_selected_color"
+        const val KEY_CANDIDATE_UNSELECTED = "candidate_unselected_color"
+        const val KEY_CANDIDATE_TEXT = "candidate_text_color"
+
+        val APPEARANCE_COLOR_KEYS = setOf(
+            KEY_BACKGROUND_COLOR,
+            KEY_KEY_FILL_COLOR,
+            KEY_KEY_BORDER_COLOR,
+            KEY_KEY_LABEL_COLOR,
+            KEY_CANDIDATE_BAR,
+            KEY_CANDIDATE_SELECTED,
+            KEY_CANDIDATE_UNSELECTED,
+            KEY_CANDIDATE_TEXT,
+        )
+
+        val APPEARANCE_KEYS = APPEARANCE_COLOR_KEYS + setOf(
+            KEY_KEY_BORDER_ENABLED,
+            KEY_ALPHA,
+            KEY_ANIMATION,
+            KEY_BACKGROUND_IMAGE,
+        )
     }
 }

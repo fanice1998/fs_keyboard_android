@@ -12,9 +12,8 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.fskeyboard.ime.R
-import com.fskeyboard.ime.ui.KeyboardPalette
+import com.fskeyboard.ime.ui.CandidateChrome
 import com.fskeyboard.ime.ui.dp
-import com.fskeyboard.ime.ui.isNightMode
 
 /**
  * Candidates in one scrolling row. The composition stays underlined in the field,
@@ -72,15 +71,14 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         expand.visibility = INVISIBLE
     }
 
-    fun render(state: CandidateUiState) {
-        val palette = KeyboardPalette.of(isNightMode())
-        setBackgroundColor(palette.background)
-        status.setTextColor(palette.hint)
+    fun render(state: CandidateUiState, chrome: CandidateChrome) {
+        setBackgroundColor(chrome.bar)
+        status.setTextColor(chrome.hint)
         status.text = state.message
         status.visibility = if (state.message.isEmpty()) GONE else VISIBLE
         scroll.visibility = if (state.message.isEmpty()) VISIBLE else GONE
-        expand.setTextColor(palette.text)
-        (expand.background as? GradientDrawable)?.setColor(palette.accent)
+        expand.setTextColor(chrome.text)
+        (expand.background as? GradientDrawable)?.setColor(chrome.selected)
         val clipboard = state.candidates.singleOrNull()?.source == CandidateSource.CLIPBOARD
         expand.visibility = when {
             clipboard -> GONE
@@ -91,7 +89,7 @@ internal class CandidateBarView(context: Context) : LinearLayout(context) {
         if (!clipboard) dismissClipboardPrompt()
         val changed = shown != state.candidates
         shown = state.candidates
-        strip.show(state.candidates, palette, state.openSyllables)
+        strip.show(state.candidates, chrome, state.openSyllables)
         if (changed) scroll.scrollTo(0, 0)
     }
 

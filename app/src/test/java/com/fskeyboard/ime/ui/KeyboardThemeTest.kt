@@ -24,9 +24,24 @@ class KeyboardThemeTest {
     }
 
     @Test
+    fun predictionChipSitsAtADifferentDepth() {
+        for (theme in listOf(KeyboardTheme.paper(), KeyboardTheme.ink())) {
+            for (palette in listOf(theme.light, theme.dark)) {
+                val fill = palette.predictionFill()
+                assertNotEquals(palette.background, fill)
+                assertNotEquals(palette.key, fill)
+                assertNotEquals(palette.accent, fill)
+            }
+        }
+    }
+
+    @Test
     fun thePreviewReadsTheThemePalette() {
         val view = readProjectFile("src/main/java/com/fskeyboard/ime/keyboard/KeyboardView.kt")
-        assertTrue(view.contains("keyPreview.palette = theme.palette"))
+        val preview = view.substringAfter("fun showKeyPreview").substringBefore("private fun dispatch")
+        assertTrue(preview.contains("theme.palette(resolvedNight)"))
+        assertTrue(preview.contains("themePalette.copy(text = paintResolved.labelColor)"))
+        assertFalse(preview.contains("keyPreview.palette = theme.palette"))
     }
 
     @Test
@@ -35,5 +50,15 @@ class KeyboardThemeTest {
         val session = readProjectFile("src/main/java/com/fskeyboard/ime/compose/ZhuyinCompositionSession.kt")
         assertFalse(controller.contains("KeyboardTheme"))
         assertFalse(session.contains("KeyboardTheme"))
+        for (name in listOf(
+            "AppearanceOverrides",
+            "ResolvedKeyboard",
+            "CandidateChrome",
+            "KeyAnimation",
+            "AppearanceImageCache",
+        )) {
+            assertFalse(controller.contains(name))
+            assertFalse(session.contains(name))
+        }
     }
 }

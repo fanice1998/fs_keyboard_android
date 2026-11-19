@@ -2,16 +2,20 @@ package com.fskeyboard.ime.settings
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewTreeObserver
 import android.view.WindowInsets
 import android.widget.Button
+import android.widget.EditText
 import android.widget.GridLayout
 import android.widget.LinearLayout
+import android.widget.RadioGroup
 import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
@@ -26,11 +30,29 @@ import com.fskeyboard.ime.keyboard.KeyboardHeight
 import com.fskeyboard.ime.keyboard.KeyboardMode
 import com.fskeyboard.ime.keyboard.KeyboardView
 import com.fskeyboard.ime.keyboard.SwipeDirection
+import com.fskeyboard.ime.ui.AppearanceImageCache
+import com.fskeyboard.ime.ui.AppearanceOverrides
+import com.fskeyboard.ime.ui.AppearancePipeline
+import com.fskeyboard.ime.ui.CandidateChrome
+import com.fskeyboard.ime.ui.CopyResult
+import com.fskeyboard.ime.ui.KeyAnimation
 import com.fskeyboard.ime.ui.KeyboardTheme
+import com.fskeyboard.ime.ui.appearanceDir
+import com.fskeyboard.ime.ui.appearanceSwatches
+import com.fskeyboard.ime.ui.colorsMatch
+import com.fskeyboard.ime.ui.copyAppearanceStream
 import com.fskeyboard.ime.ui.dp
+import com.fskeyboard.ime.ui.editorResolved
+import com.fskeyboard.ime.ui.haloColor
+import com.fskeyboard.ime.ui.isNightMode
+import com.fskeyboard.ime.ui.loadAppearance
+import com.fskeyboard.ime.ui.parseHexColor
+import com.fskeyboard.ime.ui.resolveKeyboard
 import com.fskeyboard.ime.latency.KeyLatency
 import com.fskeyboard.ime.rerank.RerankPreferences
 import com.fskeyboard.ime.rerank.onnx.OnnxModelStore
+import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ImeSettingsActivity : Activity() {
     private lateinit var keyboardPreferences: KeyboardPreferences
@@ -39,7 +61,35 @@ class ImeSettingsActivity : Activity() {
     private lateinit var strengthSeek: SeekBar
     private lateinit var strengthValue: TextView
     private lateinit var previewKeyboard: KeyboardView
+    private lateinit var previewBar: CandidateBarView
     private lateinit var editorKeyboard: KeyboardView
+    private lateinit var alphaSeek: SeekBar
+    private lateinit var alphaValue: TextView
+    private lateinit var backgroundColorButton: Button
+    private lateinit var keyFillButton: Button
+    private lateinit var keyBorderSwitch: Switch
+    private lateinit var keyBorderColorButton: Button
+    private lateinit var keyLabelButton: Button
+    private lateinit var animationGroup: RadioGroup
+    private lateinit var candidateBarButton: Button
+    private lateinit var candidateSelectedButton: Button
+    private lateinit var candidateUnselectedButton: Button
+    private lateinit var candidateTextButton: Button
+    private lateinit var imagePick: Button
+    private lateinit var imageClear: Button
+    private lateinit var contrastNote: TextView
+    private var bindingAppearance = false
+    private var progressDialog: AlertDialog? = null
+    private val copyCancelled = AtomicBoolean(false)
+    private val onImageBusy: () -> Unit = { if (::imagePick.isInitialized) imagePick.isEnabled = false }
+    private val onImageIdle: () -> Unit = { if (::imagePick.isInitialized) imagePick.isEnabled = true }
+    private val previewCandidates = CandidateUiState(
+        candidates = listOf(
+            Candidate("你", engineIndex = 0),
+            Candidate("妳", engineIndex = 1),
+            Candidate("泥", engineIndex = 2),
+        ),
+    )
     private lateinit var letterLabel: TextView
     private lateinit var padCenter: TextView
     private lateinit var latencyValue: TextView
@@ -131,7 +181,10 @@ class ImeSettingsActivity : Activity() {
         inkTheme.setOnCheckedChangeListener { _, checked ->
             val theme = if (checked) KeyboardTheme.ink() else KeyboardTheme.paper()
             keyboardPreferences.setKeyboardTheme(theme)
-            previewKeyboard.theme = theme
+            if (::previewKeyboard.isInitialized) {
+                previewKeyboard.theme = theme
+                refreshAppearance()
+            }
         }
         val keyPreview = findViewById<Switch>(R.id.key_preview_switch)
         keyPreview.isChecked = keyboardPreferences.keyPreviewEnabled()
@@ -197,18 +250,25 @@ class ImeSettingsActivity : Activity() {
                 previewKeyboard.playVibrationSample()
             }
         })
+        installAppearance()
     }
 
     override fun onDestroy() {
         settingsRoot?.viewTreeObserver?.let { observer ->
             if (observer.isAlive) observer.removeOnGlobalLayoutListener(onLayout)
         }
+        // The copy thread sees this and abandons the generation only if .ok is not written yet.
+        copyCancelled.set(true)
+        dismissImageProgress()
+        if (AppearancePipeline.onActive === onImageBusy) AppearancePipeline.onActive = null
+        if (AppearancePipeline.onIdle === onImageIdle) AppearancePipeline.onIdle = null
         super.onDestroy()
     }
 
     override fun onResume() {
         super.onResume()
         showLatency()
+        AppearancePipeline.scheduleRecovery(this)
     }
 
     override fun onPause() {
@@ -218,7 +278,20 @@ class ImeSettingsActivity : Activity() {
         if (::keyboardPreferences.isInitialized && ::strengthSeek.isInitialized) {
             keyboardPreferences.setVibrationScale(strengthSeek.progress, flush = true)
         }
+        if (::keyboardPreferences.isInitialized && ::alphaSeek.isInitialized &&
+            keyboardPreferences.appearance().alphaPercent != null
+        ) {
+            keyboardPreferences.setKeyboardAlpha(alphaSeek.progress, flush = true)
+        }
         super.onPause()
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_BACKGROUND || resultCode != RESULT_OK || isFinishing) return
+        val uri = data?.data ?: return
+        startBackgroundCopy(uri)
     }
 
     private fun showLatency() {
@@ -255,15 +328,7 @@ class ImeSettingsActivity : Activity() {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         }
         val bar = CandidateBarView(this)
-        bar.render(
-            CandidateUiState(
-                candidates = listOf(
-                    Candidate("你", engineIndex = 0),
-                    Candidate("妳", engineIndex = 1),
-                    Candidate("泥", engineIndex = 2),
-                ),
-            ),
-        )
+        previewBar = bar
         val keyboard = KeyboardView(this).apply {
             rowHeightDp = rowDp
             latinTopNumberRow = keyboardPreferences.latinTopNumberRow()
@@ -441,6 +506,287 @@ class ImeSettingsActivity : Activity() {
         refreshComputerPad()
     }
 
+    private fun installAppearance() {
+        backgroundColorButton = findViewById(R.id.appearance_background_color)
+        keyFillButton = findViewById(R.id.appearance_key_fill)
+        keyBorderSwitch = findViewById(R.id.appearance_key_border)
+        keyBorderColorButton = findViewById(R.id.appearance_key_border_color)
+        keyLabelButton = findViewById(R.id.appearance_key_label)
+        animationGroup = findViewById(R.id.appearance_animation)
+        candidateBarButton = findViewById(R.id.appearance_candidate_bar)
+        candidateSelectedButton = findViewById(R.id.appearance_candidate_selected)
+        candidateUnselectedButton = findViewById(R.id.appearance_candidate_unselected)
+        candidateTextButton = findViewById(R.id.appearance_candidate_text)
+        imagePick = findViewById(R.id.appearance_image_pick)
+        imageClear = findViewById(R.id.appearance_image_clear)
+        contrastNote = findViewById(R.id.appearance_contrast_note)
+        alphaValue = findViewById(R.id.appearance_alpha_value)
+        alphaSeek = findViewById(R.id.appearance_alpha)
+        alphaSeek.min = 0
+        alphaSeek.max = 100
+        backgroundColorButton.setOnClickListener {
+            chooseAppearanceColor(KeyboardPreferences.KEY_BACKGROUND_COLOR, backgroundColorButton.text.toString())
+        }
+        keyFillButton.setOnClickListener {
+            chooseAppearanceColor(KeyboardPreferences.KEY_KEY_FILL_COLOR, keyFillButton.text.toString())
+        }
+        keyBorderColorButton.setOnClickListener {
+            chooseAppearanceColor(KeyboardPreferences.KEY_KEY_BORDER_COLOR, keyBorderColorButton.text.toString())
+        }
+        keyLabelButton.setOnClickListener {
+            chooseAppearanceColor(KeyboardPreferences.KEY_KEY_LABEL_COLOR, keyLabelButton.text.toString())
+        }
+        candidateBarButton.setOnClickListener {
+            chooseAppearanceColor(KeyboardPreferences.KEY_CANDIDATE_BAR, candidateBarButton.text.toString())
+        }
+        candidateSelectedButton.setOnClickListener {
+            chooseAppearanceColor(KeyboardPreferences.KEY_CANDIDATE_SELECTED, candidateSelectedButton.text.toString())
+        }
+        candidateUnselectedButton.setOnClickListener {
+            chooseAppearanceColor(KeyboardPreferences.KEY_CANDIDATE_UNSELECTED, candidateUnselectedButton.text.toString())
+        }
+        candidateTextButton.setOnClickListener {
+            chooseAppearanceColor(KeyboardPreferences.KEY_CANDIDATE_TEXT, candidateTextButton.text.toString())
+        }
+        keyBorderSwitch.setOnCheckedChangeListener { _, checked ->
+            if (bindingAppearance) return@setOnCheckedChangeListener
+            keyboardPreferences.setKeyBorderEnabled(checked)
+            refreshAppearance()
+        }
+        animationGroup.setOnCheckedChangeListener { _, checkedId ->
+            if (bindingAppearance) return@setOnCheckedChangeListener
+            keyboardPreferences.setKeyAnimation(animationOf(checkedId))
+            refreshAppearance()
+            previewKeyboard.playAnimationSample()
+        }
+        alphaSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                showAlpha(progress)
+                if (!fromUser || bindingAppearance) return
+                keyboardPreferences.setKeyboardAlpha(progress)
+                refreshAppearance()
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+
+            override fun onStopTrackingTouch(seekBar: SeekBar) {
+                keyboardPreferences.setKeyboardAlpha(seekBar.progress, flush = true)
+                showAlpha(seekBar.progress)
+                refreshAppearance()
+            }
+        })
+        imagePick.setOnClickListener { pickBackground() }
+        imagePick.isEnabled = AppearancePipeline.isIdle()
+        AppearancePipeline.onActive = onImageBusy
+        AppearancePipeline.onIdle = onImageIdle
+        imageClear.setOnClickListener { clearBackgroundImage() }
+        findViewById<Button>(R.id.appearance_reset).setOnClickListener { resetAppearance() }
+        refreshAppearance()
+    }
+
+    private fun showAlpha(percent: Int) {
+        alphaValue.text = getString(R.string.appearance_alpha_value, percent)
+    }
+
+    private fun refreshAppearance() {
+        if (!::previewKeyboard.isInitialized || !::previewBar.isInitialized) return
+        val loaded = loadAppearance(this)
+        val night = isNightMode()
+        val theme = keyboardPreferences.keyboardTheme()
+        val resolved = resolveKeyboard(theme, night, loaded, appearanceDir(this))
+        val chrome = CandidateChrome.resolve(night, loaded)
+        previewKeyboard.applyAppearance(resolved, night)
+        val image = resolved.imageFile?.takeIf { it.isFile }
+        if (image != null) {
+            AppearanceImageCache.attach(previewKeyboard)
+            AppearancePipeline.ensureLoaded(image)
+        } else {
+            AppearanceImageCache.detach(previewKeyboard)
+            previewKeyboard.setBackgroundBitmap(null, Long.MIN_VALUE)
+        }
+        previewBar.render(previewCandidates, chrome)
+        refreshEditor(loaded, night)
+        if (!::alphaSeek.isInitialized) return
+        bindingAppearance = true
+        val percent = loaded.alphaPercent ?: 100
+        alphaSeek.progress = percent
+        showAlpha(percent)
+        keyBorderSwitch.isChecked = loaded.keyBorderEnabled ?: (theme.borderDp > 0)
+        animationGroup.check(animationId(loaded.animation ?: KeyAnimation.NONE))
+        paintSwatch(backgroundColorButton, resolved.palette.background)
+        paintSwatch(keyFillButton, resolved.palette.key)
+        paintSwatch(keyBorderColorButton, resolved.borderColor)
+        paintSwatch(keyLabelButton, resolved.labelColor)
+        paintSwatch(candidateBarButton, chrome.bar)
+        paintSwatch(candidateSelectedButton, chrome.selected)
+        paintSwatch(candidateUnselectedButton, chrome.unselected)
+        paintSwatch(candidateTextButton, chrome.text)
+        imageClear.visibility = if (loaded.imageName != null) View.VISIBLE else View.GONE
+        val lowContrast = colorsMatch(resolved.labelColor, resolved.palette.key) ||
+            colorsMatch(chrome.text, chrome.unselected)
+        contrastNote.visibility = if (lowContrast) View.VISIBLE else View.GONE
+        bindingAppearance = false
+    }
+
+    /** Paper until a key fill, border, label, or animation key exists. No theme lookup here. */
+    private fun refreshEditor(overrides: AppearanceOverrides, night: Boolean) {
+        if (!::editorKeyboard.isInitialized) return
+        val resolved = editorResolved(overrides, night)
+        if (resolved == null) editorKeyboard.clearAppearance() else editorKeyboard.applyAppearance(resolved, night)
+    }
+
+    private fun paintSwatch(button: Button, color: Int) {
+        button.setBackgroundColor(color)
+        button.setTextColor(haloColor(color))
+    }
+
+    private fun chooseAppearanceColor(key: String, title: String) {
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(12), dp(16), 0)
+        }
+        val grid = GridLayout(this).apply { columnCount = 6 }
+        val hex = EditText(this).apply {
+            hint = getString(R.string.appearance_hex_hint)
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        lateinit var dialog: AlertDialog
+        appearanceSwatches().forEachIndexed { index, color ->
+            val swatch = View(this).apply {
+                setBackgroundColor(color)
+                setOnClickListener {
+                    keyboardPreferences.setAppearanceColor(key, color)
+                    dialog.dismiss()
+                    refreshAppearance()
+                }
+            }
+            val params = GridLayout.LayoutParams(
+                GridLayout.spec(index / 6),
+                GridLayout.spec(index % 6, 1f),
+            )
+            params.width = 0
+            params.height = dp(36)
+            params.setMargins(dp(4), dp(4), dp(4), dp(4))
+            grid.addView(swatch, params)
+        }
+        column.addView(grid)
+        column.addView(hex)
+        dialog = AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(column)
+            .setPositiveButton(android.R.string.ok, null)
+            .setNegativeButton(android.R.string.cancel, null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val parsed = parseHexColor(hex.text?.toString().orEmpty()) ?: return@setOnClickListener
+                keyboardPreferences.setAppearanceColor(key, parsed)
+                dialog.dismiss()
+                refreshAppearance()
+            }
+        }
+        dialog.show()
+    }
+
+    private fun animationOf(checkedId: Int): KeyAnimation = when (checkedId) {
+        R.id.appearance_animation_pop -> KeyAnimation.POP
+        R.id.appearance_animation_ripple -> KeyAnimation.RIPPLE
+        R.id.appearance_animation_flash -> KeyAnimation.FLASH
+        R.id.appearance_animation_sink -> KeyAnimation.SINK
+        else -> KeyAnimation.NONE
+    }
+
+    private fun animationId(animation: KeyAnimation): Int = when (animation) {
+        KeyAnimation.NONE -> R.id.appearance_animation_none
+        KeyAnimation.POP -> R.id.appearance_animation_pop
+        KeyAnimation.RIPPLE -> R.id.appearance_animation_ripple
+        KeyAnimation.FLASH -> R.id.appearance_animation_flash
+        KeyAnimation.SINK -> R.id.appearance_animation_sink
+    }
+
+    @Suppress("DEPRECATION")
+    private fun pickBackground() {
+        if (!AppearancePipeline.isIdle()) return
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "image/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivityForResult(intent, REQUEST_BACKGROUND)
+    }
+
+    private fun startBackgroundCopy(uri: android.net.Uri) {
+        if (!AppearancePipeline.isIdle() || isFinishing) return
+        val gen = System.currentTimeMillis()
+        copyCancelled.set(false)
+        AppearancePipeline.beginGeneration(gen)
+        val dir = appearanceDir(this)
+        val incoming = File(dir, "incoming-$gen")
+        val ok = File(dir, "incoming-$gen.ok")
+        showImageProgress()
+        Thread({
+            val result = try {
+                contentResolver.openInputStream(uri)?.use { input ->
+                    copyAppearanceStream(input, incoming, ok, copyCancelled)
+                } ?: CopyResult.CANCELLED
+            } catch (_: Exception) {
+                CopyResult.CANCELLED
+            }
+            if (result != CopyResult.COPIED) {
+                incoming.delete()
+                ok.delete()
+                File(dir, "abandoned-$gen").apply {
+                    parentFile?.mkdirs()
+                    if (!exists()) createNewFile()
+                }
+            }
+            runOnUiThread {
+                if (result == CopyResult.COPIED) {
+                    dismissImageProgress()
+                    AppearancePipeline.finish(gen, applicationContext)
+                } else {
+                    if (result == CopyResult.TOO_LARGE && !isDestroyed) {
+                        Toast.makeText(this, R.string.appearance_image_too_large, Toast.LENGTH_SHORT).show()
+                    }
+                    dismissImageProgress()
+                    AppearancePipeline.dropGeneration(gen, dir)
+                }
+            }
+        }, "fskeyboard-appearance-copy").start()
+    }
+
+    private fun clearBackgroundImage() {
+        copyCancelled.set(true)
+        dismissImageProgress()
+        AppearancePipeline.requestOfficialDelete(appearanceDir(this))
+        keyboardPreferences.setBackgroundImageName(null, flush = true)
+        refreshAppearance()
+    }
+
+    private fun resetAppearance() {
+        copyCancelled.set(true)
+        dismissImageProgress()
+        AppearancePipeline.requestOfficialDelete(appearanceDir(this))
+        keyboardPreferences.clearAppearance(KeyboardPreferences.APPEARANCE_KEYS, flush = true)
+        refreshAppearance()
+    }
+
+    private fun showImageProgress() {
+        if (progressDialog?.isShowing == true) return
+        val dialog = AlertDialog.Builder(this)
+            .setMessage(R.string.appearance_image_reading)
+            .setCancelable(false)
+            .create()
+        progressDialog = dialog
+        dialog.show()
+    }
+
+    private fun dismissImageProgress() {
+        val dialog = progressDialog ?: return
+        progressDialog = null
+        if (dialog.isShowing) dialog.dismiss()
+    }
+
     private fun applySafeArea() {
         val root = settingsRoot ?: return
         val decor = window.decorView
@@ -529,5 +875,9 @@ class ImeSettingsActivity : Activity() {
             }
         }
         return SettingsPadding(left, top, right, bottom)
+    }
+
+    private companion object {
+        const val REQUEST_BACKGROUND = 41
     }
 }

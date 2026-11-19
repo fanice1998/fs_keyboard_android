@@ -117,4 +117,58 @@ class ImeSettingsContractTest {
         assertTrue(preferences.contains("latin_computer_key_map"))
         assertTrue(preferences.contains("prefs.contains(KEY_COMPUTER_KEY_MAP)"))
     }
+
+    @Test
+    fun settingsPageOffersKeyboardAppearance() {
+        val layout = readProjectFile("src/main/res/layout/activity_ime_settings.xml")
+        val strings = readProjectFile("src/main/res/values/strings.xml")
+        val activity = readProjectFile("src/main/java/com/fskeyboard/ime/settings/ImeSettingsActivity.kt")
+        val preferences = readProjectFile("src/main/java/com/fskeyboard/ime/settings/KeyboardPreferences.kt")
+        val backup = readProjectFile("src/main/res/xml/backup_rules.xml")
+        val extraction = readProjectFile("src/main/res/xml/data_extraction_rules.xml")
+        val section = layout.substringAfter("ink_theme_summary").substringBefore("key_preview_switch")
+        for (id in listOf(
+            "appearance_background_color",
+            "appearance_alpha",
+            "appearance_image_pick",
+            "appearance_image_clear",
+            "appearance_key_fill",
+            "appearance_key_border",
+            "appearance_key_border_color",
+            "appearance_key_label",
+            "appearance_animation",
+            "appearance_candidate_bar",
+            "appearance_candidate_selected",
+            "appearance_candidate_unselected",
+            "appearance_candidate_text",
+            "appearance_contrast_note",
+            "appearance_reset",
+        )) {
+            assertTrue(section.contains("@+id/$id"))
+        }
+        assertTrue(strings.contains("name=\"appearance_section\""))
+        assertTrue(strings.contains("name=\"appearance_alpha_label\""))
+        assertTrue(strings.contains("name=\"appearance_alpha_value\""))
+        assertTrue(strings.contains("name=\"appearance_animation_label\""))
+        assertTrue(strings.contains("name=\"appearance_contrast_note\""))
+        assertTrue(strings.contains("name=\"appearance_reset\""))
+        assertTrue(strings.contains("name=\"appearance_image_too_large\""))
+        assertTrue(strings.contains("鍵盤外觀"))
+        assertTrue(strings.contains("字色與底色太接近，會自動加上對比描邊，仍然儲存你選的顏色。"))
+        assertTrue(strings.contains("還原按鍵與組字區的顏色、透明度、背景圖和動畫。墨色按鍵開關不變。"))
+        assertTrue(strings.contains("正在讀取圖片"))
+        assertTrue(activity.contains("clearAppearance(KeyboardPreferences.APPEARANCE_KEYS"))
+        assertFalse(activity.contains("remove(KEY_THEME)"))
+        assertFalse(activity.contains("takePersistableUriPermission"))
+        assertTrue(activity.contains("REQUEST_BACKGROUND = 41"))
+        assertTrue(activity.contains("setKeyboardAlpha"))
+        assertFalse(backup.contains("appearance/"))
+        assertFalse(extraction.contains("appearance/"))
+        assertTrue(preferences.contains("keyboard_background_color"))
+        assertTrue(preferences.contains("keyboard_alpha"))
+        assertTrue(preferences.contains("candidate_text_color"))
+        assertFalse(preferences.contains("remove(KEY_THEME)"))
+        val editor = activity.substringAfter("fun refreshEditor").substringBefore("private fun paintSwatch")
+        assertFalse(editor.contains("keyboardTheme()"))
+    }
 }

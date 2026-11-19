@@ -30,17 +30,28 @@ internal object KeyIcons {
         color: Int,
         paint: Paint,
         scale: Float = 0.48f,
+        halo: Int? = null,
     ) {
         val size = minOf(bounds.width(), bounds.height()) * scale
         if (size <= 0f) return
         canvas.save()
         canvas.translate(bounds.centerX() - size / 2f, bounds.centerY() - size / 2f)
         canvas.scale(size / 24f, size / 24f)
-        paint.color = color
         paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 1.7f
         paint.strokeCap = Paint.Cap.ROUND
         paint.strokeJoin = Paint.Join.ROUND
+        if (halo != null) {
+            paint.color = halo
+            paint.strokeWidth = 1.7f + 3f
+            strokeIcon(canvas, icon, paint)
+        }
+        paint.color = color
+        paint.strokeWidth = 1.7f
+        strokeIcon(canvas, icon, paint)
+        canvas.restore()
+    }
+
+    private fun strokeIcon(canvas: Canvas, icon: KeyIcon, paint: Paint) {
         when (icon) {
             KeyIcon.DELETE -> drawDelete(canvas, paint)
             KeyIcon.RETURN -> drawReturn(canvas, paint)
@@ -54,7 +65,6 @@ internal object KeyIcons {
             KeyIcon.MICROPHONE -> drawMicrophone(canvas, paint)
             KeyIcon.KEYBOARD -> drawKeyboard(canvas, paint)
         }
-        canvas.restore()
     }
 
     private fun drawDelete(canvas: Canvas, paint: Paint) {

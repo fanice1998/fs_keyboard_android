@@ -30,6 +30,12 @@ internal object ChiaKeyUnigramScan {
         if (user.isFile) readTable(user, "user_unigrams", where, accept)
     }
 
+    /** Read-only `user_unigrams`. Missing file or table yields nothing. Does not open the engine. */
+    fun readUserFile(file: File, accept: (qstring: String, text: String, probability: Double) -> Unit) {
+        if (!file.isFile) return
+        readTable(file, "user_unigrams", null, accept)
+    }
+
     /** One syllable is two ASCII bytes in ChiaKey's absolute order. */
     internal fun lengthClause(syllables: IntRange): String? {
         val first = syllables.first.coerceAtLeast(1)

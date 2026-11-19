@@ -4,8 +4,10 @@ import com.fskeyboard.ime.candidate.BopomofoChain
 import com.fskeyboard.ime.candidate.Candidate
 import com.fskeyboard.ime.candidate.coversOpenSyllables
 import com.fskeyboard.ime.lingxi.LINGXI_CANDIDATE
+import com.fskeyboard.ime.lingxi.LINGXI_EXTRA_PENALTY
 import com.fskeyboard.ime.lingxi.LINGXI_KEY_BUDGET_NS
 import com.fskeyboard.ime.lingxi.LingxiSlot
+import kotlin.math.ln
 import com.fskeyboard.ime.candidate.CandidateSource
 import com.fskeyboard.ime.candidate.SyllableReading
 import com.fskeyboard.ime.candidate.ZhuyinComposition
@@ -14,11 +16,23 @@ import com.fskeyboard.ime.engine.EngineSnapshot
 import com.fskeyboard.ime.engine.ZhuyinEngine
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardMode
+import com.fskeyboard.ime.keyboard.ZhuyinClass
+import com.fskeyboard.ime.keyboard.ZhuyinPhonology
 import com.fskeyboard.ime.latency.KeyStages
 import com.fskeyboard.ime.lexicon.Lexicon
 
 private const val ZHUYIN_CHAR_LIMIT = 48
 private const val ZHUYIN_PREFIX_LIMIT = 8
+private const val ZHUYIN_SUPPLEMENT_LIMIT = 8
+
+/** One-key substitutions scored when the typed reading is not a complete lexicon word. */
+private const val CORRECTION_TRIES = 12
+
+/**
+ * Closest substituted readings decoded with the lexicon model.
+ * Prefix rows often share one score, so the first row is not the word.
+ */
+private const val SLIP_DECODE = 6
 
 /** One composition. A key that is not bopomofo returns false and the controller continues. */
 internal interface Composer {
@@ -82,6 +96,9 @@ internal class ZhuyinCompositionSession(
     private val chosenPrefix = StringBuilder()
     private val chosenSpans = ArrayList<ChosenSpan>()
     private val remembered = HashMap<String, String>()
+
+    /** One touch per glyph in [chain], including a tone mark. A 平聲 mark has none. */
+    private val touches = ArrayList<KeyTouch>()
     private var keyStartedNs = 0L
     private var servedByLingxi = false
     private var lastReorder = "skip"
@@ -143,7 +160,10 @@ internal class ZhuyinCompositionSession(
         KeyStages.finishRouterGap()
         val composeStart = System.nanoTime()
         val held = chain.append(glyph)
-        if (held) holdingSentence = true
+        if (held) {
+            holdingSentence = true
+            noteTouch(action)
+        }
         KeyStages.noteCompose(System.nanoTime() - composeStart)
         if (!held) {
             keyStartedNs = 0L
@@ -182,7 +202,7 @@ internal class ZhuyinCompositionSession(
             return true
         }
         if (holdingSentence) {
-            chain.backspace()
+            backspaceChain()
             if (chain.isEmpty) {
                 holdingSentence = false
                 if (chosenPrefix.isNotEmpty()) commitChosenPrefix() else showFrame()
@@ -197,8 +217,9 @@ internal class ZhuyinCompositionSession(
             if (chain.isEmpty) {
                 enginePrefix.clear()
                 enginePrefixKeys = 0
+                touches.clear()
             } else {
-                chain.backspace()
+                backspaceChain()
             }
             mirrored = chain.text.length
             showFrame()
@@ -227,8 +248,8 @@ internal class ZhuyinCompositionSession(
 
     /**
      * True when Enter committed the open composition instead of the editor action.
-     * Open bopomofo becomes the first Hanzi that covers every typed syllable.
-     * The gray prediction stays on its own chip.
+     * With 靈犀, open bopomofo becomes the first Hanzi that covers every typed syllable.
+     * The partial lexicon keeps the typed letters. The prediction stays on its own chip.
      */
     fun onEnter(): Boolean {
         if (host.mode() != KeyboardMode.ZHUYIN || !hasComposition) return false
@@ -253,6 +274,7 @@ internal class ZhuyinCompositionSession(
             enginePrefix.clear()
             enginePrefixKeys = 0
             chain.clear()
+            touches.clear()
             mirrored = 0
             holdingSentence = false
             clearPendingTone()
@@ -269,12 +291,12 @@ internal class ZhuyinCompositionSession(
 
     /**
      * Writes the open composition.
-     * A covering Hanzi candidate replaces the bopomofo. Anything else keeps the typed letters.
+     * 靈犀 replaces the bopomofo with a covering Hanzi. The partial lexicon keeps the letters.
      * [acceptPartial] edits on its own, so this does not wrap that call in [ZhuyinHost.edit].
      */
     private fun commitComposition() {
         val reading = if (!chain.isEmpty) chain.text else pendingToneText
-        if (reading.isNotEmpty()) {
+        if (reading.isNotEmpty() && lingxi?.engine != null) {
             val target = shownCandidates.firstOrNull { it.coversOpenSyllables(openSyllableCount()) }
             if (target != null) {
                 acceptPartial(target)
@@ -432,14 +454,17 @@ internal class ZhuyinCompositionSession(
         offeredHint = ""
         val engine = lingxi?.engine
         if (engine == null || readings.isEmpty()) {
-            return withLiteral(readings, lexicon.partialCandidates(readings))
+            return lexicon.partialCandidates(readings)
         }
         val syllables = readings.map { it.body + it.tone.mark }
         val openTone = BooleanArray(readings.size) { !readings[it].tone.chosen }
         val readingKey = buildString { for (syllable in syllables) append(syllable) }
         val started = keyStartedNs
         val deadline = if (started == 0L) System.nanoTime() + LINGXI_KEY_BUDGET_NS else started + LINGXI_KEY_BUDGET_NS
-        val result = try {
+        // A prefix such as ㄋ or ㄋㄏ is a lexicon row. A stitched sentence is not,
+        // so a neighbour must not discard that select.
+        val slip = correctedReading(readings, syllables, openTone, remembered[readingKey], deadline)
+        val typed = try {
             engine.select(
                 syllables,
                 host.committedContext(),
@@ -450,10 +475,17 @@ internal class ZhuyinCompositionSession(
         } catch (_: Exception) {
             com.fskeyboard.ime.lingxi.LingxiResult(emptyList(), "miss")
         }
+        val result = when {
+            slip == null -> typed
+            typed.candidates.isEmpty() -> slip.result
+            slip.leads -> mergeSlip(slip.result, typed, typed)
+            else -> mergeSlip(typed, slip.result, typed)
+        }
+        val chosen = result
         servedByLingxi = true
-        lastReorder = result.reorder
-        if (result.candidates.isEmpty()) return emptyList()
-        val rows = result.candidates.map { text ->
+        lastReorder = chosen.reorder
+        if (chosen.candidates.isEmpty()) return emptyList()
+        val rows = chosen.candidates.map { text ->
             Candidate(
                 text = text,
                 engineIndex = LINGXI_CANDIDATE,
@@ -462,7 +494,7 @@ internal class ZhuyinCompositionSession(
                 reading = readingKey,
             )
         }
-        val phrases = result.completion?.let { hint ->
+        val phrases = chosen.completion?.let { hint ->
             offeredHint = hint.tail
             listOf(
                 Candidate(
@@ -477,18 +509,18 @@ internal class ZhuyinCompositionSession(
                 ),
             ) + rows
         } ?: rows
-        return withChoices(readings, syllables, openTone, phrases)
+        return withChoices(readings, syllables, openTone, withCreated(readingKey, phrases))
     }
 
-    /** Full phrases, then the typed bopomofo, then shorter words and first-syllable characters. */
     private fun withChoices(
         readings: List<SyllableReading>,
         syllables: List<String>,
         openTone: BooleanArray,
         phrases: List<Candidate>,
     ): List<Candidate> {
-        val rows = ArrayList<Candidate>(phrases.size + 16)
+        val rows = ArrayList<Candidate>(phrases.size + 24)
         rows += phrases
+        appendSupplements(rows, syllables, openTone)
         val literal = literalCandidate(readings)
         if (literal != null) rows += literal
         val engine = lingxi?.engine
@@ -497,7 +529,11 @@ internal class ZhuyinCompositionSession(
         for (row in rows) seen += "${row.span}\t${row.text}"
         for (length in readings.size - 1 downTo 1) {
             val hits = try {
-                engine.exactHits(syllables.subList(0, length), openTone.copyOfRange(0, length))
+                engine.exactHits(
+                    syllables.subList(0, length),
+                    openTone.copyOfRange(0, length),
+                    includeSupplements = false,
+                )
             } catch (_: Exception) {
                 emptyList()
             }
@@ -522,6 +558,35 @@ internal class ZhuyinCompositionSession(
             }
         }
         return rows
+    }
+
+    private fun appendSupplements(
+        rows: ArrayList<Candidate>,
+        syllables: List<String>,
+        openTone: BooleanArray,
+    ) {
+        val engine = lingxi?.engine ?: return
+        val seen = ArrayList<String>()
+        for (row in rows) {
+            if (!row.completion) seen += row.text
+        }
+        val ranked = try {
+            engine.topSupplements(syllables, openTone, seen, ZHUYIN_SUPPLEMENT_LIMIT)
+        } catch (_: Exception) {
+            return
+        }
+        val reading = buildString(syllables.sumOf { it.length }) {
+            for (syllable in syllables) append(syllable)
+        }
+        for (hit in ranked) {
+            rows += Candidate(
+                text = hit.surface,
+                engineIndex = LINGXI_CANDIDATE,
+                source = CandidateSource.SYNTHETIC,
+                span = syllables.size,
+                reading = reading,
+            )
+        }
     }
 
     private fun withLiteral(readings: List<SyllableReading>, rows: List<Candidate>): List<Candidate> {
@@ -647,7 +712,9 @@ internal class ZhuyinCompositionSession(
             clearPendingTone()
             if (frame.reading.isEmpty()) frame = ChiaKeyFrame.parse("")
         }
+        val fromChain = !chain.isEmpty
         chain.dropFront(span.coerceAtMost(chain.size))
+        if (fromChain) dropTouches(covered)
         if (chain.isEmpty) {
             holdingSentence = false
             if (frame.reading.isEmpty()) frame = ChiaKeyFrame.parse("")
@@ -696,7 +763,10 @@ internal class ZhuyinCompositionSession(
         } else if (chosenPrefix.isNotEmpty()) {
             chosenPrefix.deleteCharAt(chosenPrefix.lastIndex)
         }
-        if (span.reading.isNotEmpty()) chain.insertFront(span.reading)
+        if (span.reading.isNotEmpty()) {
+            chain.insertFront(span.reading)
+            insertTouches(span.reading)
+        }
         holdingSentence = true
         host.edit { showHeld() }
     }
@@ -712,7 +782,10 @@ internal class ZhuyinCompositionSession(
      * already in the engine. [showHeld] is only valid after this, when the chain is whole.
      */
     private fun holdComposition(tailKeys: Int) {
-        if (enginePrefix.isNotEmpty()) chain.insertFront(enginePrefix)
+        if (enginePrefix.isNotEmpty()) {
+            chain.insertFront(enginePrefix)
+            insertTouches(enginePrefix)
+        }
         val keys = enginePrefixKeys + tailKeys
         enginePrefix.clear()
         enginePrefixKeys = 0
@@ -723,6 +796,7 @@ internal class ZhuyinCompositionSession(
 
     private fun clearChain() {
         chain.clear()
+        touches.clear()
         holdingSentence = false
         mirrored = 0
         enginePrefix.clear()
@@ -738,6 +812,252 @@ internal class ZhuyinCompositionSession(
         openSyllables = 0
     }
 
+    /**
+     * One neighbouring key, starting from the latest touch. A complete typed word stays.
+     * Initials may swap with medials, so ㄗ can stand in for ㄧ. Splitting ㄚ into a second ㄧ is not a slip.
+     * A prefix such as ㄋㄏ still counts. A centre touch is probability 0 and does not lead it.
+     * Only a finished word from a key the touch actually reached can lead. The preedit stays what was typed.
+     */
+    private fun correctedReading(
+        readings: List<SyllableReading>,
+        syllables: List<String>,
+        openTone: BooleanArray,
+        remembered: String?,
+        deadline: Long,
+    ): Slip? {
+        val engine = lingxi?.engine ?: return null
+        val glyphs = typedGlyphs(readings) ?: return null
+        val typedRows = readingRows(syllables, openTone)
+        if (typedRows.any { it.extra == 0 }) return null
+        val typedScore = typedRows.maxOfOrNull { lexiconScore(it) } ?: Double.NEGATIVE_INFINITY
+        var tried = 0
+        val guesses = ArrayList<SlipGuess>(CORRECTION_TRIES)
+        for (index in glyphs.indices.reversed()) {
+            if (tried >= CORRECTION_TRIES) break
+            for (alt in touches[index].others) {
+                if (tried >= CORRECTION_TRIES) break
+                if (deadline != Long.MAX_VALUE && System.nanoTime() > deadline) break
+                if (!slipClassOk(glyphs[index], alt.glyph)) continue
+                val next = glyphs.copyOf()
+                next[index] = alt.glyph
+                val parsed = parseGlyphs(next) ?: continue
+                if (sameReading(parsed, readings)) continue
+                // Joining ㄋㄗ into ㄋㄧ is the slip. Splitting ㄚ into a second ㄧ is not.
+                if (parsed.size > readings.size) continue
+                val altSyllables = parsed.map { it.body + it.tone.mark }
+                val altOpen = BooleanArray(parsed.size) { !parsed[it].tone.chosen }
+                val hits = readingRows(altSyllables, altOpen)
+                if (hits.isEmpty()) continue
+                tried++
+                val bestHit = hits.maxBy { lexiconScore(it) }
+                val score = lexiconScore(bestHit)
+                // Probability 0 is the geometric list. It must rank behind a key the finger reached.
+                val distance = if (alt.probability > 0f) alt.probability.toDouble() else -LINGXI_EXTRA_PENALTY
+                guesses += SlipGuess(
+                    altSyllables,
+                    altOpen,
+                    score + distance,
+                    score,
+                    bestHit.surface,
+                    bestHit.extra,
+                    alt.probability,
+                )
+            }
+        }
+        if (guesses.isEmpty()) return null
+        val chosen = guesses.maxBy { it.rank }
+        if (chosen.syllables.size > readings.size) return null
+        val decoded = ArrayList<Pair<SlipGuess, com.fskeyboard.ime.lingxi.LingxiResult>>(SLIP_DECODE)
+        val seenReading = HashSet<List<String>>(SLIP_DECODE)
+        for (guess in guesses) {
+            if (decoded.size >= SLIP_DECODE) break
+            if (guess.syllables.size > readings.size) continue
+            if (deadline != Long.MAX_VALUE && System.nanoTime() > deadline) break
+            if (!seenReading.add(guess.syllables)) continue
+            val selected = decodeSlip(engine, guess, remembered, deadline) ?: continue
+            if (selected.candidates.isEmpty()) continue
+            decoded += guess to selected
+        }
+        if (chosen.syllables.size <= readings.size &&
+            chosen.syllables !in seenReading &&
+            (deadline == Long.MAX_VALUE || System.nanoTime() <= deadline)
+        ) {
+            val selected = decodeSlip(engine, chosen, remembered, deadline)
+            if (selected != null && selected.candidates.isNotEmpty()) decoded += chosen to selected
+        }
+        if (decoded.isEmpty()) return null
+        val winner = decoded.firstOrNull { it.first.syllables == chosen.syllables }?.second
+        val seen = HashSet<String>()
+        val rows = ArrayList<String>()
+        if (winner != null) {
+            for (text in winner.candidates) if (seen.add(text)) rows += text
+        } else if (seen.add(chosen.surface)) {
+            rows += chosen.surface
+        }
+        for ((guess, selected) in decoded) {
+            if (guess.syllables == chosen.syllables) continue
+            for (text in selected.candidates) if (seen.add(text)) rows += text
+        }
+        val shell = winner ?: decoded.first().second
+        val leads = chosen.extra == 0 && chosen.probability > 0f && chosen.score > typedScore
+        return Slip(shell.copy(candidates = rows), leads)
+    }
+
+    private fun decodeSlip(
+        engine: com.fskeyboard.ime.lingxi.LingxiEngine,
+        guess: SlipGuess,
+        remembered: String?,
+        deadline: Long,
+    ): com.fskeyboard.ime.lingxi.LingxiResult? {
+        return try {
+            engine.select(
+                guess.syllables,
+                host.committedContext(),
+                remembered,
+                deadline,
+                useModel = false,
+                openTone = guess.openTone,
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** A tone only swaps with a tone. ㄗ and ㄧ are different classes and still swap. */
+    private fun slipClassOk(typed: Char, alt: Char): Boolean {
+        val left = ZhuyinPhonology.classify(typed) ?: return false
+        val right = ZhuyinPhonology.classify(alt) ?: return false
+        return (left == ZhuyinClass.TONE) == (right == ZhuyinClass.TONE)
+    }
+
+    private fun lexiconScore(hit: com.fskeyboard.ime.lingxi.LexHit): Double {
+        val prior = if (hit.prw > 0f) hit.prw.toDouble() else 1e-300
+        return ln(prior) - hit.extra * LINGXI_EXTRA_PENALTY
+    }
+
+    private fun mergeSlip(
+        first: com.fskeyboard.ime.lingxi.LingxiResult,
+        second: com.fskeyboard.ime.lingxi.LingxiResult,
+        typed: com.fskeyboard.ime.lingxi.LingxiResult,
+    ): com.fskeyboard.ime.lingxi.LingxiResult {
+        val seen = HashSet<String>(first.candidates.size + second.candidates.size)
+        val rows = ArrayList<String>(first.candidates.size + second.candidates.size)
+        for (text in first.candidates) if (seen.add(text)) rows += text
+        for (text in second.candidates) if (seen.add(text)) rows += text
+        return com.fskeyboard.ime.lingxi.LingxiResult(rows, typed.reorder, typed.completion)
+    }
+
+    /** Lexicon rows for the whole reading. Empty when the syllables are only stitched characters. */
+    private fun readingRows(
+        syllables: List<String>,
+        openTone: BooleanArray,
+    ): List<com.fskeyboard.ime.lingxi.LexHit> {
+        val engine = lingxi?.engine ?: return emptyList()
+        return try {
+            engine.exactHits(syllables, openTone, includeSupplements = false)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun noteTouch(action: KeyAction.Bopomofo) {
+        val glyph = action.label.firstOrNull() ?: return
+        val others = ArrayList<KeyAlt>()
+        val seen = HashSet<Char>()
+        val ordered = action.nearby.sortedByDescending { it.probability }
+        for (near in ordered) {
+            val ch = near.label.firstOrNull() ?: continue
+            if (ch == glyph || !seen.add(ch)) continue
+            others += KeyAlt(ch, near.probability)
+        }
+        val touch = KeyTouch(glyph, others)
+        val tone = ZhuyinPhonology.classify(glyph) == ZhuyinClass.TONE
+        val previousTone = touches.lastOrNull()?.let {
+            ZhuyinPhonology.classify(it.glyph) == ZhuyinClass.TONE
+        } == true
+        if (tone && previousTone) touches[touches.lastIndex] = touch else touches += touch
+    }
+
+    private fun backspaceChain() {
+        val before = chain.text.length
+        chain.backspace()
+        if (chain.isEmpty) {
+            touches.clear()
+            return
+        }
+        if (chain.text.length < before && touches.isNotEmpty()) touches.removeAt(touches.lastIndex)
+    }
+
+    private fun dropTouches(readings: List<SyllableReading>) {
+        var count = 0
+        for (reading in readings) {
+            count += reading.body.length
+            if (reading.tone.mark.isNotEmpty()) count += 1
+        }
+        repeat(count.coerceAtMost(touches.size)) { touches.removeAt(0) }
+    }
+
+    private fun insertTouches(readings: List<SyllableReading>) {
+        val added = ArrayList<KeyTouch>()
+        for (reading in readings) {
+            for (ch in reading.body) added += KeyTouch(ch, emptyList())
+            val mark = reading.tone.mark
+            if (mark.isNotEmpty()) added += KeyTouch(mark[0], emptyList())
+        }
+        if (added.isNotEmpty()) touches.addAll(0, added)
+    }
+
+    private fun typedGlyphs(readings: List<SyllableReading>): CharArray? {
+        val chars = ArrayList<Char>()
+        for (reading in readings) {
+            for (ch in reading.body) chars += ch
+            val mark = reading.tone.mark
+            if (mark.isNotEmpty()) chars += mark[0]
+        }
+        if (chars.size != touches.size) return null
+        for (index in chars.indices) {
+            if (chars[index] != touches[index].glyph) return null
+        }
+        return chars.toCharArray()
+    }
+
+    private fun parseGlyphs(chars: CharArray): List<SyllableReading>? {
+        val parsed = BopomofoChain()
+        for (ch in chars) if (!parsed.append(ch)) return null
+        if (parsed.isEmpty) return null
+        return parsed.readings()
+    }
+
+    private fun sameReading(left: List<SyllableReading>, right: List<SyllableReading>): Boolean {
+        if (left.size != right.size) return false
+        for (index in left.indices) {
+            if (left[index] != right[index]) return false
+        }
+        return true
+    }
+
     /** Hanzi the user picked, and the syllables they had typed for it. */
     private class ChosenSpan(val text: String, val reading: List<SyllableReading>)
+
+    /** [others] are neighbouring keys, highest touch probability first. Probability 0 is geometry only. */
+    private class KeyTouch(val glyph: Char, val others: List<KeyAlt>)
+
+    private class KeyAlt(val glyph: Char, val probability: Float)
+
+    /** One substituted reading. [rank] lowers a probability-0 neighbour. [score] is the lexicon row. */
+    private class SlipGuess(
+        val syllables: List<String>,
+        val openTone: BooleanArray,
+        val rank: Double,
+        val score: Double,
+        val surface: String,
+        val extra: Int,
+        val probability: Float,
+    )
+
+    /** [leads] puts a finished word from a touch that reached that key ahead of the typed rows. */
+    private class Slip(
+        val result: com.fskeyboard.ime.lingxi.LingxiResult,
+        val leads: Boolean,
+    )
 }

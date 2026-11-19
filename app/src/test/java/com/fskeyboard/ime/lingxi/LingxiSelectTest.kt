@@ -1,5 +1,6 @@
 package com.fskeyboard.ime.lingxi
 
+import com.fskeyboard.ime.candidate.BopomofoChain
 import com.fskeyboard.ime.candidate.Candidate
 import com.fskeyboard.ime.candidate.CandidateSource
 import com.fskeyboard.ime.candidate.SyllableReading
@@ -13,10 +14,15 @@ import com.fskeyboard.ime.engine.EngineSnapshot
 import com.fskeyboard.ime.engine.ZhuyinEngine
 import com.fskeyboard.ime.keyboard.KeyAction
 import com.fskeyboard.ime.keyboard.KeyboardMode
+import com.fskeyboard.ime.keyboard.TouchModel
+import com.fskeyboard.ime.keyboard.ZhuyinClass
+import com.fskeyboard.ime.keyboard.ZhuyinPhonology
+import com.fskeyboard.ime.keyboard.portraitZhuyinAreas
 import com.fskeyboard.ime.lexicon.Lexicon
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -135,6 +141,218 @@ class LingxiSelectTest {
     }
 
     @Test
+    fun anInitialListsCharactersAndInitialsListHello() {
+        val lexicon = loadLingxiTables(packRoot()).lexicon
+        val open = booleanArrayOf(true)
+        val one = lexicon.exact(listOf("ㄋ"), open)
+        assertTrue(one.any { it.surface == "你" })
+        assertTrue(one.none { it.surface == "你好" })
+        val initials = lexicon.exact(listOf("ㄋ", "ㄏ"), booleanArrayOf(true, true))
+        assertTrue(initials.any { it.surface == "你好" })
+        val selected = engine.select(listOf("ㄋ"), "", remembered = null, useModel = false, openTone = open)
+        assertTrue(selected.candidates.isNotEmpty())
+        assertTrue("你好" !in selected.candidates)
+        val hello = engine.select(
+            listOf("ㄋ", "ㄏ"),
+            "",
+            remembered = null,
+            useModel = false,
+            openTone = booleanArrayOf(true, true),
+        )
+        assertTrue(hello.candidates.contains("你好"))
+        val nearNi = centreTouch("ㄋ")
+        val nearHe = centreTouch("ㄏ")
+        assertTrue(nearHe.any { it.probability == 0f && it.label != "ㄏ" })
+        val plain = RecordingHost("")
+        val plainSession = session(plain)
+        type(plainSession, "ㄋㄏ")
+        val plainCover = plain.snapshots.last().candidates.first { it.coversOpenSyllables(2) }
+        val host = RecordingHost("")
+        val typing = session(host)
+        typing.onKey(KeyAction.Bopomofo("ㄋ", 's', nearby = nearNi))
+        val typed = host.snapshots.last().candidates.filter { !it.literal }
+        assertTrue(typed.isNotEmpty())
+        assertTrue(typed.none { it.text == "你好" })
+        typing.onKey(KeyAction.Bopomofo("ㄏ", 'c', nearby = nearHe))
+        val row = host.snapshots.last().candidates
+        assertEquals("ㄋㄏ", host.snapshots.last().preedit)
+        assertTrue(row.any { it.text == "你好" && !it.literal })
+        assertEquals("ㄋㄏ", row.single { it.literal }.text)
+        val cover = row.first { it.coversOpenSyllables(2) }
+        assertEquals(plainCover.text, cover.text)
+        typing.onEnter()
+        assertEquals(listOf(cover.text), host.commits)
+    }
+
+    @Test
+    fun aCompleteSyllableNextToAnInitialStillListsWords() {
+        val lexicon = loadLingxiTables(packRoot()).lexicon
+        val open = booleanArrayOf(true, true)
+        val hello = lexicon.exact(listOf("ㄋ", "ㄏㄠ"), open)
+        assertTrue(hello.map { it.surface }.toString(), hello.any { it.surface == "你好" })
+        val selected = engine.select(
+            listOf("ㄋ", "ㄏㄠ"),
+            "",
+            remembered = null,
+            useModel = false,
+            openTone = open,
+        )
+        assertTrue(selected.candidates.toString(), selected.candidates.contains("你好"))
+        val reversed = lexicon.exact(listOf("ㄏㄠ", "ㄋ"), open)
+        assertTrue(reversed.map { it.surface }.toString(), reversed.any { it.surface == "好難" })
+        val reversedSelect = engine.select(
+            listOf("ㄏㄠ", "ㄋ"),
+            "",
+            remembered = null,
+            useModel = false,
+            openTone = open,
+        )
+        assertTrue(reversedSelect.candidates.toString(), reversedSelect.candidates.contains("好難"))
+    }
+
+    @Test
+    fun anImpossibleSyllableTriesANeighbourKey() {
+        val missed = engine.select(
+            listOf("ㄅㄧㄚ"),
+            "",
+            remembered = null,
+            useModel = false,
+            openTone = booleanArrayOf(true),
+        )
+        assertTrue(missed.candidates.isEmpty())
+        val areas = portraitZhuyinAreas()
+        val key = areas.single { it.label == "ㄚ" }
+        val nearby = TouchModel.withAdjacent(
+            TouchModel.nearby(key.centerX, key.centerY, areas),
+            "ㄚ",
+            areas,
+        )
+        assertTrue(nearby.any { it.label == "ㄠ" })
+        val host = RecordingHost("")
+        val session = session(host)
+        session.onKey(KeyAction.Bopomofo("ㄅ", '1'))
+        session.onKey(KeyAction.Bopomofo("ㄧ", 'u'))
+        session.onKey(KeyAction.Bopomofo("ㄚ", '8', nearby = nearby))
+        val row = host.snapshots.last().candidates
+        assertEquals("ㄅㄧㄚ", host.snapshots.last().preedit)
+        val fixed = row.filter { !it.literal && it.text.isNotEmpty() }
+        assertTrue(fixed.map { it.text }.toString(), fixed.any { it.text.codePointCount(0, it.text.length) == 1 })
+        val cover = row.first { it.coversOpenSyllables(1) }
+        assertEquals(cover.text, 1, cover.text.codePointCount(0, cover.text.length))
+        assertEquals("ㄅㄧㄚ", row.single { it.literal }.text)
+    }
+
+    @Test
+    fun aLegalPairThatIsNotAWordTriesTheNeighbour() {
+        val open = booleanArrayOf(true, true)
+        val typed = engine.select(
+            listOf("ㄋㄧ", "ㄏㄤ"),
+            "",
+            remembered = null,
+            useModel = false,
+            openTone = open,
+        )
+        assertTrue("你好" !in typed.candidates)
+        val areas = portraitZhuyinAreas()
+        val key = areas.single { it.label == "ㄤ" }
+        val nearby = TouchModel.withAdjacent(
+            TouchModel.nearby(key.centerX, key.centerY, areas),
+            "ㄤ",
+            areas,
+        )
+        assertTrue(nearby.any { it.label == "ㄠ" })
+        val host = RecordingHost("")
+        val session = session(host)
+        session.onKey(KeyAction.Bopomofo("ㄋ", 's'))
+        session.onKey(KeyAction.Bopomofo("ㄧ", 'u'))
+        session.onKey(KeyAction.Bopomofo("ㄏ", 'c'))
+        session.onKey(KeyAction.Bopomofo("ㄤ", ';', nearby = nearby))
+        val row = host.snapshots.last().candidates
+        assertEquals("ㄋㄧㄏㄤ", host.snapshots.last().preedit)
+        assertTrue(row.any { it.text == "你好" && !it.literal })
+    }
+
+    @Test
+    fun aDifferentClassNeighbourStillCorrects() {
+        val areas = portraitZhuyinAreas()
+        val key = areas.single { it.label == "ㄗ" }
+        val nearby = TouchModel.withAdjacent(
+            TouchModel.nearby(key.centerX, key.centerY, areas),
+            "ㄗ",
+            areas,
+        )
+        assertTrue(nearby.any { it.label == "ㄧ" })
+        val host = RecordingHost("")
+        val session = session(host)
+        session.onKey(KeyAction.Bopomofo("ㄋ", 's'))
+        session.onKey(KeyAction.Bopomofo("ㄗ", 'y', nearby = nearby))
+        val row = host.snapshots.last().candidates
+        assertEquals("ㄋㄗ", host.snapshots.last().preedit)
+        assertTrue(row.map { it.text }.toString(), row.any { it.text == "你" && !it.literal })
+    }
+
+    @Test
+    fun aNeighbourSlipToAnInitialPrefixStillFindsHello() {
+        val missed = engine.select(
+            listOf("ㄋ", "ㄎ"),
+            "",
+            remembered = null,
+            useModel = false,
+            openTone = booleanArrayOf(true, true),
+        )
+        assertTrue("你好" !in missed.candidates)
+        val areas = portraitZhuyinAreas()
+        val key = areas.single { it.label == "ㄎ" }
+        val nearby = TouchModel.withAdjacent(
+            TouchModel.nearby(key.centerX, key.centerY, areas),
+            "ㄎ",
+            areas,
+        )
+        assertTrue(nearby.any { it.label == "ㄏ" })
+        val host = RecordingHost("")
+        val session = session(host)
+        session.onKey(KeyAction.Bopomofo("ㄋ", 's'))
+        session.onKey(KeyAction.Bopomofo("ㄎ", 'd', nearby = nearby))
+        val row = host.snapshots.last().candidates
+        assertEquals("ㄋㄎ", host.snapshots.last().preedit)
+        assertTrue(row.map { it.text }.toString(), row.any { it.text == "你好" && !it.literal })
+    }
+
+    @Test
+    fun theHigherScoringNeighbourBeatsAnEarlierOne() {
+        val areas = portraitZhuyinAreas()
+        val key = areas.single { it.label == "ㄤ" }
+        val nearby = TouchModel.withAdjacent(
+            TouchModel.nearby(key.centerX, key.centerY, areas),
+            "ㄤ",
+            areas,
+        )
+        val labels = nearby.map { it.label }
+        assertTrue(labels.contains("ㄠ"))
+        assertTrue(labels.indexOf("ㄠ") > 0)
+        val plainHost = RecordingHost("")
+        val plain = session(plainHost)
+        plain.onKey(KeyAction.Bopomofo("ㄋ", 's'))
+        plain.onKey(KeyAction.Bopomofo("ㄧ", 'u'))
+        plain.onKey(KeyAction.Bopomofo("ㄏ", 'c'))
+        plain.onKey(KeyAction.Bopomofo("ㄤ", ';'))
+        val plainRow = plainHost.snapshots.last().candidates
+        val plainTexts = plainRow.map { it.text }.toSet()
+        val plainCover = plainRow.first { it.coversOpenSyllables(2) }
+        val host = RecordingHost("")
+        val typing = session(host)
+        typing.onKey(KeyAction.Bopomofo("ㄋ", 's'))
+        typing.onKey(KeyAction.Bopomofo("ㄧ", 'u'))
+        typing.onKey(KeyAction.Bopomofo("ㄏ", 'c'))
+        typing.onKey(KeyAction.Bopomofo("ㄤ", ';', nearby = nearby))
+        val row = host.snapshots.last().candidates
+        val cover = row.first { it.coversOpenSyllables(2) }
+        assertEquals(plainCover.text, cover.text)
+        val added = row.filter { !it.literal && !it.completion && it.text !in plainTexts }
+        assertEquals(added.map { it.text }.toString(), "你好", added.first().text)
+    }
+
+    @Test
     fun untonedLongPhraseOfSixteenSymbolsStaysFast() {
         val syllables = listOf("ㄓㄨㄥ", "ㄏㄨㄚ", "ㄇㄧㄣ", "ㄍㄨㄛ", "ㄓㄨㄤ", "ㄑㄧㄡ", "ㄗㄨㄥ", "ㄏㄨㄟ")
         val symbols = syllables.sumOf { it.length }
@@ -231,7 +449,7 @@ class LingxiSelectTest {
         assertEquals("你們", chip.text)
         assertEquals("ㄋㄧˇ", chip.labelReading)
         assertEquals("們", chip.labelTail)
-        assertEquals("ㄋㄧˇ們", chip.visibleLabel())
+        assertEquals("你們", chip.visibleLabel())
         assertEquals("們", session.previewHint)
         assertEquals("ㄋㄧˇㄇㄣˊ", chip.reading)
         assertEquals(homophones.first().text + session.previewHint, chip.text)
@@ -324,13 +542,14 @@ class LingxiSelectTest {
         val rawEnter = RecordingHost("")
         val rawEnterSession = session(rawEnter)
         type(rawEnterSession, "ㄅ")
-        assertTrue(rawEnter.snapshots.last().candidates.none { it.coversOpenSyllables(1) })
+        val guessed = rawEnter.snapshots.last().candidates.first { it.coversOpenSyllables(1) }
+        assertFalse(guessed.literal)
         rawEnterSession.onEnter()
         val rawFinish = RecordingHost("")
         val rawFinishSession = session(rawFinish)
         type(rawFinishSession, "ㄅ")
         rawFinishSession.finish()
-        assertEquals(listOf("ㄅ"), rawEnter.commits)
+        assertEquals(listOf(guessed.text), rawEnter.commits)
         assertEquals(rawEnter.commits, rawFinish.commits)
     }
 
@@ -358,7 +577,63 @@ class LingxiSelectTest {
     }
 
     @Test
-    fun anUnfinishedSyllableKeepsThePreviousRow() {
+    fun aStitchedSentenceIsNotReplacedByACentreNeighbour() {
+        val lexicon = loadLingxiTables(packRoot()).lexicon
+        val areas = portraitZhuyinAreas()
+        val yuan = areas.single { it.label == "ㄛ" }
+        val yuanNear = TouchModel.withAdjacent(
+            TouchModel.nearby(yuan.centerX, yuan.centerY, areas),
+            "ㄛ",
+            areas,
+        )
+        val open = booleanArrayOf(true, true, true, true)
+        val head = listOf("ㄓㄨㄥ", "ㄏㄨㄚ", "ㄇㄧㄣ")
+        var alt = ""
+        var statistical = emptyList<String>()
+        for (name in yuanNear.map { it.label }) {
+            if (name.length != 1 || name == "ㄛ") continue
+            if (ZhuyinPhonology.classify(name[0]) != ZhuyinClass.FINAL) continue
+            val body = "ㄓㄨㄥㄏㄨㄚㄇㄧㄣㄍㄨ$name"
+            val chain = BopomofoChain()
+            if (!body.all { chain.append(it) } || chain.size != 4) continue
+            val syllables = head + "ㄍㄨ$name"
+            val exact = lexicon.exact(syllables, open, false)
+            if (exact.any { it.extra == 0 }) continue
+            val found = engine.select(syllables, "", remembered = null, useModel = false, openTone = open)
+            if (found.candidates.isEmpty()) continue
+            val key = areas.single { it.label == name }
+            val back = TouchModel.withAdjacent(
+                TouchModel.nearby(key.centerX, key.centerY, areas),
+                name,
+                areas,
+            )
+            if (back.none { it.label == "ㄛ" && it.probability == 0f }) continue
+            alt = name
+            statistical = found.candidates
+            break
+        }
+        assertTrue(alt, alt.isNotEmpty())
+        val host = RecordingHost("")
+        val typing = session(host)
+        type(typing, "ㄓㄨㄥㄏㄨㄚㄇㄧㄣㄍㄨ")
+        val key = areas.single { it.label == alt }
+        val nearby = TouchModel.withAdjacent(
+            TouchModel.nearby(key.centerX, key.centerY, areas),
+            alt,
+            areas,
+        )
+        typing.onKey(KeyAction.Bopomofo(alt, ' ', nearby = nearby))
+        val row = host.snapshots.last().candidates
+        assertEquals("ㄓㄨㄥㄏㄨㄚㄇㄧㄣㄍㄨ$alt", host.snapshots.last().preedit)
+        val cover = row.first { it.coversOpenSyllables(4) }
+        assertTrue(cover.text, statistical.contains(cover.text))
+        assertNotEquals("中華民國", cover.text)
+        typing.onEnter()
+        assertEquals(listOf(cover.text), host.commits)
+    }
+
+    @Test
+    fun anUnfinishedInitialStillListsTheWord() {
         val host = RecordingHost("請問")
         val session = session(host)
         type(session, "ㄋㄧˇ")
@@ -366,9 +641,15 @@ class LingxiSelectTest {
         type(session, "ㄏ")
         val row = host.snapshots.last().candidates
         assertEquals("ㄋㄧˇㄏ", host.snapshots.last().preedit)
-        assertEquals("們", session.previewHint)
+        assertTrue(row.any { it.text == "你好" && it.span == 2 && !it.literal })
         assertTrue(row.any { it.text == "你" && it.span == 1 && !it.literal })
         assertEquals("ㄋㄧˇㄏ", row.single { it.literal }.text)
+    }
+
+    private fun centreTouch(label: String) = run {
+        val areas = portraitZhuyinAreas()
+        val key = areas.single { it.label == label }
+        TouchModel.withAdjacent(TouchModel.nearby(key.centerX, key.centerY, areas), label, areas)
     }
 
     private fun session(host: RecordingHost): ZhuyinCompositionSession {

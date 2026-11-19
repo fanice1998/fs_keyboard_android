@@ -19,10 +19,8 @@ internal interface ZhuyinEngine {
     fun reset()
 }
 
-internal object UnavailableZhuyinEngine : ZhuyinEngine {
+internal class UnavailableZhuyinEngine(override val ready: Boolean = false) : ZhuyinEngine {
     private val idle = ChiaKeyFrame.parse("")
-
-    override val ready = false
 
     override fun handleAscii(key: Char) = idle
 

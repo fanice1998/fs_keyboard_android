@@ -3,6 +3,7 @@
   Devices on Android 11 and older. An include list replaces the default set,
   so keyboard preferences are named here too. The copied ONNX model and any
   Rime files under files/ are rebuilt from assets and stay out.
+  User-chosen keyboard photos stay out of this include list.
 -->
 <full-backup-content>
     <include domain="file" path="lexicon/user.tsv" />

@@ -6,6 +6,9 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import java.lang.ref.WeakReference
 import android.inputmethodservice.InputMethodService
 import android.os.Build
@@ -35,6 +38,8 @@ import com.fskeyboard.ime.engine.ChiaKeyIndexPlan
 import com.fskeyboard.ime.engine.ChiaKeyRuntime
 import com.fskeyboard.ime.engine.ChiaKeySession
 import com.fskeyboard.ime.engine.ChiaKeyUnigramScan
+import com.fskeyboard.ime.engine.UnavailableZhuyinEngine
+import com.fskeyboard.ime.engine.ZhuyinEngine
 import java.io.File
 import com.fskeyboard.ime.keyboard.EnterActions
 import com.fskeyboard.ime.keyboard.EnterChoice
@@ -56,8 +61,19 @@ import com.fskeyboard.ime.rerank.RerankLogger
 import com.fskeyboard.ime.rerank.RerankPreferences
 import com.fskeyboard.ime.rerank.onnx.OnnxModelStore
 import com.fskeyboard.ime.rerank.onnx.OnnxRerankModel
+import com.fskeyboard.ime.ui.AppearanceImageCache
+import com.fskeyboard.ime.ui.AppearanceOverrides
+import com.fskeyboard.ime.ui.AppearancePipeline
+import com.fskeyboard.ime.ui.CandidateChrome
+import com.fskeyboard.ime.ui.InsetBandDrawable
 import com.fskeyboard.ime.ui.KeyboardPalette
+import com.fskeyboard.ime.ui.KeyboardTheme
+import com.fskeyboard.ime.ui.ResolvedKeyboard
+import com.fskeyboard.ime.ui.appearanceDir
+import com.fskeyboard.ime.ui.colorWithAlpha
 import com.fskeyboard.ime.ui.isNightMode
+import com.fskeyboard.ime.ui.loadAppearance
+import com.fskeyboard.ime.ui.resolveKeyboard
 
 class FsKeyboardService : InputMethodService() {
     private var chiakey: ChiaKeySession? = null
@@ -65,6 +81,13 @@ class FsKeyboardService : InputMethodService() {
     private lateinit var pipeline: CandidatePipeline
     private lateinit var controller: CandidateController
     private var keyboard: KeyboardView? = null
+    private var appearanceOverrides = AppearanceOverrides.NONE
+    private var candidateChrome = CandidateChrome.resolve(false, AppearanceOverrides.NONE)
+    private var appearanceDirectory: File? = null
+    private var appearanceImageOnDisk = false
+    private var windowMadeTranslucent = false
+    private var savedWindowBackground: Drawable? = null
+    private var insetBands: InsetBandDrawable? = null
     private var candidateBar: CandidateBarView? = null
     private var compositionPreview: CompositionPreviewPopup? = null
     private var candidatePanel: CandidatePanelView? = null
@@ -116,8 +139,10 @@ class FsKeyboardService : InputMethodService() {
         )
         ranker.load()
         pipeline = CandidatePipeline(reranker = ranker)
+        val mergedPack = lingxiMergedPackaged()
         val root = File(filesDir, "chiakey")
-        val session = ChiaKeyRuntime.session(root)
+        // A merged lexicon already holds the unigrams, so this process does not open the engine.
+        val session = if (mergedPack) null else ChiaKeyRuntime.session(root)
         chiakey = session
         val lingxi = com.fskeyboard.ime.lingxi.LingxiSlot()
         controller = CandidateController(
@@ -127,7 +152,8 @@ class FsKeyboardService : InputMethodService() {
             editorInfo = { currentInputEditorInfo },
             onUi = ::render,
             letterMode = { KeyboardPreferences(this).letterMode() },
-            zhuyinEngine = session,
+            // A not-ready engine swallows bopomofo before 靈犀 is published.
+            zhuyinEngine = session ?: UnavailableZhuyinEngine(ready = true),
             lingxi = lingxi,
         )
         com.fskeyboard.ime.lingxi.LingxiRuntime.start(this, lingxi) { line ->
@@ -137,10 +163,12 @@ class FsKeyboardService : InputMethodService() {
         }
         controller.onLetterMode = { mode -> KeyboardPreferences(this).setLetterMode(mode) }
         controller.start()
-        val listener = { lexicon: PartialLexicon -> controller.publishPartialLexicon(lexicon) }
-        lexiconListener = listener
-        ChiaKeyRuntime.attach(listener)
-        startChiaKey(root, session)
+        if (session != null) {
+            val listener = { lexicon: PartialLexicon -> controller.publishPartialLexicon(lexicon) }
+            lexiconListener = listener
+            ChiaKeyRuntime.attach(listener)
+            startChiaKey(root, session)
+        }
     }
 
     override fun onDestroy() {
@@ -166,6 +194,15 @@ class FsKeyboardService : InputMethodService() {
             pipeline.close()
         }
         super.onDestroy()
+    }
+
+    private fun lingxiMergedPackaged(): Boolean {
+        return try {
+            assets.open("lingxi/lexicon.merged").close()
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**
@@ -240,7 +277,6 @@ class FsKeyboardService : InputMethodService() {
         panelOpen = false
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(KeyboardPalette.of(isNightMode()).background)
             clipChildren = false
             clipToPadding = false
         }
@@ -365,6 +401,9 @@ class FsKeyboardService : InputMethodService() {
         )
         inputRoot = root
         navigationSpacer = spacer
+        appearanceOverrides = loadAppearance(this)
+        applyResolvedAppearance(decodeImage = true)
+        AppearancePipeline.scheduleRecovery(this)
         window?.window?.decorView?.requestApplyInsets()
         watchFrames()
         render(pending)
@@ -480,6 +519,11 @@ class FsKeyboardService : InputMethodService() {
         lastClearance = bottom
         lastNavigationBars = navigationBars
         updateSpacer(bottom, navigationBars)
+        insetBands?.let { bands ->
+            bands.padLeft = root.paddingLeft
+            bands.padRight = root.paddingRight
+            bands.invalidateSelf()
+        }
     }
 
     /** Landscape key growth comes out of this gap, down to the real navigation bar. */
@@ -594,6 +638,9 @@ class FsKeyboardService : InputMethodService() {
         keyboard?.vibrationScale = preferences.vibrationScale() / 100f
         keyboard?.keyPreviewEnabled = preferences.keyPreviewEnabled()
         keyboard?.theme = preferences.keyboardTheme()
+        appearanceOverrides = loadAppearance(this)
+        applyResolvedAppearance(decodeImage = true)
+        AppearancePipeline.scheduleRecovery(this)
         keyboard?.enterChoice = EnterActions.choose(info)
         keyboard?.clearShiftLock()
         controller.onStartInput(restarting)
@@ -645,6 +692,7 @@ class FsKeyboardService : InputMethodService() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         keyboard?.split = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
+        if (keyboard != null) applyResolvedAppearance(decodeImage = false)
         latestInsets?.let(::applyNavigationInset)
     }
 
@@ -661,7 +709,7 @@ class FsKeyboardService : InputMethodService() {
                 EnterActions.choose(currentInputEditorInfo)
             }
             keyboard?.enterChoice = enterChoice
-            candidateBar?.render(state.candidates)
+            candidateBar?.render(state.candidates, candidateChrome)
             compositionPreview?.show(state.preview, state.previewHint)
             val clipboardOnly = state.candidates.candidates.singleOrNull()?.source == CandidateSource.CLIPBOARD
             when {
@@ -669,6 +717,7 @@ class FsKeyboardService : InputMethodService() {
                 panelOpen -> candidatePanel?.render(
                     state.candidates.candidates,
                     state.candidates.openSyllables,
+                    candidateChrome,
                 )
             }
         }
@@ -679,7 +728,9 @@ class FsKeyboardService : InputMethodService() {
     private fun showPanel(open: Boolean) {
         val candidates = pending.candidates.candidates
         panelOpen = open && candidates.isNotEmpty()
-        if (panelOpen) candidatePanel?.render(candidates, pending.candidates.openSyllables)
+        if (panelOpen) {
+            candidatePanel?.render(candidates, pending.candidates.openSyllables, candidateChrome)
+        }
         candidatePanel?.visibility = if (panelOpen) View.VISIBLE else View.GONE
         candidateBar?.expanded = panelOpen
     }
@@ -759,6 +810,85 @@ class FsKeyboardService : InputMethodService() {
     private fun destroySpeech() {
         speech?.destroy()
         speech = null
+    }
+
+    private fun applyResolvedAppearance(decodeImage: Boolean) {
+        val night = isNightMode()
+        val theme = keyboard?.theme ?: KeyboardTheme.of(null)
+        val dir = if (decodeImage) {
+            appearanceDir(this).also { appearanceDirectory = it }
+        } else {
+            appearanceDirectory
+        }
+        val resolved = resolveKeyboard(theme, night, appearanceOverrides, dir)
+        candidateChrome = CandidateChrome.resolve(night, appearanceOverrides)
+        keyboard?.applyAppearance(resolved, night)
+        val board = keyboard
+        val image = appearanceImage(resolved, decodeImage)
+        if (board != null && image != null) {
+            AppearanceImageCache.attach(board)
+            if (decodeImage) AppearancePipeline.ensureLoaded(image)
+        } else if (board != null) {
+            AppearanceImageCache.detach(board)
+            board.setBackgroundBitmap(null, Long.MIN_VALUE)
+        }
+        applyWindowChrome(resolved, image != null)
+        if (inputRoot != null) render(pending)
+    }
+
+    private fun appearanceImage(resolved: ResolvedKeyboard, decodeImage: Boolean): File? {
+        val file = resolved.imageFile ?: run {
+            if (decodeImage) appearanceImageOnDisk = false
+            return null
+        }
+        if (!decodeImage) return file.takeIf { appearanceImageOnDisk }
+        val present = file.isFile
+        appearanceImageOnDisk = present
+        return file.takeIf { present }
+    }
+
+    private fun applyWindowChrome(resolved: ResolvedKeyboard, hasImage: Boolean) {
+        val win = window?.window
+        val root = inputRoot ?: return
+        val alpha = resolved.alphaPercent
+        val hasBackground = appearanceOverrides.backgroundColor != null
+        if (alpha >= 100) {
+            if (windowMadeTranslucent && win != null) {
+                win.setFormat(PixelFormat.OPAQUE)
+                win.setBackgroundDrawable(savedWindowBackground)
+                windowMadeTranslucent = false
+            }
+            val rootColor = if (hasBackground) {
+                resolved.palette.background
+            } else {
+                KeyboardPalette.of(isNightMode()).background
+            }
+            root.setBackgroundColor(rootColor)
+            navigationSpacer?.background = null
+            insetBands = null
+            return
+        }
+        if (win != null && !windowMadeTranslucent) {
+            val styled = win.context.theme.obtainStyledAttributes(intArrayOf(android.R.attr.windowBackground))
+            savedWindowBackground = styled.getDrawable(0)
+            styled.recycle()
+            win.setFormat(PixelFormat.TRANSLUCENT)
+            win.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            windowMadeTranslucent = true
+        }
+        val faded = colorWithAlpha(resolved.palette.background, alpha)
+        if (hasImage) {
+            val bands = insetBands ?: InsetBandDrawable().also { insetBands = it }
+            bands.color = faded
+            bands.padLeft = root.paddingLeft
+            bands.padRight = root.paddingRight
+            root.background = bands
+            navigationSpacer?.setBackgroundColor(faded)
+        } else {
+            insetBands = null
+            root.setBackgroundColor(faded)
+            navigationSpacer?.background = null
+        }
     }
 
     private companion object {
