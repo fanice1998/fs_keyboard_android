@@ -158,6 +158,16 @@ internal class CandidateController(
             loadEnglish()
             return editor.textBefore(n)?.toString()
         }
+        override fun textAfter(n: Int): String? {
+            return try {
+                editor.textAfter(n)?.toString()
+            } catch (_: Exception) {
+                null
+            }
+        }
+        override fun deleteBefore(n: Int) {
+            if (n > 0) editor.deleteBefore(n)
+        }
         override fun commit(text: String) = this@CandidateController.commit(text)
         override fun acceptCommitted(text: String) = this@CandidateController.acceptCommitted(text)
         override fun apply(snapshot: EngineSnapshot) = this@CandidateController.apply(snapshot)
@@ -235,6 +245,8 @@ internal class CandidateController(
     }
     private var selStart = -1
     private var selEnd = -1
+    private var compositionSpanStart = -1
+    private var compositionSpanEnd = -1
 
     /** Clipboard read for this field. Cleared from the row once the user types. */
     private var clipOffer: ClipOffer? = null
@@ -295,7 +307,13 @@ internal class CandidateController(
         selStart = newSelStart
         selEnd = newSelEnd
         if (editDepth > 0) return
+        if (candidatesStart >= 0 && candidatesEnd >= candidatesStart && english.active) {
+            compositionSpanStart = candidatesStart
+            compositionSpanEnd = candidatesEnd
+        }
         if (candidatesStart == -1 && candidatesEnd == -1) {
+            compositionSpanStart = -1
+            compositionSpanEnd = -1
             if (composingGlide) return
             val owned = ownedCaretSpan
             if (owned != null && newSelStart == newSelEnd && newSelStart in owned) return
@@ -316,6 +334,10 @@ internal class CandidateController(
             if (cursorSession == null && !zhuyin.hasComposition && !english.active && newSelStart == newSelEnd) {
                 refreshIdleSuggestions()
             }
+        } else if (english.active && newSelStart == newSelEnd &&
+            compositionSpanStart >= 0 && newSelStart >= compositionSpanStart && newSelStart <= compositionSpanEnd
+        ) {
+            english.moveCaret(newSelStart - candidatesStart)
         }
     }
 
@@ -657,6 +679,13 @@ internal class CandidateController(
     private fun deliverBackspace() {
         backspaceMoved = true
         english.consumedBackspace = false
+        if ((mode == KeyboardMode.LATIN || mode.isSymbols) && clearSelection()) {
+            backspaceMoved = true
+            return
+        }
+        if (english.active) {
+            english.alignCaretToField(selStart, selEnd, compositionSpanStart, compositionSpanEnd)
+        }
         when (stateFor(mode).handle(KeyAction.Backspace)) {
             KeyFate.Consumed -> backspaceMoved =
                 if (english.consumedBackspace) english.backspaceMoved() else true
@@ -830,7 +859,14 @@ internal class CandidateController(
     }
 
     /** Caret inside the underlined text. The end means setComposingText already placed it. */
-    private fun visualCaret(inline: String): Int = inline.length.coerceIn(0, inline.length)
+    private fun visualCaret(inline: String): Int {
+        val target = english.caretTarget()
+        return if (target != null && target.text == inline) {
+            target.caret.coerceIn(0, inline.length)
+        } else {
+            inline.length.coerceIn(0, inline.length)
+        }
+    }
 
     /**
      * setComposingText leaves the caret at the end of [text]. A caret in the middle

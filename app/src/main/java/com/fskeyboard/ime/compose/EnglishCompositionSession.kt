@@ -5,6 +5,7 @@ import com.fskeyboard.ime.candidate.Candidate
 import com.fskeyboard.ime.candidate.CandidateSource
 import com.fskeyboard.ime.candidate.EnglishLexicon
 import com.fskeyboard.ime.candidate.EnglishSuggest
+import com.fskeyboard.ime.candidate.englishPrefixBefore
 import com.fskeyboard.ime.candidate.isSymbol
 import com.fskeyboard.ime.engine.EngineSnapshot
 import com.fskeyboard.ime.keyboard.KeyAction
@@ -26,6 +27,9 @@ internal data class CompositionCaret(
 internal interface EnglishHost {
     fun editorInfo(): EditorInfo?
     fun textBefore(n: Int): String?
+    /** Null when the field has no caret-aware after-read. An empty string means the caret sits at the end. */
+    fun textAfter(n: Int): String?
+    fun deleteBefore(n: Int)
     fun commit(text: String)
     fun acceptCommitted(text: String)
     fun apply(snapshot: EngineSnapshot)
@@ -57,6 +61,7 @@ internal class EnglishCompositionSession(
 ) {
     private val buffer = StringBuilder()
     private var caret = 0
+    private var suggestKey: String = ""
 
     val active: Boolean
         get() = buffer.isNotEmpty()
@@ -94,6 +99,12 @@ internal class EnglishCompositionSession(
         if (!active) return null
         val currentTyped = buffer.toString()
         val shown = host.presented()
+        val key = suggestKey.ifEmpty { currentTyped }
+        val extra = if (currentTyped.isNotEmpty() && key.endsWith(currentTyped) && key.length > currentTyped.length) {
+            key.length - currentTyped.length
+        } else {
+            0
+        }
         // Drop the owned span before the field write. A mismatch still drops it, and does not write.
         clear()
 
@@ -108,10 +119,11 @@ internal class EnglishCompositionSession(
         val word = if (isEmail) {
             if (takePrediction && shown.isNotEmpty()) shown.first().text else currentTyped
         } else {
-            EnglishSuggest.commit(currentTyped, shown.firstOrNull()?.text, takePrediction)
+            EnglishSuggest.commit(key, shown.firstOrNull()?.text, takePrediction)
         }
         val trailingChar = if (isEmail && trailing == " ") "" else trailing
         val committed = word + trailingChar
+        if (extra > 0 && !isEmail) host.deleteBefore(extra)
         host.acceptCommitted(committed)
         if (isEmail) {
             host.recordEmail(word, host.beforeUsername())
@@ -127,13 +139,24 @@ internal class EnglishCompositionSession(
         host.clearOwnedCaretSpan()
         buffer.setLength(0)
         caret = 0
+        suggestKey = ""
     }
 
     fun restore(typed: String) {
         buffer.setLength(0)
         buffer.append(typed)
         caret = buffer.length
+        suggestKey = typed
         show()
+    }
+
+    /** Remembered field caret wins. An unknown selection leaves [caret] alone. */
+    fun alignCaretToField(selStart: Int, selEnd: Int, spanStart: Int, spanEnd: Int) {
+        if (!active) return
+        if (selStart < 0 || selEnd < 0 || selStart != selEnd) return
+        if (spanStart < 0 || spanEnd < spanStart) return
+        if (selStart < spanStart || selStart > spanEnd) return
+        caret = (selStart - spanStart).coerceIn(0, buffer.length)
     }
 
     fun reload() {
@@ -161,7 +184,15 @@ internal class EnglishCompositionSession(
         val isEmail = host.isEmailContext()
         val text = candidate.text
         val trailing = if (isEmail) "" else " "
+        val currentTyped = buffer.toString()
+        val key = suggestKey.ifEmpty { currentTyped }
+        val extra = if (currentTyped.isNotEmpty() && key.endsWith(currentTyped) && key.length > currentTyped.length) {
+            key.length - currentTyped.length
+        } else {
+            0
+        }
         clear()
+        if (extra > 0 && !isEmail) host.deleteBefore(extra)
         host.acceptCommitted(text + trailing)
         if (isEmail) {
             host.recordEmail(text, host.beforeUsername())
@@ -215,9 +246,12 @@ internal class EnglishCompositionSession(
             backspaceDidMove = false
             return KeyFate.Consumed
         }
+        val previous = buffer.toString()
         buffer.deleteCharAt(caret - 1)
         caret -= 1
         backspaceDidMove = true
+        val now = buffer.toString()
+        suggestKey = if (suggestKey.endsWith(previous)) suggestKey.dropLast(previous.length) + now else now
         if (buffer.isEmpty()) {
             clear()
             host.showClearedWord()
@@ -236,9 +270,33 @@ internal class EnglishCompositionSession(
 
     private fun insert(value: Char) {
         val at = caret.coerceIn(0, buffer.length)
+        val previous = buffer.toString()
+        val asciiLetter = value in 'a'..'z' || value in 'A'..'Z'
+        // Only a field with a real caret (textAfter reads) may be read to the left.
+        // Otherwise the committed text would be spliced onto the composing buffer.
+        val left = if (asciiLetter && at == previous.length && host.textAfter(1) != null) {
+            host.textBefore(64).orEmpty()
+        } else {
+            null
+        }
         buffer.insert(at, value)
         caret = at + 1
         lastCharacterInserted = true
+        val now = buffer.toString()
+        suggestKey = if (left != null) {
+            val prior = englishPrefixBefore(left)
+            if (previous.isNotEmpty() && prior.endsWith(previous)) {
+                prior.dropLast(previous.length) + now
+            } else if (previous.isEmpty()) {
+                prior + now
+            } else {
+                now
+            }
+        } else if (suggestKey.endsWith(previous)) {
+            suggestKey.dropLast(previous.length) + now
+        } else {
+            now
+        }
         show()
     }
 
@@ -257,8 +315,9 @@ internal class EnglishCompositionSession(
                 )
             }
         } else {
-            val hits = lexicon.complete(typed.lowercase(), ENGLISH_CANDIDATES)
-            val texts = EnglishSuggest.candidates(typed, hits, ENGLISH_CANDIDATES)
+            val lookup = suggestKey.ifEmpty { typed }
+            val hits = lexicon.complete(lookup.lowercase(), ENGLISH_CANDIDATES)
+            val texts = EnglishSuggest.candidates(lookup, hits, ENGLISH_CANDIDATES)
             texts.mapIndexed { index, text ->
                 Candidate(
                     text = text,
