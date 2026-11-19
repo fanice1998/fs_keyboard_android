@@ -4,6 +4,7 @@ import android.content.ContextWrapper
 import android.text.InputType
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import com.fskeyboard.ime.compose.EnglishCompositionSession
 import com.fskeyboard.ime.engine.ChiaKeyFrame
 import com.fskeyboard.ime.engine.ZhuyinEngine
 import com.fskeyboard.ime.keyboard.ComputerKey
@@ -177,6 +178,157 @@ class EnglishCompositionControllerTest {
         assertEquals(deletesBeforeZhuyin, field.deleteCalls)
     }
 
+    @Test
+    fun backspaceAtTheFieldEndOfAWordDeletesTheLastComposedLetter() {
+        val field = Field().apply { text.append("xyz") }
+        val controller = controller(field)
+        openLatinWord(controller, "ab")
+        val start = field.text.length
+        val end = start + 2
+        controller.onUpdateSelection(end, end, end, end, start, end)
+        parkCaret(controller, 0)
+
+        controller.onKey(KeyAction.Backspace)
+
+        assertEquals("a", field.composing)
+        assertTrue(controller.backspaceProgress())
+        assertEquals(0, field.deleteCalls)
+        assertEquals("xyz", field.text.toString())
+    }
+
+    @Test
+    fun backspaceAtTheFieldStartOfAWordStillDoesNotDelete() {
+        val field = Field().apply { text.append("xyz") }
+        val controller = controller(field)
+        openLatinWord(controller, "ab")
+        val start = field.text.length
+        controller.onUpdateSelection(start, start, start, start, start, start + 2)
+        parkCaret(controller, 0)
+
+        controller.onKey(KeyAction.Backspace)
+
+        assertEquals("ab", field.composing)
+        assertFalse(controller.backspaceProgress())
+        assertEquals(0, field.deleteCalls)
+        assertEquals("xyz", field.text.toString())
+    }
+
+    @Test
+    fun latinMidWordBackspaceFollowsTheFieldCaret() {
+        midWordBackspaceFollowsTheFieldCaret(KeyboardMode.LATIN, parkedCaret = 0)
+        midWordBackspaceFollowsTheFieldCaret(KeyboardMode.LATIN, parkedCaret = 4)
+    }
+
+    @Test
+    fun symbolsMidWordBackspaceFollowsTheFieldCaret() {
+        midWordBackspaceFollowsTheFieldCaret(KeyboardMode.SYMBOLS, parkedCaret = 0)
+        midWordBackspaceFollowsTheFieldCaret(KeyboardMode.SYMBOLS, parkedCaret = 4)
+    }
+
+    @Test
+    fun symbolsMoreMidWordBackspaceFollowsTheFieldCaret() {
+        midWordBackspaceFollowsTheFieldCaret(KeyboardMode.SYMBOLS_MORE, parkedCaret = 0)
+        midWordBackspaceFollowsTheFieldCaret(KeyboardMode.SYMBOLS_MORE, parkedCaret = 4)
+    }
+
+    @Test
+    fun backspaceInAnEmptyFieldDoesNotCallDeleteSurroundingText() {
+        val field = Field()
+        val controller = controller(field)
+        controller.onKey(KeyAction.SetMode(KeyboardMode.LATIN))
+
+        controller.onKey(KeyAction.Backspace)
+
+        assertFalse(controller.backspaceProgress())
+        assertEquals(0, field.deleteCalls)
+    }
+
+    @Test
+    fun backspacingTheOnlyComposedLetterClearsTheUnderline() {
+        val field = Field().apply { text.append("xyz") }
+        val controller = controller(field)
+        openLatinWord(controller, "a")
+
+        controller.onKey(KeyAction.Backspace)
+
+        assertEquals("", field.composing)
+        assertTrue(controller.backspaceProgress())
+        assertEquals(0, field.deleteCalls)
+        assertEquals("xyz", field.text.toString())
+    }
+
+    @Test
+    fun latinBackspaceWithASelectionClearsOnlyTheSelection() {
+        selectionBackspaceClearsOnlyTheSelection(KeyboardMode.LATIN)
+    }
+
+    @Test
+    fun symbolsBackspaceWithASelectionClearsOnlyTheSelection() {
+        selectionBackspaceClearsOnlyTheSelection(KeyboardMode.SYMBOLS)
+    }
+
+    @Test
+    fun symbolsMoreBackspaceWithASelectionClearsOnlyTheSelection() {
+        selectionBackspaceClearsOnlyTheSelection(KeyboardMode.SYMBOLS_MORE)
+    }
+
+    @Test
+    fun backspaceAtTheComposingEndDeletesExactlyOneLetter() {
+        val field = Field().apply { text.append("xyz") }
+        val controller = controller(field)
+        openLatinWord(controller, "abc")
+        val start = field.text.length
+        val end = start + 3
+        controller.onUpdateSelection(end, end, end, end, start, end)
+
+        controller.onKey(KeyAction.Backspace)
+
+        assertEquals("ab", field.composing)
+        assertTrue(controller.backspaceProgress())
+        assertEquals(0, field.deleteCalls)
+        assertEquals("xyz", field.text.toString())
+    }
+
+    @Test
+    fun onUpdateSelectionInsideTheComposingSpanUpdatesTheEnglishCaret() {
+        val inner = Field().apply { text.append("xyz") }
+        val field = CountingField(inner)
+        val states = mutableListOf<ImeUiState>()
+        val controller = controllerOn(field, states)
+        openLatinWord(controller, "ab")
+        val start = inner.text.length
+        val end = start + 2
+        val candidatesBefore = states.last().candidates
+
+        parkCaret(controller, 0)
+        field.textBeforeCalls = 0
+        controller.onUpdateSelection(start, start, end, end, start, end)
+        assertEquals(candidatesBefore, states.last().candidates)
+        assertEquals(0, field.textBeforeCalls)
+        assertEquals(2, readCaret(controller))
+
+        parkCaret(controller, 0)
+        field.textBeforeCalls = 0
+        controller.onUpdateSelection(start, start, start + 1, start + 1, start, end)
+        assertEquals(candidatesBefore, states.last().candidates)
+        assertEquals(0, field.textBeforeCalls)
+        assertEquals(1, readCaret(controller))
+    }
+
+    @Test
+    fun visualCaretReportsTheComposingCaretInsteadOfTheStringEnd() {
+        val field = Field()
+        val controller = controller(field)
+        openLatinWord(controller, "abcd")
+        parkCaret(controller, 2)
+        assertEquals(2, visualCaretOf(controller, "abcd"))
+
+        val atStart = controller(Field())
+        openLatinWord(atStart, "abcd")
+        parkCaret(atStart, 0)
+        assertEquals(0, visualCaretOf(atStart, "abcd"))
+    }
+
     private fun finishedByComputerKey(key: ComputerKey): Field {
         val field = Field()
         val controller = controller(field)
@@ -204,6 +356,96 @@ class EnglishCompositionControllerTest {
         }.get(controller)
         val field = session.javaClass.getDeclaredField("caret").apply { isAccessible = true }
         field.setInt(session, caret)
+    }
+
+    /** Field caret in the middle of "abcd": delete must follow the field caret, not the parked one. */
+    private fun midWordBackspaceFollowsTheFieldCaret(mode: KeyboardMode, parkedCaret: Int) {
+        val field = Field().apply { text.append("xyz") }
+        val controller = controller(field)
+        openLatinWord(controller, "abcd")
+        if (mode != KeyboardMode.LATIN) controller.onKey(KeyAction.SetMode(mode))
+        val start = field.text.length
+        val end = start + 4
+        val middle = start + 2
+        controller.onUpdateSelection(middle, middle, middle, middle, start, end)
+        parkCaret(controller, parkedCaret)
+
+        controller.onKey(KeyAction.Backspace)
+
+        assertEquals("acd", field.composing)
+        assertTrue(controller.backspaceProgress())
+        assertEquals(0, field.deleteCalls)
+        assertEquals("xyz", field.text.toString())
+    }
+
+    /** A non-collapsed selection from onUpdateSelection: clearSelection wins, nothing else is deleted. */
+    private fun selectionBackspaceClearsOnlyTheSelection(mode: KeyboardMode) {
+        val field = Field()
+        val controller = controller(field)
+        openLatinWord(controller, "ab")
+        if (mode != KeyboardMode.LATIN) controller.onKey(KeyAction.SetMode(mode))
+        val start = field.text.length
+        controller.onUpdateSelection(start, start, start, start + 2, start, start + 2)
+
+        controller.onKey(KeyAction.Backspace)
+
+        assertEquals(listOf(""), field.committed)
+        assertEquals(0, field.deleteCalls)
+        assertTrue(controller.backspaceProgress())
+        assertEquals("ab", englishWord(controller))
+        assertEquals("", field.text.toString())
+    }
+
+    private fun readCaret(controller: CandidateController): Int {
+        val session = CandidateController::class.java.getDeclaredField("english").apply {
+            isAccessible = true
+        }.get(controller)
+        val caret = session.javaClass.getDeclaredField("caret").apply { isAccessible = true }
+        return caret.getInt(session)
+    }
+
+    private fun englishWord(controller: CandidateController): String? {
+        val session = CandidateController::class.java.getDeclaredField("english").apply {
+            isAccessible = true
+        }.get(controller) as EnglishCompositionSession
+        return session.caretTarget()?.text
+    }
+
+    private fun visualCaretOf(controller: CandidateController, inline: String): Int {
+        val method = CandidateController::class.java.getDeclaredMethod("visualCaret", String::class.java)
+        method.isAccessible = true
+        return method.invoke(controller, inline) as Int
+    }
+
+    /** Counts getTextBeforeCursor calls without changing Field's behavior. */
+    private class CountingField(private val delegate: Field) : InvocationHandler {
+        var textBeforeCalls = 0
+
+        override fun invoke(proxy: Any?, method: Method, args: Array<out Any>?): Any? {
+            if (method.name == "getTextBeforeCursor") textBeforeCalls += 1
+            return delegate.invoke(proxy, method, args)
+        }
+    }
+
+    private fun controllerOn(
+        handler: InvocationHandler,
+        states: MutableList<ImeUiState>,
+    ): CandidateController {
+        val connection = Proxy.newProxyInstance(
+            InputConnection::class.java.classLoader,
+            arrayOf(InputConnection::class.java),
+            handler,
+        ) as InputConnection
+        val info = EditorInfo().apply { inputType = InputType.TYPE_CLASS_TEXT }
+        return CandidateController(
+            context = object : ContextWrapper(null) {},
+            pipeline = CandidatePipeline(),
+            connection = { connection },
+            editorInfo = { info },
+            onUi = { states.add(it) },
+            post = { it.run() },
+            zhuyinEngine = ReadyEngine(),
+        )
     }
 
     private class Field : InvocationHandler {
