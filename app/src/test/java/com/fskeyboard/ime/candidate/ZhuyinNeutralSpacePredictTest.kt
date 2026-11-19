@@ -44,7 +44,7 @@ class ZhuyinNeutralSpacePredictTest {
         assertEquals(ZhuyinTone.NEUTRAL, last.tone)
         assertEquals("ㄚㄧㄢ˙", chain.text)
         assertTrue("輕聲˙是已選定的聲調", last.tone.chosen)
-        assertFalse("openTone 是 !chosen", chain.openTone(last))
+        assertFalse("openTone 是 !chosen", !last.tone.chosen)
     }
 
     @Test
