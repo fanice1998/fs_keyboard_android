@@ -646,6 +646,34 @@ class LingxiSelectTest {
         assertEquals("ㄋㄧˇㄏ", row.single { it.literal }.text)
     }
 
+    @Test
+    fun aCentreTouchOnHeDoesNotChangeTheTypedNiYiHeRow() {
+        val nearby = centreTouch("ㄏ")
+        assertTrue(nearby.any { it.label == "ㄌ" && it.probability == 0f })
+        assertTrue(nearby.any { it.label == "ㄒ" && it.probability == 0f })
+        val typedHost = RecordingHost("")
+        val typed = session(typedHost)
+        type(typed, "ㄋㄧㄏ")
+        val typedSnapshot = typedHost.snapshots.last()
+        assertEquals("ㄋㄧㄏ", typedSnapshot.preedit)
+        assertEquals("ㄋㄧㄏ", typedSnapshot.candidates.single { it.literal }.text)
+        val touchHost = RecordingHost("")
+        val touching = session(touchHost)
+        type(touching, "ㄋㄧ")
+        touching.onKey(KeyAction.Bopomofo("ㄏ", 'c', nearby = nearby))
+        val touchSnapshot = touchHost.snapshots.last()
+        assertEquals("ㄋㄧㄏ", touchSnapshot.preedit)
+        assertEquals("ㄋㄧㄏ", touchSnapshot.candidates.single { it.literal }.text)
+        val typedRows = typedSnapshot.candidates.filter { !it.literal }.map { it.text to it.span }
+        val touchRows = touchSnapshot.candidates.filter { !it.literal }.map { it.text to it.span }
+        assertEquals(typedRows, touchRows)
+        for (row in listOf(typedSnapshot.candidates, touchSnapshot.candidates)) {
+            assertTrue(row.map { it.text }.toString(), row.none { it.text.contains("年來") })
+            assertTrue(row.map { it.text }.toString(), row.none { it.text.contains("你想") })
+            assertTrue(row.map { it.text }.toString(), row.any { !it.literal && it.text == "你好" })
+        }
+    }
+
     private fun centreTouch(label: String) = run {
         val areas = portraitZhuyinAreas()
         val key = areas.single { it.label == label }
