@@ -347,6 +347,29 @@ class ZhuyinComposerTest {
         assertEquals(listOf("空"), mergeTouchCorrections(emptyList(), corrected).map { it.text }.take(1))
     }
 
+    @Test
+    fun nearbyDoesNotReplaceTheTypedGongReading() {
+        val plain = type("ㄍㄨㄥ")
+        val touched = ZhuyinComposer()
+        assertTrue(
+            touched.append(
+                "ㄍ",
+                listOf(
+                    NearbyKey("ㄍ", 0.55f),
+                    NearbyKey("ㄎ", 0.30f),
+                    NearbyKey("ㄐ", 0.15f),
+                ),
+            ),
+        )
+        assertTrue(touched.append("ㄨ"))
+        assertTrue(touched.append("ㄥ"))
+        assertEquals(plain.text, touched.text)
+        assertEquals(plain.syllables, touched.syllables)
+        assertEquals(plain.queries(), touched.queries())
+        assertEquals("ㄍㄨㄥ", touched.text)
+        assertEquals(listOf("ㄍㄨㄥ*"), touched.queries())
+    }
+
     private fun word(text: String, span: Int) = Candidate(text = text, engineIndex = -1, span = span)
 
     private fun type(glyphs: String): ZhuyinComposer {
