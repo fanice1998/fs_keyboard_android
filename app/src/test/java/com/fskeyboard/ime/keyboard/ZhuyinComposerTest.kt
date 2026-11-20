@@ -3,7 +3,6 @@ package com.fskeyboard.ime.keyboard
 import com.fskeyboard.ime.candidate.Candidate
 import com.fskeyboard.ime.candidate.CompositionCandidates
 import com.fskeyboard.ime.candidate.candidatesFor
-import com.fskeyboard.ime.candidate.mergeTouchCorrections
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -250,7 +249,6 @@ class ZhuyinComposerTest {
         assertTrue(composer.append("ㄚ"))
         assertEquals("ㄍㄚㄨㄥ", composer.text)
         assertEquals(2, composer.caret)
-        assertEquals(listOf(listOf("ㄎㄚ*", "ㄨㄥ*")), composer.corrections().map { it.queries })
     }
 
     @Test
@@ -277,38 +275,6 @@ class ZhuyinComposerTest {
     }
 
     @Test
-    fun anUncertainNeighbourBecomesAnotherReadingAndAnIllegalSwapDoesNot() {
-        val composer = ZhuyinComposer()
-        composer.append(
-            "ㄍ",
-            listOf(
-                NearbyKey("ㄍ", 0.55f),
-                NearbyKey("ㄎ", 0.30f),
-                NearbyKey("ㄐ", 0.15f),
-            ),
-        )
-        composer.append("ㄨ")
-        composer.append("ㄥ")
-        assertEquals(listOf("ㄍㄨㄥ*"), composer.queries())
-        assertEquals(listOf(listOf("ㄎㄨㄥ*")), composer.corrections().map { it.queries })
-        assertEquals(0.30f, composer.corrections().single().probability, 0.001f)
-    }
-
-    @Test
-    fun aSureTouchAndADeletedKeyOfferNoCorrection() {
-        val sure = ZhuyinComposer()
-        sure.append("ㄍ", listOf(NearbyKey("ㄍ", 0.96f), NearbyKey("ㄎ", 0.20f)))
-        sure.append("ㄨ")
-        sure.append("ㄥ")
-        assertTrue(sure.corrections().isEmpty())
-
-        val composer = ZhuyinComposer()
-        composer.append("ㄍ", listOf(NearbyKey("ㄍ", 0.55f), NearbyKey("ㄎ", 0.40f)))
-        composer.backspace()
-        assertTrue(composer.corrections().isEmpty())
-    }
-
-    @Test
     fun aToneNeighbourAndLevelToneStayWithTheSyllableTheyBelongTo() {
         val composer = ZhuyinComposer()
         composer.append("ㄚ")
@@ -317,34 +283,9 @@ class ZhuyinComposerTest {
             "ㄅ",
             listOf(NearbyKey("ㄅ", 0.50f), NearbyKey("ㄆ", 0.40f)),
         )
-        assertEquals(
-            listOf(listOf("ㄚˊ", "ㄆ*"), listOf("ㄚˇ", "ㄅ*")),
-            composer.corrections().map { it.queries },
-        )
         composer.backspace()
         composer.markLevelTone()
-        assertTrue(composer.corrections().isEmpty())
         assertEquals(listOf("ㄚ"), composer.queries())
-    }
-
-    @Test
-    fun takingASyllableKeepsItsNeighbourForWhenItReturns() {
-        val composer = ZhuyinComposer()
-        composer.append("ㄍ", listOf(NearbyKey("ㄍ", 0.55f), NearbyKey("ㄎ", 0.40f)))
-        composer.append("ㄨ")
-        composer.append("ㄥ")
-        val front = composer.take(1)
-        assertTrue(composer.corrections().isEmpty())
-        composer.restore(front)
-        assertEquals(listOf(listOf("ㄎㄨㄥ*")), composer.corrections().map { it.queries })
-    }
-
-    @Test
-    fun neighbourWordsSitBehindTheFirstExactCandidate() {
-        val exact = listOf(word("公", 1), word("工", 1))
-        val corrected = listOf(word("空", 1), word("公", 1), word("控", 1))
-        assertEquals(listOf("公", "空", "控", "工"), mergeTouchCorrections(exact, corrected).map { it.text })
-        assertEquals(listOf("空"), mergeTouchCorrections(emptyList(), corrected).map { it.text }.take(1))
     }
 
     @Test
@@ -369,8 +310,6 @@ class ZhuyinComposerTest {
         assertEquals("ㄍㄨㄥ", touched.text)
         assertEquals(listOf("ㄍㄨㄥ*"), touched.queries())
     }
-
-    private fun word(text: String, span: Int) = Candidate(text = text, engineIndex = -1, span = span)
 
     private fun type(glyphs: String): ZhuyinComposer {
         val composer = ZhuyinComposer()

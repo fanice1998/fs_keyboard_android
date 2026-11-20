@@ -119,39 +119,6 @@ internal class ZhuyinComposer {
         return parts.map { it.query() }
     }
 
-    /**
-     * Readings that replace one uncertain key with a neighbour.
-     * A key is uncertain when its own touch probability is below [TOUCH_CORRECTION_CONFIDENT].
-     * Each result changes one glyph, keeps the other syllables, and drops a swap that
-     * would make an illegal initial-medial pair. The most likely swap comes first.
-     */
-    fun corrections(limit: Int = TOUCH_CORRECTION_LIMIT): List<TouchCorrection> {
-        val base = queries() ?: return emptyList()
-        val found = ArrayList<TouchCorrection>()
-        parts.forEachIndexed { syllableIndex, syllable ->
-            val body = syllable.body.toString()
-            syllable.bodyTouches.forEachIndexed { glyphIndex, options ->
-                for (option in options) {
-                    val replaced = substitutedBody(body, glyphIndex, option.label[0]) ?: continue
-                    val queries = base.toMutableList()
-                    queries[syllableIndex] = syllableQuery(replaced, syllable.tone)
-                    found += TouchCorrection(queries, option.probability)
-                }
-            }
-            for (option in syllable.toneTouches) {
-                val tone = toneOf(option.label.firstOrNull() ?: continue)
-                if (tone == ZhuyinTone.NONE || tone == syllable.tone) continue
-                val queries = base.toMutableList()
-                queries[syllableIndex] = syllableQuery(body, tone)
-                found += TouchCorrection(queries, option.probability)
-            }
-        }
-        return found
-            .sortedByDescending { it.probability }
-            .distinctBy { it.queries }
-            .take(limit)
-    }
-
     /** Removes and returns the first [count] syllables. */
     fun take(count: Int): List<ZhuyinSyllable> {
         val taken = parts.take(count.coerceIn(0, parts.size)).map { it.snapshot() }
@@ -168,13 +135,17 @@ internal class ZhuyinComposer {
         caret = (caret + added).coerceIn(0, text.length)
     }
 
+    /**
+     * Appends [glyph]. [nearby] is the touch the key came from; it does not produce
+     * another reading, so only the typed glyph is kept.
+     */
+    @Suppress("UNUSED_PARAMETER")
     fun append(glyph: String, nearby: List<NearbyKey> = emptyList()): Boolean {
         if (glyph.length != 1) return false
         val ch = glyph[0]
         if (ZhuyinPhonology.classify(ch) == null) return false
-        val touches = touchAlternatives(ch, nearby)
-        if (caret < text.length) return insert(ch, touches)
-        val ok = push(ch, touches)
+        if (caret < text.length) return insert(ch)
+        val ok = push(ch)
         if (ok) caret = text.length
         return ok
     }
@@ -194,7 +165,6 @@ internal class ZhuyinComposer {
                 val mark = part.tone.mark.length
                 val bodyEnd = display + part.body.length
                 part.tone = ZhuyinTone.LEVEL
-                part.toneTouches = emptyList()
                 if (mark > 0 && caret > bodyEnd) caret -= mark
                 caret = caret.coerceIn(0, text.length)
                 return true
@@ -222,40 +192,38 @@ internal class ZhuyinComposer {
     }
 
     /** Appends one glyph at the end. Phonology decides whether it extends the last syllable. */
-    private fun push(ch: Char, touches: List<NearbyKey>): Boolean {
+    private fun push(ch: Char): Boolean {
         val kind = ZhuyinPhonology.classify(ch) ?: return false
         if (parts.isEmpty()) {
             if (kind == ZhuyinClass.TONE) return false
-            parts += Syllable().also { it.addBody(ch, touches) }
+            parts += Syllable().also { it.addBody(ch) }
             return true
         }
         val current = parts.last()
         if (kind == ZhuyinClass.TONE) {
             if (current.body.isEmpty()) return false
             current.tone = toneOf(ch)
-            current.toneTouches = touches
             return true
         }
         if (current.tone == ZhuyinTone.NONE && canAppendBody(current.body, ch, kind)) {
-            current.addBody(ch, touches)
+            current.addBody(ch)
             return true
         }
-        parts += Syllable().also { it.addBody(ch, touches) }
+        parts += Syllable().also { it.addBody(ch) }
         return true
     }
 
-    private fun pushLevel(touches: List<NearbyKey>) {
+    private fun pushLevel() {
         val current = parts.lastOrNull() ?: return
         if (current.body.isEmpty()) return
         current.tone = ZhuyinTone.LEVEL
-        current.toneTouches = touches
     }
 
     /**
      * Inserts [ch] at the caret and replays the syllables, so an illegal pair still splits.
      * A tone replaces the tone already on that syllable, including 平聲.
      */
-    private fun insert(ch: Char, touches: List<NearbyKey>): Boolean {
+    private fun insert(ch: Char): Boolean {
         val glyphs = flatten()
         var at = flattenIndex(glyphs, caret.coerceIn(0, text.length))
         if (at == 0 && ZhuyinPhonology.classify(ch) == ZhuyinClass.TONE) return false
@@ -268,7 +236,7 @@ internal class ZhuyinComposer {
                 at -= 1
             }
         }
-        glyphs.add(at, Glyph(ch, touches))
+        glyphs.add(at, Glyph(ch))
         rewrite(glyphs)
         caret = (caret + 1).coerceAtMost(text.length)
         return true
@@ -278,7 +246,7 @@ internal class ZhuyinComposer {
         parts.clear()
         for (glyph in glyphs) {
             val ch = glyph.ch
-            if (ch == null) pushLevel(glyph.touches) else push(ch, glyph.touches)
+            if (ch == null) pushLevel() else push(ch)
         }
     }
 
@@ -286,13 +254,12 @@ internal class ZhuyinComposer {
         val glyphs = ArrayList<Glyph>()
         for (part in parts) {
             for (index in part.body.indices) {
-                val touches = if (index < part.bodyTouches.size) part.bodyTouches[index] else emptyList()
-                glyphs.add(Glyph(part.body[index], touches))
+                glyphs.add(Glyph(part.body[index]))
             }
             when (part.tone) {
                 ZhuyinTone.NONE -> Unit
-                ZhuyinTone.LEVEL -> glyphs.add(Glyph(null, part.toneTouches))
-                else -> if (part.tone.mark.isNotEmpty()) glyphs.add(Glyph(part.tone.mark[0], part.toneTouches))
+                ZhuyinTone.LEVEL -> glyphs.add(Glyph(null))
+                else -> if (part.tone.mark.isNotEmpty()) glyphs.add(Glyph(part.tone.mark[0]))
             }
         }
         return glyphs
@@ -370,31 +337,13 @@ internal class ZhuyinComposer {
 internal data class ZhuyinSyllable(
     val body: String,
     val tone: ZhuyinTone,
-    val bodyTouches: List<List<NearbyKey>> = emptyList(),
-    val toneTouches: List<NearbyKey> = emptyList(),
 ) {
     val display: String
         get() = body + tone.mark
 }
 
-/**
- * One neighbour swapped into the typed reading.
- * [queries] is the whole composition, in [ZhuyinComposer.queries] form.
- * [probability] is that neighbour's share of the touch.
- */
-internal data class TouchCorrection(val queries: List<String>, val probability: Float)
-
-/** Above this, the key under the finger is sure enough that its neighbours are not searched. */
-internal const val TOUCH_CORRECTION_CONFIDENT = 0.85f
-
-/** A neighbour below this is too unlikely to spend a lookup on. */
-internal const val TOUCH_CORRECTION_MIN = 0.15f
-
-/** How many single-key swaps are looked up for one composition. */
-internal const val TOUCH_CORRECTION_LIMIT = 4
-
 /** One visible bopomofo glyph, or 平聲 when [ch] is null. */
-private class Glyph(val ch: Char?, val touches: List<NearbyKey>)
+private class Glyph(val ch: Char?)
 
 private fun isToneGlyph(glyph: Glyph): Boolean {
     val ch = glyph.ch ?: return true
@@ -403,67 +352,26 @@ private fun isToneGlyph(glyph: Glyph): Boolean {
 
 private class Syllable {
     val body = StringBuilder()
-    val bodyTouches = ArrayList<List<NearbyKey>>()
     var tone: ZhuyinTone = ZhuyinTone.NONE
-    var toneTouches: List<NearbyKey> = emptyList()
 
-    fun addBody(ch: Char, touches: List<NearbyKey>) {
+    fun addBody(ch: Char) {
         body.append(ch)
-        bodyTouches.add(touches)
     }
 
     fun display(): String = body.toString() + tone.mark
 
     fun query(): String = syllableQuery(body.toString(), tone)
 
-    fun snapshot(): ZhuyinSyllable = ZhuyinSyllable(
-        body.toString(),
-        tone,
-        if (bodyTouches.all { it.isEmpty() }) emptyList() else bodyTouches.toList(),
-        toneTouches,
-    )
+    fun snapshot(): ZhuyinSyllable = ZhuyinSyllable(body.toString(), tone)
 
     companion object {
         fun of(syllable: ZhuyinSyllable): Syllable = Syllable().apply {
             body.append(syllable.body)
             tone = syllable.tone
-            bodyTouches.addAll(syllable.bodyTouches)
-            while (bodyTouches.size < body.length) bodyTouches.add(emptyList())
-            if (bodyTouches.size > body.length) {
-                repeat(bodyTouches.size - body.length) { bodyTouches.removeAt(bodyTouches.lastIndex) }
-            }
-            toneTouches = syllable.toneTouches
         }
     }
 }
 
-/** Neighbours of [typed] that are the same bopomofo class and likely enough to search. */
-private fun touchAlternatives(typed: Char, nearby: List<NearbyKey>): List<NearbyKey> {
-    val own = nearby.find { it.label == typed.toString() }?.probability
-    val typedProbability = own ?: if (nearby.isEmpty()) 1f else 0f
-    if (typedProbability >= TOUCH_CORRECTION_CONFIDENT) return emptyList()
-    val kind = ZhuyinPhonology.classify(typed) ?: return emptyList()
-    return nearby
-        .filter { it.probability >= TOUCH_CORRECTION_MIN && it.label.length == 1 && it.label[0] != typed }
-        .filter { ZhuyinPhonology.classify(it.label[0]) == kind }
-        .sortedByDescending { it.probability }
-}
-
 private fun syllableQuery(body: String, tone: ZhuyinTone): String {
     return if (tone.chosen) body + tone.mark else "$body*"
-}
-
-/** [replacement] at [index], or null when that syllable would be illegal. */
-private fun substitutedBody(body: String, index: Int, replacement: Char): String? {
-    if (index !in body.indices || body[index] == replacement) return null
-    if (ZhuyinPhonology.classify(body[index]) != ZhuyinPhonology.classify(replacement)) return null
-    val next = buildString {
-        append(body, 0, index)
-        append(replacement)
-        append(body, index + 1, body.length)
-    }
-    val initial = next.firstOrNull { ZhuyinPhonology.classify(it) == ZhuyinClass.INITIAL }
-    val medial = next.firstOrNull { ZhuyinPhonology.classify(it) == ZhuyinClass.MEDIAL }
-    if (medial != null && !ZhuyinPhonology.medialFits(initial, medial)) return null
-    return next
 }
