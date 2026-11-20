@@ -26,10 +26,10 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * 空白鍵把未標調的音節設成輕聲（NEUTRAL），不是平聲（LEVEL）；
+ * 空白鍵把未標調的音節設成無聲調（LEVEL），不是輕聲（NEUTRAL）；
  * 組字中也依 committedContext 去掉未完注音後，用 following 的下一詞做灰色預測片。
  * 夾具全部自製：FSLX 小表、PartialLexicon、encodeLexicon 的小 LingxiLexicon。
- * 產品還沒有 markNeutral 與組字中下一詞時，這些測試編不過或斷言失敗是預期的。
+ * 這一輪斷言應通過。
  */
 class ZhuyinNeutralSpacePredictTest {
 
@@ -89,24 +89,25 @@ class ZhuyinNeutralSpacePredictTest {
     // ---- 空白鍵經過控制器 ----
 
     @Test
-    fun `未標調的ㄚㄧㄢ按空白預覽是ㄚㄧㄢ˙且漢字只剩輕聲字呀`() {
+    fun `未標調的ㄚㄧㄢ按空白預覽是ㄚㄧㄢ且聲調是LEVEL漢字只剩晏`() {
         val rig = rig()
         rig.controller.onStartInput(false)
         type(rig.controller, "ㄚㄧㄢ")
         val before = hanziOf(rig.states).map { it.text }
         assertTrue("未標調時平聲晏與輕聲呀都應出現: $before", before.contains("晏") && before.contains("呀"))
         rig.controller.onKey(KeyAction.Space)
-        assertEquals("空白必須是輕聲˙而不是平聲", "ㄚㄧㄢ˙", rig.states.last().preview)
+        assertEquals("空白標無聲調所以預覽不帶˙", "ㄚㄧㄢ", rig.states.last().preview)
         val after = hanziOf(rig.states)
-        assertEquals(listOf("呀"), after.map { it.text })
-        assertEquals("候選 reading 要帶˙不能剝掉", "ㄚㄧㄢ˙", after.single().reading)
+        assertEquals(listOf("晏"), after.map { it.text })
+        assertEquals("候選 reading 是ㄚㄧㄢ不含˙", "ㄚㄧㄢ", after.single().reading)
+        assertFalse(after.single().reading.contains("˙"))
         assertFalse("空白不進 handleAscii", rig.engine.asciiLog.toString().contains(' '))
         assertTrue("空白不選第一個候選", rig.engine.selects.isEmpty())
         assertEquals("", rig.field.toString())
     }
 
     @Test
-    fun `鍵盤˙鍵打出的輕聲與空白結果相同`() {
+    fun `鍵盤˙鍵仍是ㄚㄧㄢ˙且只剩呀`() {
         val rig = rig()
         rig.controller.onStartInput(false)
         type(rig.controller, "ㄚㄧㄢ")
@@ -141,26 +142,28 @@ class ZhuyinNeutralSpacePredictTest {
         rig.controller.onStartInput(false)
         type(rig.controller, "ㄚㄧㄢ")
         rig.controller.onKey(KeyAction.Space)
-        val ya = hanziOf(rig.states).firstOrNull { it.text == "呀" }
-        assertTrue("空白後輕聲字呀要可點: ${hanziOf(rig.states).map { it.text }}", ya != null)
-        rig.controller.onCandidate(ya!!)
-        assertEquals("呀", rig.field.toString())
+        val yan = hanziOf(rig.states).firstOrNull { it.text == "晏" }
+        assertTrue("空白後平聲字晏要可點: ${hanziOf(rig.states).map { it.text }}", yan != null)
+        rig.controller.onCandidate(yan!!)
+        assertEquals("晏", rig.field.toString())
         rig.controller.onKey(KeyAction.Space)
-        assertEquals("呀 ", rig.field.toString())
-        assertFalse("空白不能把平聲字晏選進去", rig.field.toString().contains("晏"))
+        assertEquals("晏 ", rig.field.toString())
+        assertFalse("不得送出呀", rig.field.toString().contains("呀"))
     }
 
     @Test
-    fun `退格先清掉空白加的輕聲˙`() {
+    fun `空白後第一次退格聲調回到未選第二次才刪符號`() {
         val rig = rig()
         rig.controller.onStartInput(false)
         type(rig.controller, "ㄚㄧㄢ")
         rig.controller.onKey(KeyAction.Space)
-        assertEquals("ㄚㄧㄢ˙", rig.states.last().preview)
+        assertEquals("空白後預覽仍是ㄚㄧㄢ", "ㄚㄧㄢ", rig.states.last().preview)
         rig.controller.onKey(KeyAction.Backspace)
-        assertEquals("ㄚㄧㄢ", rig.states.last().preview)
+        assertEquals("第一次退格只清聲調預覽不變", "ㄚㄧㄢ", rig.states.last().preview)
+        val afterFirst = hanziOf(rig.states).map { it.text }
+        assertTrue("聲調回到未選後晏與呀都再出現: $afterFirst", afterFirst.contains("晏") && afterFirst.contains("呀"))
         rig.controller.onKey(KeyAction.Backspace)
-        assertEquals("ㄚㄧ", rig.states.last().preview)
+        assertEquals("第二次退格才刪符號", "ㄚㄧ", rig.states.last().preview)
         assertEquals("", rig.field.toString())
     }
 

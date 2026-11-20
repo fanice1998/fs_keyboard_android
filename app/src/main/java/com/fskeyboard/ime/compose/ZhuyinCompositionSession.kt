@@ -191,10 +191,7 @@ internal class ZhuyinCompositionSession(
             holdComposition(mirrored)
         }
         if (holdingSentence) {
-            // The ˙ mark needs its own touch: backspace clears it first and then drops
-            // one touch because the chain text got shorter. The keyboard's own ˙ key
-            // already noted a touch through onKey, so only space adds it here.
-            if (chain.markNeutral()) touches += KeyTouch('˙', emptyList())
+            chain.markLevel()
             showHeld()
         }
         return true

@@ -94,7 +94,8 @@ internal class BopomofoChain {
     }
 
     /**
-     * Marks the open syllable as 輕聲 (˙). Space uses this, not 平聲.
+     * Marks the open syllable as 輕聲 (˙). Space no longer calls this — it marks LEVEL
+     * instead; the keyboard's own ˙ key still goes through [append].
      * A tone already on that syllable stays, so space does not strip it.
      */
     fun markNeutral(): Boolean {
