@@ -117,7 +117,12 @@ internal class PartialLexicon private constructor(
         )
     }
 
-    /** Single lexicon words that start at the first typed syllable. Longer spans come first. */
+    /**
+     * Single lexicon words that start at the first typed syllable.
+     * For a single incomplete syllable (initial + medial + final, no tone),
+     * prefer single characters sorted by lexicon score so common characters
+     * surface ahead of rare multi-character phrases.
+     */
     private fun spansFromStart(bodies: List<String>, tones: List<ZhuyinTone>): List<Slot> {
         val found = ArrayList<Slot>()
         val room = minOf(MAX_SYLLABLES, bodies.size)
@@ -128,7 +133,16 @@ internal class PartialLexicon private constructor(
                 found += slot
             }
         }
-        found.sortWith(compareByDescending<Slot> { it.word.syllables.size }.thenByDescending { it.score })
+        val preferSingleChar = bodies.size == 1
+        found.sortWith(
+            compareByDescending<Slot> { slot ->
+                if (preferSingleChar) {
+                    if (slot.word.syllables.size == 1) 1 else 0
+                } else {
+                    slot.word.syllables.size
+                }
+            }.thenByDescending { it.score }
+        )
         return found
     }
 
