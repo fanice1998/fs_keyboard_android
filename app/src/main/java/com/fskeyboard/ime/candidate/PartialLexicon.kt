@@ -119,9 +119,8 @@ internal class PartialLexicon private constructor(
 
     /**
      * Single lexicon words that start at the first typed syllable.
-     * For a single incomplete syllable (initial + medial + final, no tone),
-     * prefer single characters sorted by lexicon score so common characters
-     * surface ahead of rare multi-character phrases.
+     * For a single incomplete syllable, prefer single characters in the basic
+     * CJK block (common usage) over Extension-block rare characters, then by score.
      */
     private fun spansFromStart(bodies: List<String>, tones: List<ZhuyinTone>): List<Slot> {
         val found = ArrayList<Slot>()
@@ -137,13 +136,24 @@ internal class PartialLexicon private constructor(
         found.sortWith(
             compareByDescending<Slot> { slot ->
                 if (preferSingleChar) {
-                    if (slot.word.syllables.size == 1) 1 else 0
+                    when {
+                        slot.word.syllables.size == 1 && isBasicCjk(slot.word.text) -> 2
+                        slot.word.syllables.size == 1 -> 1
+                        else -> 0
+                    }
                 } else {
                     slot.word.syllables.size
                 }
             }.thenByDescending { it.score }
         )
         return found
+    }
+
+    /** Basic CJK Unified Ideographs. Extension blocks hold the rare characters. */
+    private fun isBasicCjk(text: String): Boolean {
+        if (text.isEmpty()) return false
+        val cp = text.codePointAt(0)
+        return cp in 0x4E00..0x9FFF && text.length == Character.charCount(cp)
     }
 
     private fun toneMatches(word: Word, tones: List<ZhuyinTone>, start: Int): Boolean {
